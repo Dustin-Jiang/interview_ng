@@ -1,0 +1,32 @@
+# ---- Go (apps/server) ----
+*.exe
+*.test
+bin/
+.cache/
+.gopath/
+apps/server/.gopath/
+
+# ---- env ----
+.env
+.env.*
+
+# ---- IDE / OS ----
+.idea/
+.vscode/
+.DS_Store
+
+# ---- JS monorepo (pnpm workspace) ----
+node_modules/
+dist/
+dist-ssr/
+*.local
+.pnpm-store/
+
+# ---- pnpm / npm ----
+pnpm-debug.log*
+npm-debug.log*
+yarn-error.log*
+
+.agents/
+.claude/
+skills-lock.json

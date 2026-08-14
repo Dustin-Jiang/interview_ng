@@ -1,0 +1,10 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+  - '!apps/server' # Go，交给 Go 工具链管理，不参与 pnpm 依赖解析
+
+# 允许安装阶段运行脚本的包（避免 pnpm 阻止 esbuild/vue-demi 等 postinstall）。
+allowBuilds:
+  esbuild: true
+  vue-demi: true
+  fsevents: true
