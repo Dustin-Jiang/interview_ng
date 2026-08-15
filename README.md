@@ -55,10 +55,12 @@ interview_ng/
 - **状态来源**：单 director 进程内存为权威，Gorm/Postgres 持久化；`StateStore` 接口化预埋未来切 Redis。
 - **StateStore 语义**：只暴露业务级原子操作，返回不可变变更事件（不暴露内部结构）。
 - **广播解耦**：`StateStore` 只产出事件；`BroadcastManager` 订阅事件按房间扇出；读给瞬时一致快照。
-- **恢复**：每房间消息 `id` 为主续传游标；事件带 `Seq` 幂等；「先落库成功 → 后广播」。
-- **消息/日志**：全部落库（`messages` 长存），另存房间快照（`rooms`）避免频繁重建。
-- **候选人与状态机**：候选人非登录用户；五档状态 `NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED`。
-- **房间**：一对一候选**人**（多面试官对一个候选人）；`room_members.user_id` 唯一约束保证一次一个活跃房间。
+- **恢复**：消息 `id` 为主续传游标（**按候选人维度**）；事件带 `Seq` 幂等；「先落库成功 → 后广播」。
+- **消息/日志**：全部落库且**按候选人归属**（候选人换房历史随人走）；候选人删除级联删消息；面试官删除后其消息保留（sender 置空）。
+- **房间**：独立于候选人的物理会议室记录（`candidate_id` 可空，可先建房后绑人、重置解绑后房保留）；**无房间状态机**，房间状态 = 候选人状态的查询投影；仅空房可删；不归档。
+- **分配**：候选人被房间内面试官**拉取**（`pull_candidate`），取代"页面推分配"；并发拉取由状态机原子拒绝。
+- **候选人与状态机**：五档状态 `NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED` 为唯一权威；管理端支持"重置到任意档"（向后自动解绑房间、向前须已有房间）。
+- **鉴权**：登录 + JWT（7 天，`ver` 吊销计数）；RBAC 角色↔权限（9 枚权限目录），权限判断走内存缓存即时生效；`users.manage` 下可管理用户与角色。
 
 ---
 
@@ -81,33 +83,47 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 | 表 | 关键列 | 角色 |
 |---|---|---|
-| `users` | id, name, role | 面试官（登录用户） |
+| `users` | id, username(唯一), password_hash, name, token_version | 面试官（登录用户，登录名不可改） |
+| `roles` | id, name(唯一), description | 角色（权限组，RBAC） |
+| `role_permissions` | role_id, permission（联合唯一） | 角色↔权限关联 |
+| `user_roles` | user_id, role_id（联合唯一） | 用户↔角色 M2M |
 | `candidates` | id, name, profile, status, room_id | 候选人（非登录用户） |
-| `rooms` | id, candidate_id, current_interviewer_id | 面试房间（一对一候选人） |
+| `rooms` | id, candidate_id(可空), current_interviewer_id | 房间 = 独立物理会议室记录，`candidate_id` 可空；房间无状态机，"状态"= 候选人状态的查询投影 |
 | `room_members` | room_id, user_id（`idx_room_user` 唯一） | 房间成员，一次一活跃房间 |
-| `messages` | id, room_id, sender_id, content | 群聊记录（长存），`id` 即续传游标 |
+| `messages` | id, candidate_id, sender_id(可空), content | 群聊记录（长存），**按候选人归属**，`id` 即候选人维度续传游标 |
+
+权限目录（9 枚）：`users.manage`、`candidates.manage`、`candidates.create`、`candidates.checkin`、`candidates.assign`、`rooms.view`、`rooms.chat`、`rooms.move_phase`、`rooms.manage`。预置角色：`admin`（全部）、`interviewer`（6 枚流程权限）。
 
 ---
 
 ## WS 协议（JSON 信封）
 
+连接：`GET /ws/room/:roomId`（RESTful 路径，**不带任何 query 参数**）。连接建立后首条消息必须为 `auth`（携带 JWT），鉴权成功后才可收发业务命令；10 秒内未鉴权将断开。
+
 请求（客户端 → 服务端）：
 ```json
-{"op":"sync",       "req_id":"r1", "data":{"room_id":3,"last_msg_id":0,"last_seq":0}}
-{"op":"send_msg",   "req_id":"r2", "data":{"room_id":3,"content":"hello"}}
-{"op":"join",       "req_id":"r3", "data":{"room_id":3}}
-{"op":"move_phase", "req_id":"r4", "data":{"room_id":3,"to":"IN_PROGRESS"}}
+{"op":"auth",        "req_id":"a1", "data":{"token":"<jwt>"}}
+{"op":"sync",        "req_id":"r1", "data":{"last_msg_id":0,"last_seq":0}}
+{"op":"send_msg",    "req_id":"r2", "data":{"content":"hello"}}
+{"op":"move_phase",  "req_id":"r4", "data":{"to":"IN_PROGRESS"}}
 ```
 
-连接：`GET /ws/room?user_id=1&room_id=3`（建立时若尚非成员则自动 JoinRoom）。
+> 连接已绑定房间（路径决定），故业务命令不再携带 room_id；操作者身份一律取自鉴权后的连接，不信任消息体。
 
 服务端推送（事件 / 回复）：
 ```json
-{"type":"message_appended","room_id":3,"seq":12,"msg_id":101,"data":{...}}
+{"type":"message_appended","room_id":3,"seq":12,"msg_id":101,"data":{"RoomID":3,"CandidateID":5,"SenderID":1,"Content":"hello"}}
 {"type":"reply","req_id":"r2","data":{"ok":true,...}}
 ```
 
-> `seq` 全局单调事件序，`msg_id` 房间内消息游标——客户端同时用两者做重连续传与幂等去重。
+> `seq` 全局单调事件序；`msg_id` 为**候选人维度**续传游标——消息按候选人归属，候选人换房后历史随人走。空房间（无候选人）可入房但 `send_msg` 会被拒。
+
+## 认证与鉴权
+
+- 登录：`POST /api/auth/login`（JWT，7 天有效，`JWT_SECRET` 环境变量配置）；无登录接口的旧版已移除。
+- RBAC：角色↔权限存库，权限判断走**内存 RBAC 缓存**，角色/权限/改密变更即时生效（改密 bump `token_version`，旧 token 立即失效）。
+- 错误语义：未登录/无效 token → **401**；有身份但缺权限 → **403**。
+- 种子：启动时若无用户则创建 `admin`（全权限）+ `interviewer` 角色与默认账号 `admin/admin`（可用 `ADMIN_INIT_PASSWORD` 覆盖）。
 
 ---
 
@@ -122,6 +138,8 @@ cd apps/server
 go run ./cmd/server           # 或从仓库根 pnpm run dev:server
 ```
 
+> 首次启动自动建表 + 种子：默认账号 `admin / admin`（可用环境变量 `ADMIN_INIT_PASSWORD` 覆盖初始密码，`JWT_SECRET` 配置签发密钥）。
+
 前端（另一终端）：
 
 ```bash
@@ -131,14 +149,25 @@ pnpm dev                      # http://localhost:8000 （vite 已把 /api 与 /w
 
 接口：
 - `GET  /api/health`
-- `GET  /api/candidates?status=&limit=&offset=`
+- `POST /api/auth/login` `{username, password}`
+- `GET  /api/me`（当前用户 + 角色 + 权限并集）
+- `POST /api/auth/password` `{old_password, new_password}`（自助改密）
+- `GET  /api/candidates?status=&q=&limit=&offset=`
 - `POST /api/candidates` `{name, profile?}`
 - `GET  /api/candidates/:id`
 - `POST /api/candidates/:id/checkin`
-- `POST /api/candidates/:id/assign` `{room_id?}`
-- `GET  /api/rooms`
-- `GET  /api/rooms/:id`
-- `GET  /ws/room?user_id=&room_id=`
+- `PUT  /api/candidates/:id` `{name, profile}`（编辑）
+- `DELETE /api/candidates/:id`（级联删消息并解绑房间）
+- `PUT  /api/candidates/:id/status` `{status}`（重置到任意档：向后自动解绑、向前须已有房间）
+- `GET  /api/rooms`、`GET /api/rooms/:id`
+- `POST /api/rooms`（建空房，`rooms.manage`）
+- `DELETE /api/rooms/:id`（仅空房可删）
+- `POST /api/rooms/:id/members` `{user_id}`、`DELETE /api/rooms/:id/members/:userId`
+- `PUT  /api/rooms/:id/current_interviewer` `{interviewer_id}`
+- `POST /api/rooms/:id/pull_candidate` `{candidate_id}`（**拉取式分配**：候选人从待分配池被拉入房间，取代旧的 `POST /api/candidates/:id/assign`）
+- `GET/POST /api/users`、`PUT/DELETE /api/users/:id`、`POST /api/users/:id/reset_password`（`users.manage`）
+- `GET/POST /api/roles`、`PUT/DELETE /api/roles/:id`（`users.manage`，角色管理）
+- `GET  /ws/room/:roomId`（连接后首条 `auth` 消息）
 
 ---
 
@@ -147,17 +176,16 @@ pnpm dev                      # http://localhost:8000 （vite 已把 /api 与 /w
 按层级分开目录，**并发/集成测试独立收集**，与源码解耦：
 
 ```
-internal/state/mem_store_test.go     # 源码包旁的功能单测（状态机/生命周期/订阅）
+internal/state/mem_store_test.go    # 状态机/生命周期/订阅（源码包旁功能单测）
+internal/state/manage_test.go       # 拉取并发、重置联动、级联删除、删房规则、用户/角色生命周期
+internal/handler/handler_test.go    # 登录/me/401/403/权限矩阵 + WS(auth 消息→sync) 端到端
 tests/
-└── concurrency/
-    ├── store_concurrent_test.go     # StateStore 并发断言（-race）
-    └── ws_e2e_test.go               # WS 多客户端端到端并发 + 断线续传
+└── concurrency/                    # 仅文档、尚未实现
 ```
 
 运行：
 ```bash
 go test -race ./...                  # 全量含竞态检测
-go test -race -v ./tests/concurrency  # 单独跑并发套件
 ```
 
 并发测试覆盖的断言：
