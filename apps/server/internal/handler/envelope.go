@@ -13,6 +13,11 @@ type Envelope struct {
 
 //---- 客户端 -> 服务端 命令 ----
 
+// reqAuth 连接后首条鉴权消息：携带 JWT，成功后绑定 userID 并按路径 roomId 自动 JoinRoom。
+type reqAuth struct {
+	Token string `json:"token"`
+}
+
 type reqSync struct {
 	RoomID    uint64 `json:"room_id"`
 	LastMsgID uint64 `json:"last_msg_id"`
@@ -22,10 +27,6 @@ type reqSync struct {
 type reqSendMsg struct {
 	RoomID  uint64 `json:"room_id"`
 	Content string `json:"content"`
-}
-
-type reqJoin struct {
-	RoomID uint64 `json:"room_id"`
 }
 
 type reqMovePhase struct {

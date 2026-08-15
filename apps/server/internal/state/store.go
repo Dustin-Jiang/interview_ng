@@ -23,8 +23,8 @@ type StateStore interface {
 	GetRoom(ctx context.Context, roomID uint64) (*dsmodel.Room, error)
 	// ListRooms 分页列出房间（面试官浏览；每项附带绑定候选人与消息条数）。
 	ListRooms(ctx context.Context, limit, offset int) ([]*dsmodel.Room, error)
-	// ListCandidates 分页列出候选人（面试官浏览）。
-	ListCandidates(ctx context.Context, status dsmodel.CandidateStatus, limit, offset int) ([]*dsmodel.Candidate, error)
+	// ListCandidates 分页列出候选人（面试官浏览），可按状态与关键词（姓名/简介）筛选。
+	ListCandidates(ctx context.Context, status dsmodel.CandidateStatus, q string, limit, offset int) ([]*dsmodel.Candidate, error)
 	// ListMessagesAfter 返回房间内 id>afterID 的消息（断线续传增量）。
 	ListMessagesAfter(ctx context.Context, roomID uint64, afterID uint64) ([]*dsmodel.Message, error)
 
@@ -48,6 +48,51 @@ type StateStore interface {
 	LeaveRoom(ctx context.Context, roomID, userID uint64) (*Event, error)
 	// SetCurrentInterviewer 设置/切换当前主持面试的面试官。
 	SetCurrentInterviewer(ctx context.Context, roomID, operatorID, newID uint64) (*Event, error)
+
+	// ---- 用户与角色管理（RBAC，先落库后由调用方重载 RBAC 缓存） ----
+
+	// CreateUser 新建面试官（含角色分配），返回用户 id。
+	CreateUser(ctx context.Context, u *dsmodel.User, roleIDs []uint64) (uint64, error)
+	// GetUser 返回用户（含角色）。
+	GetUser(ctx context.Context, id uint64) (*dsmodel.User, error)
+	// ListUsers 分页列出用户（可按 username/name 关键词搜索），每项含角色。
+	ListUsers(ctx context.Context, q string, limit, offset int) ([]*dsmodel.User, error)
+	// UpdateUser 更新用户显示名与角色分配。
+	UpdateUser(ctx context.Context, id uint64, name string, roleIDs []uint64) error
+	// SetUserRoles 覆盖用户的角色分配。
+	SetUserRoles(ctx context.Context, userID uint64, roleIDs []uint64) error
+	// ResetUserPassword 重置用户密码（bump token_version，旧 token 即时失效）。
+	ResetUserPassword(ctx context.Context, id uint64, hash string) error
+	// DeleteUser 删除面试官（room_members 由 FK CASCADE；消息因归候选人不受影响）。
+	DeleteUser(ctx context.Context, id uint64) error
+
+	// ListRoles 列出全部角色（含权限组）。
+	ListRoles(ctx context.Context) ([]*dsmodel.Role, error)
+	// CreateRole 新建角色（权限组）。
+	CreateRole(ctx context.Context, name, desc string, perms []string) (uint64, error)
+	// UpdateRole 更新角色名与权限组（权限变更后需 ReloadAll 缓存）。
+	UpdateRole(ctx context.Context, id uint64, name, desc string, perms []string) error
+	// DeleteRole 删除角色（被用户引用时拒绝）。
+	DeleteRole(ctx context.Context, id uint64) error
+
+	// ---- 候选人管理 ----
+
+	// UpdateCandidate 编辑候选人姓名/简介。
+	UpdateCandidate(ctx context.Context, id uint64, name, profile string) error
+	// DeleteCandidate 删除候选人：连带删其消息档案并解绑房间（房间保留为空记录）。
+	DeleteCandidate(ctx context.Context, id uint64) error
+	// ResetCandidateStatus 重置候选人到状态机任意档：
+	// 向后档（未签到/已签到待分配）自动解绑房间；向前档须已有房间绑定。
+	ResetCandidateStatus(ctx context.Context, id uint64, to dsmodel.CandidateStatus) (*Event, error)
+
+	// ---- 房间管理 ----
+
+	// CreateRoom 手动创建空房间（独立物理会议室记录），返回房间 id。
+	CreateRoom(ctx context.Context) (uint64, error)
+	// DeleteRoom 删除空房间（无候选人绑定、无成员时允许）。
+	DeleteRoom(ctx context.Context, id uint64) error
+	// PullCandidate 房间内面试官拉取候选人：CHECKED_IN_PENDING_ASSIGN -> ASSIGNED 并绑定房间。
+	PullCandidate(ctx context.Context, roomID, candidateID uint64) (*Event, error)
 
 	// ---- 事件游标 & 订阅（重连/广播用） ----
 

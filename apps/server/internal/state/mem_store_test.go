@@ -23,6 +23,7 @@ func newTestStore(t *testing.T) state.StateStore {
 	if err := db.AutoMigrate(
 		&dsmodel.User{}, &dsmodel.Candidate{}, &dsmodel.Room{},
 		&dsmodel.RoomMember{}, &dsmodel.Message{},
+		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -114,8 +115,8 @@ func TestLifecycleThroughStore(t *testing.T) {
 		t.Fatalf("msg id=0")
 	}
 
-	// 增量续传：id after MsgID-1 应能取到该消息
-	msgs, _ := st.ListMessagesAfter(ctx, roomID, mev.MsgID-1)
+	// 增量续传：id after MsgID-1 应能取到该消息（消息按候选人归属）
+	msgs, _ := st.ListMessagesAfter(ctx, id, mev.MsgID-1)
 	if len(msgs) != 1 || msgs[0].Content != "hello" {
 		t.Fatalf("messages after not found: %+v", msgs)
 	}

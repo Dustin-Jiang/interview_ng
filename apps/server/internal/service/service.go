@@ -85,3 +85,111 @@ func (s *InterviewService) SendMessage(ctx context.Context, roomID, senderID uin
 	s.broad.Publish(ev)
 	return nil
 }
+
+// ---- 用户与角色管理（管理接口不涉及房间事件，直接透传 store） ----
+
+func (s *InterviewService) CreateUser(ctx context.Context, u *dsmodel.User, roleIDs []uint64) (uint64, error) {
+	return s.store.CreateUser(ctx, u, roleIDs)
+}
+
+func (s *InterviewService) GetUser(ctx context.Context, id uint64) (*dsmodel.User, error) {
+	return s.store.GetUser(ctx, id)
+}
+
+func (s *InterviewService) ListUsers(ctx context.Context, q string, limit, offset int) ([]*dsmodel.User, error) {
+	return s.store.ListUsers(ctx, q, limit, offset)
+}
+
+func (s *InterviewService) UpdateUser(ctx context.Context, id uint64, name string, roleIDs []uint64) error {
+	return s.store.UpdateUser(ctx, id, name, roleIDs)
+}
+
+func (s *InterviewService) SetUserRoles(ctx context.Context, userID uint64, roleIDs []uint64) error {
+	return s.store.SetUserRoles(ctx, userID, roleIDs)
+}
+
+func (s *InterviewService) ResetUserPassword(ctx context.Context, id uint64, hash string) error {
+	return s.store.ResetUserPassword(ctx, id, hash)
+}
+
+func (s *InterviewService) DeleteUser(ctx context.Context, id uint64) error {
+	return s.store.DeleteUser(ctx, id)
+}
+
+func (s *InterviewService) ListRoles(ctx context.Context) ([]*dsmodel.Role, error) {
+	return s.store.ListRoles(ctx)
+}
+
+func (s *InterviewService) CreateRole(ctx context.Context, name, desc string, perms []string) (uint64, error) {
+	return s.store.CreateRole(ctx, name, desc, perms)
+}
+
+func (s *InterviewService) UpdateRole(ctx context.Context, id uint64, name, desc string, perms []string) error {
+	return s.store.UpdateRole(ctx, id, name, desc, perms)
+}
+
+func (s *InterviewService) DeleteRole(ctx context.Context, id uint64) error {
+	return s.store.DeleteRole(ctx, id)
+}
+
+// ---- 候选人管理 ----
+
+func (s *InterviewService) UpdateCandidate(ctx context.Context, id uint64, name, profile string) error {
+	return s.store.UpdateCandidate(ctx, id, name, profile)
+}
+
+func (s *InterviewService) DeleteCandidate(ctx context.Context, id uint64) error {
+	return s.store.DeleteCandidate(ctx, id)
+}
+
+// ResetCandidateStatus 重置候选人状态（含房间绑定联动）。先落库后广播。
+func (s *InterviewService) ResetCandidateStatus(ctx context.Context, id uint64, to dsmodel.CandidateStatus) error {
+	ev, err := s.store.ResetCandidateStatus(ctx, id, to)
+	if err != nil {
+		return err
+	}
+	s.broad.Publish(ev)
+	return nil
+}
+
+// ---- 房间管理 ----
+
+func (s *InterviewService) CreateRoom(ctx context.Context) (uint64, error) {
+	return s.store.CreateRoom(ctx)
+}
+
+func (s *InterviewService) DeleteRoom(ctx context.Context, id uint64) error {
+	return s.store.DeleteRoom(ctx, id)
+}
+
+// PullCandidate 房间内拉取候选人。先落库后广播。
+func (s *InterviewService) PullCandidate(ctx context.Context, roomID, candidateID uint64) error {
+	ev, err := s.store.PullCandidate(ctx, roomID, candidateID)
+	if err != nil {
+		return err
+	}
+	s.broad.Publish(ev)
+	return nil
+}
+
+// AddRoomMember 把面试官加入房间（复用 JoinRoom 语义：一用户至多一个活跃房间）。先落库后广播。
+func (s *InterviewService) AddRoomMember(ctx context.Context, roomID, userID uint64) error {
+	_, ev, err := s.store.JoinRoom(ctx, roomID, userID)
+	if err != nil {
+		return err
+	}
+	if ev != nil {
+		s.broad.Publish(ev)
+	}
+	return nil
+}
+
+// RemoveRoomMember 把面试官移出房间。先落库后广播。
+func (s *InterviewService) RemoveRoomMember(ctx context.Context, roomID, userID uint64) error {
+	ev, err := s.store.LeaveRoom(ctx, roomID, userID)
+	if err != nil {
+		return err
+	}
+	s.broad.Publish(ev)
+	return nil
+}

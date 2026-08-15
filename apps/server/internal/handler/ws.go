@@ -11,17 +11,19 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 
+	"interview_ng/internal/auth"
 	"interview_ng/internal/broadcast"
-	"interview_ng/internal/model"
+	dsmodel "interview_ng/internal/model"
 	"interview_ng/internal/service"
 	"interview_ng/internal/state"
 )
 
 const (
-	writeWait  = 10 * time.Second
-	pongWait   = 60 * time.Second
-	pingPeriod = (pongWait * 9) / 10
-	maxMsgSize = 4096
+	writeWait   = 10 * time.Second
+	pongWait    = 60 * time.Second
+	pingPeriod  = (pongWait * 9) / 10
+	maxMsgSize  = 4096
+	authTimeout = 10 * time.Second // 连接后 10s 内必须完成 auth，否则断开（Q13=A）
 )
 
 // closeSafe 幂等地关闭一个 channel。
@@ -39,14 +41,14 @@ var upgrader = websocket.Upgrader{
 // wsClient 代表一条已鉴权的 WS 连接及其会话状态。
 type wsClient struct {
 	conn   *websocket.Conn
-	userID uint64
+	userID uint64 // 经 auth 消息绑定，之后不再信任客户端
 	roomID uint64
 
 	send chan []byte // 带缓冲的写队列，由 writer goroutine 消费；广播与命令回复都走这里
 
 	mu        sync.Mutex // 串行化对底层 conn 的并发写保护
 	lastSeq   uint64     // 该连接所见最近事件 Seq（幂等对齐）
-	lastMsgID uint64     // 该连接所见最近消息 id（续传游标）
+	lastMsgID uint64     // 该连接所见最近消息 id（续传游标，按候选人维度）
 }
 
 func (c *wsClient) enqueue(frame []byte) {
@@ -70,28 +72,29 @@ func (c *wsClient) writeBatch(frames ...[]byte) {
 
 // WSServer 承载 WS 连接生命周期、命令分发与房间扇出。
 type WSServer struct {
-	svc *service.InterviewService
-	b   *broadcast.Manager
-	st  state.StateStore
-	h   *hub
+	svc  *service.InterviewService
+	b    *broadcast.Manager
+	st   state.StateStore
+	h    *hub
+	auth *auth.Manager
 }
 
 // NewWSServer 构建 WS 服务器。
-func NewWSServer(svc *service.InterviewService, b *broadcast.Manager, st state.StateStore) *WSServer {
-	return &WSServer{svc: svc, b: b, st: st, h: newHub()}
+func NewWSServer(svc *service.InterviewService, b *broadcast.Manager, st state.StateStore, am *auth.Manager) *WSServer {
+	return &WSServer{svc: svc, b: b, st: st, h: newHub(), auth: am}
 }
 
 // RegisterRoutes 注册 WS 与相关路由。
 func (w *WSServer) RegisterRoutes(r *gin.Engine) {
-	r.GET("/ws/room", w.serveWS)
+	r.GET("/ws/room/:roomId", w.serveWS)
 }
 
 // serveWS 处理 WS 升级与连接生命周期。
+// 握手不带任何业务参数（RESTful 路径承载 roomId，Q12=B）；身份经连接后首条 auth 消息绑定。
 func (w *WSServer) serveWS(c *gin.Context) {
-	userID, _ := strconv.ParseUint(c.Query("user_id"), 10, 64)
-	roomID, _ := strconv.ParseUint(c.Query("room_id"), 10, 64)
-	if userID == 0 || roomID == 0 {
-		c.JSON(400, gin.H{"error": "user_id and room_id required"})
+	roomID, _ := strconv.ParseUint(c.Param("roomId"), 10, 64)
+	if roomID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid roomId"})
 		return
 	}
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -99,36 +102,31 @@ func (w *WSServer) serveWS(c *gin.Context) {
 		return
 	}
 
-	client := &wsClient{conn: conn, userID: userID, roomID: roomID, send: make(chan []byte, 256)}
-	w.h.add(roomID, client)
-
-	// 入房（若尚未是成员则 JoinRoom 持久化 + 广播）。
-	room, _, err := w.st.JoinRoom(c.Request.Context(), roomID, userID)
-	if err != nil {
-		client.writeBatch(mustRawEnvelope("sync", map[string]any{"error": err.Error()}))
-		conn.Close()
-		w.h.remove(roomID, client)
-		return
-	}
-	_ = room
-
-	// 建立扇出：该房间首个连接时注册 sink，把事件推送到该房间所有连接。
-	w.ensureSink(roomID)
-
-	// readPump 返回(连接断开)时通过 quit 通知 writePump 退出并关闭连接。
+	client := &wsClient{conn: conn, roomID: roomID, send: make(chan []byte, 256)}
 	quit := make(chan struct{})
-	go w.writePump(client, quit)
 
+	go w.writePump(client, quit)
 	go w.readPump(c.Request.Context(), client, quit)
 
 	<-quit
 	w.h.remove(roomID, client)
 }
 
+// authTimer 为连接启动鉴权超时：10s 内未完成 auth 则断开。
+func (w *WSServer) authTimer(client *wsClient, quit chan struct{}) *time.Timer {
+	return time.AfterFunc(authTimeout, func() {
+		// 未鉴权 → 直接断开
+		if client.userID == 0 {
+			_ = client.conn.Close()
+			closeSafe(quit)
+		}
+	})
+}
+
 // ensureSink 为房间注册扇出回调；已注册则忽略（幂等）。
 // sink 负责把事件推给该房间内的所有当前连接的写队列。
 func (w *WSServer) ensureSink(roomID uint64) {
-	ok := w.b.Bind(roomID, func(ev *state.Event) {
+	w.b.Bind(roomID, func(ev *state.Event) {
 		frame := encodeEvent(ev)
 		if frame == nil {
 			return
@@ -137,7 +135,6 @@ func (w *WSServer) ensureSink(roomID uint64) {
 			cl.enqueue(frame)
 		}
 	})
-	_ = ok
 }
 
 // encodeEvent 将 state 事件序列化为客户端可读的 chanEvent。
@@ -183,6 +180,7 @@ func (w *WSServer) readPump(ctx context.Context, client *wsClient, quit chan str
 	client.conn.SetPongHandler(func(string) error {
 		return client.conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
+	timer := w.authTimer(client, quit)
 	for {
 		_, message, err := client.conn.ReadMessage()
 		if err != nil {
@@ -192,28 +190,44 @@ func (w *WSServer) readPump(ctx context.Context, client *wsClient, quit chan str
 		if err := json.Unmarshal(message, &env); err != nil {
 			continue
 		}
+		// 鉴权成功前：仅允许 auth op，其余一律拒绝。
+		if !client.authed() && env.Op != "auth" {
+			w.reply(client, env.ReqID, map[string]any{"ok": false, "error": "尚未鉴权"})
+			continue
+		}
 		w.dispatch(ctx, client, &env)
 	}
+	timer.Stop()
 	_ = client.conn.Close()
 	closeSafe(quit)
 }
 
+func (c *wsClient) authed() bool { return c.userID != 0 }
+
 // dispatch 根据 op 分发到具体命令处理。
 func (w *WSServer) dispatch(ctx context.Context, client *wsClient, env *Envelope) {
 	switch env.Op {
+	case "auth":
+		var req reqAuth
+		_ = json.Unmarshal(env.Data, &req)
+		w.handleAuth(ctx, client, &req, env.ReqID)
 	case "sync":
 		var req reqSync
 		_ = json.Unmarshal(env.Data, &req)
 		w.handleSync(ctx, client, &req, env.ReqID)
 	case "send_msg":
+		if !w.auth.HasPermission(client.userID, dsmodel.PermRoomsChat) {
+			w.reply(client, env.ReqID, map[string]any{"ok": false, "error": "无聊天权限"})
+			return
+		}
 		var req reqSendMsg
 		_ = json.Unmarshal(env.Data, &req)
 		w.handleSendMsg(ctx, client, &req, env.ReqID)
-	case "join":
-		var req reqJoin
-		_ = json.Unmarshal(env.Data, &req)
-		w.handleJoin(ctx, client, &req, env.ReqID)
 	case "move_phase":
+		if !w.auth.HasPermission(client.userID, dsmodel.PermRoomsMovePhase) {
+			w.reply(client, env.ReqID, map[string]any{"ok": false, "error": "无阶段推进权限"})
+			return
+		}
 		var req reqMovePhase
 		_ = json.Unmarshal(env.Data, &req)
 		w.handleMovePhase(ctx, client, &req, env.ReqID)
@@ -230,17 +244,47 @@ func (w *WSServer) reply(client *wsClient, reqID string, data any) {
 	client.enqueue(frame)
 }
 
-// handleSync 处理断线/首次同步：返回房间快照 + 消息增量。
+// handleAuth 处理首条鉴权消息：校验 JWT + token_version + rooms.chat 权限，
+// 成功即绑定 userID 并按路径 roomID 自动 JoinRoom。
+func (w *WSServer) handleAuth(ctx context.Context, client *wsClient, req *reqAuth, reqID string) {
+	if client.authed() {
+		w.reply(client, reqID, map[string]any{"ok": false, "error": "重复鉴权"})
+		return
+	}
+	uid, err := w.auth.Authenticate(req.Token)
+	if err != nil {
+		w.reply(client, reqID, map[string]any{"ok": false, "error": "鉴权失败"})
+		return
+	}
+	if !w.auth.HasPermission(uid, dsmodel.PermRoomsChat) {
+		w.reply(client, reqID, map[string]any{"ok": false, "error": "无进房权限"})
+		return
+	}
+	// 自动 JoinRoom（先落库后广播）：成功后才绑定身份并入 hub，失败则保持未鉴权（超时断开）。
+	if err := w.svc.AddRoomMember(ctx, client.roomID, uid); err != nil {
+		w.reply(client, reqID, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	client.userID = uid
+	w.h.add(client.roomID, client)
+	w.ensureSink(client.roomID)
+	w.reply(client, reqID, map[string]any{"ok": true, "room_id": client.roomID})
+}
+
+// handleSync 处理断线/首次同步：返回房间快照 + 消息增量（按候选人维度续传）。
 func (w *WSServer) handleSync(ctx context.Context, client *wsClient, req *reqSync, reqID string) {
 	room, err := w.st.GetRoom(ctx, client.roomID)
 	if err != nil {
 		w.reply(client, reqID, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	msgs, err := w.st.ListMessagesAfter(ctx, client.roomID, req.LastMsgID)
-	if err != nil {
-		w.reply(client, reqID, map[string]any{"ok": false, "error": err.Error()})
-		return
+	var msgs []*dsmodel.Message
+	if room.CandidateID != nil {
+		msgs, err = w.st.ListMessagesAfter(ctx, *room.CandidateID, req.LastMsgID)
+		if err != nil {
+			w.reply(client, reqID, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
 	}
 	client.lastMsgID = req.LastMsgID
 	for _, m := range msgs {
@@ -253,33 +297,22 @@ func (w *WSServer) handleSync(ctx context.Context, client *wsClient, req *reqSyn
 
 // handleSendMsg 发送一条聊天消息（service 先落库后广播）。
 func (w *WSServer) handleSendMsg(ctx context.Context, client *wsClient, req *reqSendMsg, reqID string) {
-	if err := w.svc.SendMessage(ctx, req.RoomID, client.userID, req.Content); err != nil {
+	if err := w.svc.SendMessage(ctx, client.roomID, client.userID, req.Content); err != nil {
 		w.reply(client, reqID, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	// 广播由 service 的 Publish 触发，此处只回执。
-	w.reply(client, reqID, map[string]any{"ok": true, "op": "send_msg", "room_id": req.RoomID})
+	w.reply(client, reqID, map[string]any{"ok": true, "op": "send_msg", "room_id": client.roomID})
 }
 
-// handleJoin 处理面试官加入房间。
-func (w *WSServer) handleJoin(ctx context.Context, client *wsClient, req *reqJoin, reqID string) {
-	room, _, err := w.st.JoinRoom(ctx, req.RoomID, client.userID)
-	if err != nil {
-		w.reply(client, reqID, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	msgs, _ := w.st.ListMessagesAfter(ctx, req.RoomID, 0)
-	w.reply(client, reqID, map[string]any{"ok": true, "room": room, "messages": msgs})
-}
-
-// handleMovePhase 推进阶段。
+// handleMovePhase 推进阶段（权限在 dispatch 层已校验）。
 func (w *WSServer) handleMovePhase(ctx context.Context, client *wsClient, req *reqMovePhase, reqID string) {
-	to := model.CandidateStatus(req.To)
-	if err := w.svc.MovePhase(ctx, req.RoomID, client.userID, to); err != nil {
+	to := dsmodel.CandidateStatus(req.To)
+	if err := w.svc.MovePhase(ctx, client.roomID, client.userID, to); err != nil {
 		w.reply(client, reqID, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	w.reply(client, reqID, map[string]any{"ok": true, "room_id": req.RoomID, "phase": req.To})
+	w.reply(client, reqID, map[string]any{"ok": true, "room_id": client.roomID, "phase": req.To})
 }
 
 //--- helpers ---
