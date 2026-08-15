@@ -8,19 +8,20 @@ import type { ChanEvent } from '@/api/ws-model'
 /** 后端 message_appended 事件 Data 字段（Go 无 tag 结构，字段名首字母大写）。 */
 export interface AppendedEventData {
   RoomID?: number
+  CandidateID?: number
   SenderID?: number
   Content?: string
 }
 
 /** 从「message_appended」频道事件构建一条 Message；非该事件返回 null。 */
-export function messageFromEvent(ev: ChanEvent, fallbackRoomId: number): Message | null {
+export function messageFromEvent(ev: ChanEvent): Message | null {
   if (ev.type !== 'message_appended') return null
   if (ev.msg_id && ev.msg_id <= 0) return null
   const d = (ev.data as AppendedEventData) ?? {}
   return {
     id: ev.msg_id ?? 0,
-    room_id: d.RoomID ?? ev.room_id ?? fallbackRoomId,
-    sender_id: d.SenderID ?? 0,
+    candidate_id: d.CandidateID ?? 0,
+    sender_id: d.SenderID ?? null,
     content: d.Content ?? '',
     created_at: new Date().toISOString(),
   }

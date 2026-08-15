@@ -1,8 +1,8 @@
 /**
  * WebSocket 通道服务 —— MVVM 的 Service（Model 访问）层。
  * 职责：管理一条到后端的 WS 长连接，收发信封、断线重连。
- * 与框架解耦：不发 Vue 响应式状态，只通过回调把原始事件/回执上抛，
- * 由 ViewModel（store）汇聚成可绑定的状态。
+ * 连接建立后先发 auth 消息（JWT），鉴权成功才进入业务阶段。
+ * 与框架解耦：不发 Vue 响应式状态，只通过回调把原始事件/回执上抛。
  */
 import type { ChanEvent, ReplyPayload, WsCommand } from './ws-model'
 
@@ -15,7 +15,7 @@ export interface WsHandlers {
   onOpen?: () => void
   /** 连接关闭（含断线）。 */
   onClose?: () => void
-  /** 连接层致命错误（如加入房间被拒），进入后注入但非事件/回执的信封。 */
+  /** 连接层致命错误（如鉴权被拒）。 */
   onFatal?: (message: string) => void
   onError?: (err: Event) => void
 }
@@ -28,17 +28,20 @@ export class RoomChannel {
   private pending: WsCommand[] = []
 
   constructor(
-    private url: string,
+    private roomId: number,
+    private token: string,
     private handlers: WsHandlers = {},
   ) {}
 
   connect(): void {
     this.closed = false
-    const ws = new WebSocket(this.url)
+    // RESTful 路径承载 roomId；token 走连接后 auth 消息，不进 URL。
+    const ws = new WebSocket(`/ws/room/${this.roomId}`)
     this.ws = ws
 
     ws.onopen = () => {
-      this.flush()
+      // 首条消息必须是 auth。
+      this.rawSend({ op: 'auth', req_id: this.nextReqId(), data: { token: this.token } })
       this.handlers.onOpen?.()
     }
     ws.onmessage = (e) => this.handleMessage(String(e.data))
@@ -50,12 +53,8 @@ export class RoomChannel {
     ws.onerror = (e) => this.handlers.onError?.(e)
   }
 
-  private flush(): void {
-    const buf = this.pending
-    this.pending = []
-    for (const cmd of buf) {
-      this.rawSend(cmd)
-    }
+  private nextReqId(): string {
+    return `r${Date.now()}_${++this.seqCounter}`
   }
 
   private rawSend(frame: WsCommand): void {
@@ -74,7 +73,7 @@ export class RoomChannel {
       this.handlers.onReply?.(env.req_id ?? '', (env.data as ReplyPayload) ?? { ok: false })
       return
     }
-    // 后端在升级失败/加入被拒时会下发 {"type":"sync","data":{"error":...}}
+    // 后端在鉴权/入房失败时下发 {"type":"sync","data":{"error":...}}
     const errMsg = (env.data as { error?: string } | undefined)?.error
     if (errMsg) {
       this.handlers.onFatal?.(errMsg)
@@ -83,32 +82,24 @@ export class RoomChannel {
     this.handlers.onEvent?.(env.data as ChanEvent)
   }
 
-  /** 发送命令；返回自动生成的 req_id。连接未就绪时先入队，open 后发送。 */
+  /** 发送命令；返回自动生成的 req_id。 */
   send(op: WsCommand['op'], data: Record<string, unknown>): string {
-    const reqId = `r${Date.now()}_${++this.seqCounter}`
+    const reqId = this.nextReqId()
     const frame: WsCommand = { op, req_id: reqId, data }
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.rawSend(frame)
-    } else {
-      this.pending.push(frame)
-    }
+    this.rawSend(frame)
     return reqId
   }
 
-  sync(lastMsgId: number, roomId: number): string {
-    return this.send('sync', { room_id: roomId, last_msg_id: lastMsgId, last_seq: 0 })
+  sync(lastMsgId: number): string {
+    return this.send('sync', { room_id: this.roomId, last_msg_id: lastMsgId, last_seq: 0 })
   }
 
-  sendMessage(roomId: number, content: string): string {
-    return this.send('send_msg', { room_id: roomId, content })
+  sendMessage(content: string): string {
+    return this.send('send_msg', { room_id: this.roomId, content })
   }
 
-  join(roomId: number): string {
-    return this.send('join', { room_id: roomId })
-  }
-
-  movePhase(roomId: number, to: string): string {
-    return this.send('move_phase', { room_id: roomId, to })
+  movePhase(to: string): string {
+    return this.send('move_phase', { room_id: this.roomId, to })
   }
 
   close(): void {

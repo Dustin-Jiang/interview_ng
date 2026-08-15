@@ -21,9 +21,9 @@ export function phaseIndex(status: CandidateStatus | null): number {
   return CANDIDATE_STATUSES.indexOf(status)
 }
 
-/** 从房间快照推导当前阶段（= 绑定候选人状态）；无候选人或未绑定视为未开始。 */
-export function roomPhaseOf(room: Room): CandidateStatus {
-  return room.candidate?.status ?? 'NOT_CHECKED_IN'
+/** 从房间快照推导当前状态（= 绑定候选人状态）；无候选人或未绑定视为空闲（null）。 */
+export function roomPhaseOf(room: Room): CandidateStatus | null {
+  return room.candidate?.status ?? null
 }
 
 /**

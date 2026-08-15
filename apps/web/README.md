@@ -72,6 +72,6 @@ pnpm typecheck      # 或单独进入本目录：pnpm run typecheck / pnpm run b
 
 ---
 
-## 当前用户
+## 当前用户与权限
 
-后端无登录接口。按需求在 `src/config.ts` 固定 `CURRENT_USER_ID = 1`，用于 WS 加入房间、发消息与 `sender_id` 展示。若你的面试官 user_id 不同，改这一处即可。
+后端提供登录鉴权：`POST /api/auth/login` 签发 7 天 JWT（默认种子账号 `admin / admin`）。前端登录态由 `useAuth` 组合式函数管理（token 存 localStorage，`GET /api/me` 拉取用户/角色/权限并集），路由守卫未登录跳 `/login`；各操作按钮按当前用户权限（`hasPermission`）显隐，后端矩阵强制兜底。WS 连接 `/ws/room/:roomId` 后首条消息发送 `auth`（携带 JWT）完成鉴权。

@@ -1,24 +1,42 @@
 <script setup lang="ts">
+import { computed, onMounted } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { Toaster } from 'vue-sonner'
-import { computed } from 'vue'
+import { LogOut } from 'lucide-vue-next'
+
+import { useAuth, ensureAuthReady } from '@/composables/useAuth'
+import { PERMISSIONS } from '@/models'
+import { Button } from '@/components/ui/button'
 
 const route = useRoute()
+const { user, isLoggedIn, hasPermission, logout } = useAuth()
 
-const navItems = [
-  { name: '候选人管理', to: { name: 'candidates' } },
-  { name: '面试房间', to: { name: 'room' } },
-]
+const navItems = computed(() => {
+  const items = [
+    { name: '候选人管理', to: { name: 'candidates' } },
+    { name: '面试房间', to: { name: 'room' } },
+  ]
+  if (hasPermission(PERMISSIONS.USERS_MANAGE)) {
+    items.push({ name: '面试官管理', to: { name: 'users' } })
+  }
+  return items
+})
 
 /** 是否处于房间内部（全屏专注界面，header 由房间视图自绘，无全局导航）。 */
 const isInRoom = computed(() => route.name === 'room' && !!route.params.roomId)
+/** 登录页隐藏全局导航。 */
+const showNav = computed(() => !isInRoom.value && isLoggedIn.value)
+
+onMounted(() => {
+  void ensureAuthReady()
+})
 </script>
 
 <template>
   <div class="flex h-screen flex-col overflow-hidden bg-background font-sans">
-    <!-- 全局导航：仅在列表/管理场景显示 -->
+    <!-- 全局导航：登录后且非房间内部显示 -->
     <header
-      v-if="!isInRoom"
+      v-if="showNav"
       class="z-40 w-full shrink-0 border-b bg-background/95 backdrop-blur"
     >
       <div class="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4">
@@ -38,6 +56,14 @@ const isInRoom = computed(() => route.name === 'room' && !!route.params.roomId)
             {{ item.name }}
           </RouterLink>
         </nav>
+        <div class="ml-auto flex items-center gap-2">
+          <span class="text-sm text-muted-foreground">
+            {{ user?.name ?? user?.username ?? '' }}
+          </span>
+          <Button variant="ghost" size="icon" aria-label="退出登录" @click="logout">
+            <LogOut class="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </header>
 

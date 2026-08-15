@@ -19,6 +19,21 @@ export const CANDIDATE_STATUSES: CandidateStatus[] = [
   'COMPLETED',
 ]
 
+/** 权限名（9 枚，RBAC 目录与后端一致）。 */
+export const PERMISSIONS = {
+  USERS_MANAGE: 'users.manage',
+  CANDIDATES_MANAGE: 'candidates.manage',
+  CANDIDATES_CREATE: 'candidates.create',
+  CANDIDATES_CHECKIN: 'candidates.checkin',
+  CANDIDATES_ASSIGN: 'candidates.assign',
+  ROOMS_VIEW: 'rooms.view',
+  ROOMS_CHAT: 'rooms.chat',
+  ROOMS_MOVE_PHASE: 'rooms.move_phase',
+  ROOMS_MANAGE: 'rooms.manage',
+} as const
+
+export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS]
+
 export interface Candidate {
   id: number
   room_id?: number
@@ -31,8 +46,26 @@ export interface Candidate {
 
 export interface User {
   id: number
+  username: string
   name: string
-  role: string
+  created_at: string
+  updated_at: string
+  roles?: Role[]
+}
+
+export interface Role {
+  id: number
+  name: string
+  description: string
+  permissions?: RolePermission[]
+  created_at: string
+  updated_at: string
+}
+
+export interface RolePermission {
+  id: number
+  role_id: number
+  permission: string
 }
 
 export interface RoomMember {
@@ -44,8 +77,8 @@ export interface RoomMember {
 
 export interface Message {
   id: number
-  room_id: number
-  sender_id: number
+  candidate_id: number
+  sender_id: number | null
   sender?: User
   content: string
   created_at: string
@@ -53,11 +86,18 @@ export interface Message {
 
 export interface Room {
   id: number
-  candidate_id: number
+  candidate_id?: number
   candidate?: Candidate
   current_interviewer_id?: number
   created_at: string
   updated_at: string
   messages?: Message[]
   members?: RoomMember[]
+}
+
+/** /api/me 与登录响应中的用户资料（含角色与权限并集）。 */
+export interface UserProfile {
+  user: User
+  roles: string[]
+  permissions: Permission[]
 }
