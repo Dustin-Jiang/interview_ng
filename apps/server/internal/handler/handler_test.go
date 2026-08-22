@@ -227,6 +227,224 @@ func TestWSMessageAuthAndSync(t *testing.T) {
 	}
 }
 
+// TestRoomCompleteClearsCandidateForNext 验证：候选人推进到 COMPLETED 后房间自动清空，
+// sync 返回空房快照，且同一房间可继续拉取下一候选人（消息按候选人归档）。
+func TestRoomCompleteClearsCandidateForNext(t *testing.T) {
+	r := newTestApp(t)
+
+	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	// 准备：候选人 A/B 签到；建房 → 拉取 A → 加入成员
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"甲","profile":"后端"}`, token)
+	candA := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"乙","profile":"前端"}`, token)
+	candB := int(out["id"].(float64))
+	doJSON(t, r, "POST", "/api/candidates/"+itoa(candA)+"/checkin", "", token)
+	doJSON(t, r, "POST", "/api/candidates/"+itoa(candB)+"/checkin", "", token)
+	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
+	roomID := int(out["id"].(float64))
+	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/pull_candidate", `{"candidate_id":`+itoa(candA)+`}`, token)
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	adminID := int(out["user"].(map[string]any)["id"].(float64))
+	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/members", `{"user_id":`+itoa(adminID)+`}`, token)
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/room/" + itoa(roomID)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	var seenLog []map[string]any
+	readUntil := func(pred func(map[string]any) bool) map[string]any {
+		t.Helper()
+		for i := 0; i < 20; i++ {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			var env map[string]any
+			if err := conn.ReadJSON(&env); err != nil {
+				t.Fatalf("read ws: %v (log=%v)", err, seenLog)
+			}
+			seenLog = append(seenLog, env)
+			if pred(env) {
+				return env
+			}
+		}
+		t.Fatalf("condition not met in read loop (log=%v)", seenLog)
+		return nil
+	}
+
+	// auth
+	if err := conn.WriteJSON(map[string]any{"op": "auth", "req_id": "a1", "data": map[string]string{"token": token}}); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+	readUntil(func(env map[string]any) bool {
+		return env["type"] == "reply" && env["req_id"] == "a1"
+	})
+
+	// sync：确认房间绑定候选人 A
+	if err := conn.WriteJSON(map[string]any{"op": "sync", "req_id": "s1", "data": map[string]any{"room_id": roomID, "last_msg_id": 0, "last_seq": 0}}); err != nil {
+		t.Fatalf("write sync: %v", err)
+	}
+	sync1 := readUntil(func(env map[string]any) bool {
+		return env["type"] == "reply" && env["req_id"] == "s1"
+	})
+	d1, _ := sync1["data"].(map[string]any)
+	if r1, _ := d1["room"].(map[string]any); r1["candidate"] == nil {
+		t.Fatalf("initial sync should have candidate: %v", d1)
+	}
+
+	// 推进到 IN_PROGRESS -> COMPLETED，等待完成的 room_phase_changed 事件
+	if err := conn.WriteJSON(map[string]any{"op": "move_phase", "req_id": "m1", "data": map[string]any{"room_id": roomID, "to": "IN_PROGRESS"}}); err != nil {
+		t.Fatalf("write move in_progress: %v", err)
+	}
+	readUntil(func(env map[string]any) bool {
+		return env["type"] == "reply" && env["req_id"] == "m1"
+	})
+	if err := conn.WriteJSON(map[string]any{"op": "move_phase", "req_id": "m2", "data": map[string]any{"room_id": roomID, "to": "COMPLETED"}}); err != nil {
+		t.Fatalf("write move completed: %v", err)
+	}
+	readUntil(func(env map[string]any) bool {
+		if env["type"] != "room_phase_changed" {
+			return false
+		}
+		chanEv, _ := env["data"].(map[string]any)
+		payload, _ := chanEv["data"].(map[string]any)
+		return payload["To"] == "COMPLETED"
+	})
+	readUntil(func(env map[string]any) bool {
+		return env["type"] == "reply" && env["req_id"] == "m2"
+	})
+
+	// 完成后 sync：房间快照应无候选人，消息为空（A 的消息归档在候选人处）
+	if err := conn.WriteJSON(map[string]any{"op": "sync", "req_id": "s2", "data": map[string]any{"room_id": roomID, "last_msg_id": 0, "last_seq": 0}}); err != nil {
+		t.Fatalf("write sync2: %v", err)
+	}
+	sync2 := readUntil(func(env map[string]any) bool {
+		return env["type"] == "reply" && env["req_id"] == "s2"
+	})
+	d2, _ := sync2["data"].(map[string]any)
+	if r2, _ := d2["room"].(map[string]any); r2["candidate"] != nil {
+		t.Fatalf("room should be empty after complete: %v", d2)
+	}
+	if msgs, ok := d2["messages"].([]any); ok && len(msgs) != 0 {
+		t.Fatalf("room messages should be empty after complete: %v", d2)
+	}
+
+	// 同一房间拉取下一候选人 B
+	code, pullOut := doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/pull_candidate", `{"candidate_id":`+itoa(candB)+`}`, token)
+	if code != http.StatusOK {
+		t.Fatalf("pull B: got %d %v", code, pullOut)
+	}
+	code, roomOut := doJSON(t, r, "GET", "/api/rooms/"+itoa(roomID), "", token)
+	if code != http.StatusOK {
+		t.Fatalf("get room: got %d", code)
+	}
+	if rm, _ := roomOut["candidate"].(map[string]any); rm == nil || int(rm["id"].(float64)) != candB {
+		t.Fatalf("room should bind candidate B: %v", roomOut)
+	}
+}
+
+// TestSignedInBroadcastsToAllRooms 验证候选人签到事件经全局广播推送至所有开放房间，
+// 使各房间"待分配池"可实时更新。
+func TestSignedInBroadcastsToAllRooms(t *testing.T) {
+	r := newTestApp(t)
+
+	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	// 建两个面试官用户（各持 interviewer 权限，含 rooms.chat），分别进不同房间，
+	// 以满足"一用户至多一活跃房间"约束。
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"itv","description":"面试官","permissions":["rooms.view","rooms.chat","candidates.create","candidates.checkin","candidates.assign"]}`, token)
+	roleID := int(out["id"].(float64))
+	userIDs := []int{}
+	for _, u := range []string{"itvA", "itvB"} {
+		_, out = doJSON(t, r, "POST", "/api/users", `{"username":"`+u+`","name":"面试官","password":"pass","role_ids":[`+itoa(roleID)+`]}`, token)
+		userIDs = append(userIDs, int(out["id"].(float64)))
+	}
+
+	// 建两个房间并各加入一位面试官
+	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
+	roomA := int(out["id"].(float64))
+	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomA)+"/members", `{"user_id":`+itoa(userIDs[0])+`}`, token)
+	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
+	roomB := int(out["id"].(float64))
+	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomB)+"/members", `{"user_id":`+itoa(userIDs[1])+`}`, token)
+
+	// 为两用户签发各自 token
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"itvA","password":"pass"}`, "")
+	tokenA := out["token"].(string)
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"itvB","password":"pass"}`, "")
+	tokenB := out["token"].(string)
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	dial := func(room int) *websocket.Conn {
+		t.Helper()
+		url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/room/" + itoa(room)
+		conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+		if err != nil {
+			t.Fatalf("dial room %d: %v", room, err)
+		}
+		return conn
+	}
+	readReply := func(conn *websocket.Conn, reqID string) {
+		t.Helper()
+		for i := 0; i < 20; i++ {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			var env map[string]any
+			if err := conn.ReadJSON(&env); err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if env["type"] == "reply" && env["req_id"] == reqID {
+				return
+			}
+		}
+		t.Fatalf("reply %s not received", reqID)
+	}
+
+	connA := dial(roomA)
+	defer connA.Close()
+	connB := dial(roomB)
+	defer connB.Close()
+
+	// 两连接各 auth
+	for _, c := range []struct {
+		conn *websocket.Conn
+		id   string
+		tok  string
+	}{{connA, "a1", tokenA}, {connB, "b1", tokenB}} {
+		if err := c.conn.WriteJSON(map[string]any{"op": "auth", "req_id": c.id, "data": map[string]string{"token": c.tok}}); err != nil {
+			t.Fatalf("write auth: %v", err)
+		}
+		readReply(c.conn, c.id)
+	}
+
+	// 建候选人并签到 → 应全局广播到房间 B
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"新签","profile":"前端"}`, token)
+	candID := int(out["id"].(float64))
+	if code, _ := doJSON(t, r, "POST", "/api/candidates/"+itoa(candID)+"/checkin", "", token); code != http.StatusOK {
+		t.Fatalf("checkin failed: %d", code)
+	}
+
+	// 房间 B 应收到 candidate_signed_in 事件（全局广播跨房间）
+	for i := 0; i < 20; i++ {
+		_ = connB.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var env map[string]any
+		if err := connB.ReadJSON(&env); err != nil {
+			t.Fatalf("read connB: %v", err)
+		}
+		if env["type"] == "candidate_signed_in" {
+			return
+		}
+	}
+	t.Fatalf("room B should receive candidate_signed_in global event")
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

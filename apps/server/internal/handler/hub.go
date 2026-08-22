@@ -44,3 +44,17 @@ func (h *hub) clientsIn(roomID uint64) []*wsClient {
 	}
 	return out
 }
+
+// clientsAll 返回所有房间的全部去重客户端（全局扇出用）。
+// 一个客户端至多属于一个房间，故跨房间遍历天然无重复。
+func (h *hub) clientsAll() []*wsClient {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	var out []*wsClient
+	for _, m := range h.rooms {
+		for c := range m {
+			out = append(out, c)
+		}
+	}
+	return out
+}

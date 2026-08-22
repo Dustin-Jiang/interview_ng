@@ -109,6 +109,11 @@ func (w *WSServer) serveWS(c *gin.Context) {
 	go w.readPump(c.Request.Context(), client, quit)
 
 	<-quit
+	// 连接断开即离开房间（释放"一次一个活跃房间"席位）；
+	// 断线重连/刷新由客户端重新 auth → JoinRoom 幂等重入。
+	if client.userID != 0 {
+		w.svc.RemoveRoomMember(c.Request.Context(), roomID, client.userID)
+	}
 	w.h.remove(roomID, client)
 }
 
@@ -129,6 +134,13 @@ func (w *WSServer) ensureSink(roomID uint64) {
 	w.b.Bind(roomID, func(ev *state.Event) {
 		frame := encodeEvent(ev)
 		if frame == nil {
+			return
+		}
+		if ev.RoomID == 0 {
+			// 全局事件（签到/拉走等"待分配池"变化）：推给所有开放房间的连接。
+			for _, cl := range w.h.clientsAll() {
+				cl.enqueue(frame)
+			}
 			return
 		}
 		for _, cl := range w.h.clientsIn(roomID) {

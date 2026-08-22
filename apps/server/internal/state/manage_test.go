@@ -92,13 +92,18 @@ func TestResetCandidateStatusLinkage(t *testing.T) {
 		t.Fatalf("pull: %v", err)
 	}
 
-	// 前向重置到 COMPLETED：有房应成功
+	// 前向重置到 COMPLETED：有房应成功，且完成即自动解绑房间
 	if _, err := st.ResetCandidateStatus(ctx, candID, dsmodel.StatusCompleted); err != nil {
 		t.Fatalf("reset forward: %v", err)
 	}
 	c, _ := st.GetCandidate(ctx, candID)
 	if c.Status != dsmodel.StatusCompleted {
 		t.Fatalf("status=%s", c.Status)
+	}
+	// COMPLETED 一律清房：房间解绑、候选人 room_id 置空（与 MovePhase 完成一致）
+	room, _ := st.GetRoom(ctx, roomID)
+	if room.CandidateID != nil || c.RoomID != nil {
+		t.Fatalf("completed should release room: cand=%+v room=%+v", c, room)
 	}
 
 	// 后向重置到 NOT_CHECKED_IN：自动解绑房间
@@ -109,7 +114,7 @@ func TestResetCandidateStatusLinkage(t *testing.T) {
 	if c.Status != dsmodel.StatusNotCheckedIn || c.RoomID != nil {
 		t.Fatalf("backward reset should unbind: %+v", c)
 	}
-	room, _ := st.GetRoom(ctx, roomID)
+	room, _ = st.GetRoom(ctx, roomID)
 	if room.CandidateID != nil {
 		t.Fatalf("room should be empty after unbind")
 	}
@@ -117,6 +122,76 @@ func TestResetCandidateStatusLinkage(t *testing.T) {
 	// 前向重置到 ASSIGNED：无房应拒绝
 	if _, err := st.ResetCandidateStatus(ctx, candID, dsmodel.StatusAssigned); err == nil {
 		t.Fatalf("expected no_room error")
+	}
+}
+
+// TestCompleteCandidateClearsRoom 候选人完成（推进到 COMPLETED）后自动清房，
+// 房间成员留守、消息按候选人归档保留，并可继续拉取下一候选人。
+func TestCompleteCandidateClearsRoom(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	candA, _ := st.CreateCandidate(ctx, "甲", "后端")
+	if _, err := st.CheckIn(ctx, candA); err != nil {
+		t.Fatalf("checkin A: %v", err)
+	}
+	candB, _ := st.CreateCandidate(ctx, "乙", "前端")
+	if _, err := st.CheckIn(ctx, candB); err != nil {
+		t.Fatalf("checkin B: %v", err)
+	}
+	roomID, _ := st.CreateRoom(ctx)
+	if _, err := st.PullCandidate(ctx, roomID, candA); err != nil {
+		t.Fatalf("pull A: %v", err)
+	}
+	if _, _, err := st.JoinRoom(ctx, roomID, 1); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, roomID, 1, "A 的面试记录"); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	// 依次推进到 IN_PROGRESS -> COMPLETED
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("move in_progress: %v", err)
+	}
+	mev, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusCompleted)
+	if err != nil {
+		t.Fatalf("move completed: %v", err)
+	}
+	if mev.Data == nil {
+		t.Fatalf("move completed event missing data")
+	}
+
+	// 房间解绑候选人、候选人解绑房间，状态保留 COMPLETED
+	room, _ := st.GetRoom(ctx, roomID)
+	if room.CandidateID != nil {
+		t.Fatalf("room should be released after complete: %+v", room)
+	}
+	c, _ := st.GetCandidate(ctx, candA)
+	if c.Status != dsmodel.StatusCompleted || c.RoomID != nil {
+		t.Fatalf("candidate should be COMPLETED & unbound: %+v", c)
+	}
+
+	// 消息按候选人归档保留（未级联删除，可从候选人维度完整取回）
+	msgs, err := st.ListMessagesAfter(ctx, candA, 0)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Content != "A 的面试记录" {
+		t.Fatalf("candidate A messages not preserved: %+v", msgs)
+	}
+
+	// 同一房间可继续拉取下一候选人（完成即清房、成员留守）
+	if _, err := st.PullCandidate(ctx, roomID, candB); err != nil {
+		t.Fatalf("pull B: %v", err)
+	}
+	room, _ = st.GetRoom(ctx, roomID)
+	if room.CandidateID == nil || *room.CandidateID != candB {
+		t.Fatalf("room should bind B: %+v", room)
+	}
+	// 成员仍在房间（未因清房被移除）
+	if len(room.Members) != 1 || room.Members[0].UserID != 1 {
+		t.Fatalf("members should remain after complete: %+v", room.Members)
 	}
 }
 

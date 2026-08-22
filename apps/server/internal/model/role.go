@@ -12,7 +12,7 @@ const (
 	PermRoomsView         = "rooms.view"         // 浏览房间列表/详情
 	PermRoomsChat         = "rooms.chat"         // 进房/发消息
 	PermRoomsMovePhase    = "rooms.move_phase"   // 推进阶段
-	PermRoomsManage       = "rooms.manage"       // 房间成员/主持人管理、建空房、删空房
+	PermRoomsManage       = "rooms.manage"       // 房间成员管理、建空房、删空房
 )
 
 // AllPermissions 全部权限名（用于校验角色权限组输入）。

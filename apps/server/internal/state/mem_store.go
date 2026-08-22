@@ -214,7 +214,8 @@ func (s *MemStateStore) MovePhase(ctx context.Context, roomID, operatorID uint64
 	if err != nil {
 		return nil, err
 	}
-	if room.CurrentInterviewerID != 0 && room.CurrentInterviewerID != operatorID {
+	// 无主持人概念：房间成员即可推进阶段。
+	if !s.isMemberLocked(ctx, roomID, operatorID) {
 		return nil, ErrNotMember
 	}
 	c, err := s.ensureCandidate(ctx, *room.CandidateID)
@@ -224,7 +225,17 @@ func (s *MemStateStore) MovePhase(ctx context.Context, roomID, operatorID uint64
 	if err := guardTransition(c.Status, to); err != nil {
 		return nil, err
 	}
-	if err := s.db.WithContext(ctx).Model(c).Update("status", to).Error; err != nil {
+	// 推进到 COMPLETED（完成）即自动清房：房间解绑候选人并解除候选人 room_id，
+	// 房间转空闲可继续拉取下一位；消息仍按候选人归档保留。
+	updates := map[string]any{"status": to}
+	if to == dsmodel.StatusCompleted {
+		if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", roomID).
+			UpdateColumn("candidate_id", nil).Error; err != nil {
+			return nil, err
+		}
+		updates["room_id"] = nil
+	}
+	if err := s.db.WithContext(ctx).Model(c).Updates(updates).Error; err != nil {
 		return nil, err
 	}
 	ev := &Event{Type: EventRoomPhaseChanged, Data: struct {
@@ -313,27 +324,6 @@ func (s *MemStateStore) LeaveRoom(ctx context.Context, roomID, userID uint64) (*
 		return nil, res.Error
 	}
 	ev := &Event{Type: EventMemberLeft, RoomID: roomID, Data: struct{ UserID uint64 }{userID}}
-	s.emit(roomID, ev)
-	return ev, nil
-}
-
-func (s *MemStateStore) SetCurrentInterviewer(ctx context.Context, roomID, operatorID, newID uint64) (*Event, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	room, err := s.ensureRoom(ctx, roomID)
-	if err != nil {
-		return nil, err
-	}
-	if room.CurrentInterviewerID != 0 && room.CurrentInterviewerID != operatorID {
-		return nil, ErrNotMember
-	}
-	if err := s.db.WithContext(ctx).Model(room).Update("current_interviewer_id", newID).Error; err != nil {
-		return nil, err
-	}
-	ev := &Event{Type: EventRoomPhaseChanged, RoomID: roomID, Data: struct {
-		RoomID      uint64
-		Interviewer uint64
-	}{roomID, newID}}
 	s.emit(roomID, ev)
 	return ev, nil
 }
@@ -569,6 +559,14 @@ func (s *MemStateStore) ResetCandidateStatus(ctx context.Context, id uint64, to 
 			return nil, &Error{Code: "no_room", Msg: "向前重置须先绑定房间"}
 		}
 		roomID = *c.RoomID
+		// 重置到 COMPLETED 与推进路径一致：完成即自动解绑房间（消息按候选人保留）。
+		if to == dsmodel.StatusCompleted {
+			if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", *c.RoomID).
+				UpdateColumn("candidate_id", nil).Error; err != nil {
+				return nil, err
+			}
+			updates["room_id"] = nil
+		}
 	case backward:
 		// 自动解绑房间（room 保留为空记录）
 		if c.RoomID != nil {

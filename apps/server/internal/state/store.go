@@ -38,7 +38,9 @@ type StateStore interface {
 	// 返回事件与本房间 id（roomID 为 0 时自动新建）。
 	AssignCandidate(ctx context.Context, candidateID, roomID uint64) (*Event, uint64, error)
 	// MovePhase 推进阶段：ASSIGNED -> IN_PROGRESS -> COMPLETED。
-	// 由当前主持面试官调用。
+	// 由当前房间成员调用（无主持人概念，成员即可推进）。
+	// 推进到 COMPLETED 自动解绑房间（rooms.candidate_id 与候选人 room_id 置空），
+	// 房间转空闲可拉取下一候选人；消息仍按候选人归档保留。
 	MovePhase(ctx context.Context, roomID, operatorID uint64, to dsmodel.CandidateStatus) (*Event, error)
 	// AppendMessage 在房间内追加一条聊天消息，返回事件(带 MsgID)。
 	AppendMessage(ctx context.Context, roomID, senderID uint64, content string) (*Event, error)
@@ -46,8 +48,6 @@ type StateStore interface {
 	JoinRoom(ctx context.Context, roomID, userID uint64) (*dsmodel.Room, *Event, error)
 	// LeaveRoom 面试官离开房间（返回最后一个离开者时会额外产出成员变更事件）。
 	LeaveRoom(ctx context.Context, roomID, userID uint64) (*Event, error)
-	// SetCurrentInterviewer 设置/切换当前主持面试的面试官。
-	SetCurrentInterviewer(ctx context.Context, roomID, operatorID, newID uint64) (*Event, error)
 
 	// ---- 用户与角色管理（RBAC，先落库后由调用方重载 RBAC 缓存） ----
 
@@ -83,6 +83,7 @@ type StateStore interface {
 	DeleteCandidate(ctx context.Context, id uint64) error
 	// ResetCandidateStatus 重置候选人到状态机任意档：
 	// 向后档（未签到/已签到待分配）自动解绑房间；向前档须已有房间绑定。
+	// 向前档目标为 COMPLETED 时与推进路径一致：自动解绑房间（候选人与房间均解除关联）。
 	ResetCandidateStatus(ctx context.Context, id uint64, to dsmodel.CandidateStatus) (*Event, error)
 
 	// ---- 房间管理 ----

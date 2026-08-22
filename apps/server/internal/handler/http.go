@@ -54,7 +54,6 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	authed.DELETE("/rooms/:id", h.require(dsmodel.PermRoomsManage), h.deleteRoom)
 	authed.POST("/rooms/:id/members", h.require(dsmodel.PermRoomsManage), h.addRoomMember)
 	authed.DELETE("/rooms/:id/members/:userId", h.require(dsmodel.PermRoomsManage), h.removeRoomMember)
-	authed.PUT("/rooms/:id/current_interviewer", h.require(dsmodel.PermRoomsManage), h.setCurrentInterviewer)
 	authed.POST("/rooms/:id/pull_candidate", h.require(dsmodel.PermCandidatesAssign), h.pullCandidate)
 
 	// 用户与角色（users.manage）
@@ -287,25 +286,6 @@ func (h *HTTPServer) removeRoomMember(c *gin.Context) {
 	roomID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 	userID, _ := strconv.ParseUint(c.Param("userId"), 10, 64)
 	if err := h.svc.RemoveRoomMember(c.Request.Context(), roomID, userID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-type setInterviewerReq struct {
-	InterviewerID uint64 `json:"interviewer_id"`
-}
-
-func (h *HTTPServer) setCurrentInterviewer(c *gin.Context) {
-	roomID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	op := auth.UserID(c)
-	var req setInterviewerReq
-	if err := c.ShouldBindJSON(&req); err != nil || req.InterviewerID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "interviewer_id required"})
-		return
-	}
-	if err := h.svc.SetCurrentInterviewer(c.Request.Context(), roomID, op, req.InterviewerID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

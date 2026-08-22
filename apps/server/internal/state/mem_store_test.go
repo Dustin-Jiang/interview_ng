@@ -87,17 +87,7 @@ func TestLifecycleThroughStore(t *testing.T) {
 		t.Fatalf("event room mismatch")
 	}
 
-	// 进入进行中
-	if _, err := st.MovePhase(ctx, roomID, 0, dsmodel.StatusInProgress); err != nil {
-		t.Fatalf("move: %v", err)
-	}
-	// 非法跳转到 COMPLETED 前的状态应拒绝（IN_PROGRESS -> COMPLETED 合法，这里测 ASSIGNED 状态下的非法）
-	c, _ = st.GetCandidate(ctx, id)
-	if c.Status != dsmodel.StatusInProgress {
-		t.Fatalf("status=%s", c.Status)
-	}
-
-	// 加入房间并发消息（需先成为成员才能发）
+	// 加入房间并发消息（需先成为成员才能推进阶段/发消息）
 	_, _, err = st.JoinRoom(ctx, roomID, 1)
 	if err != nil {
 		t.Fatalf("join: %v", err)
@@ -105,6 +95,16 @@ func TestLifecycleThroughStore(t *testing.T) {
 	// 已分配候选人不允许重复分配
 	if _, _, err := st.AssignCandidate(ctx, id, 0); err == nil {
 		t.Fatalf("expected duplicate assign error")
+	}
+
+	// 进入进行中（成员即可推进，无主持人概念）
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	// 非法跳转到 COMPLETED 前的状态应拒绝（IN_PROGRESS -> COMPLETED 合法，这里测 ASSIGNED 状态下的非法）
+	c, _ = st.GetCandidate(ctx, id)
+	if c.Status != dsmodel.StatusInProgress {
+		t.Fatalf("status=%s", c.Status)
 	}
 
 	mev, err := st.AppendMessage(ctx, roomID, 1, "hello")

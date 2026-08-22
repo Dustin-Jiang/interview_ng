@@ -66,16 +66,6 @@ func (s *InterviewService) MovePhase(ctx context.Context, roomID, operatorID uin
 	return nil
 }
 
-// SetCurrentInterviewer 切换当前主持面试官。先落库后广播。
-func (s *InterviewService) SetCurrentInterviewer(ctx context.Context, roomID, operatorID, newID uint64) error {
-	ev, err := s.store.SetCurrentInterviewer(ctx, roomID, operatorID, newID)
-	if err != nil {
-		return err
-	}
-	s.broad.Publish(ev)
-	return nil
-}
-
 // SendMessage 发送聊天消息。先落库后广播（事件携带 MsgID 供客户端续传对齐）。
 func (s *InterviewService) SendMessage(ctx context.Context, roomID, senderID uint64, content string) error {
 	ev, err := s.store.AppendMessage(ctx, roomID, senderID, content)
