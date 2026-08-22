@@ -5,6 +5,7 @@ bin/
 .cache/
 .gopath/
 apps/server/.gopath/
+data/
 
 # ---- env ----
 .env
