@@ -18,7 +18,6 @@ type Cache struct {
 	tokenVer    map[uint64]uint64              // userID -> token_version
 	roleByID    map[uint64]string              // roleID -> roleName
 	permByRole  map[uint64]map[string]struct{} // roleID -> 权限集合
-	roleByName  map[string]uint64              // roleName -> roleID
 }
 
 // New 构建空缓存。
@@ -29,7 +28,6 @@ func New() *Cache {
 		tokenVer:    make(map[uint64]uint64),
 		roleByID:    make(map[uint64]string),
 		permByRole:  make(map[uint64]map[string]struct{}),
-		roleByName:  make(map[string]uint64),
 	}
 }
 
@@ -52,10 +50,8 @@ func (c *Cache) ReloadAll(db *gorm.DB) error {
 	defer c.mu.Unlock()
 	c.roleByID = make(map[uint64]string)
 	c.permByRole = make(map[uint64]map[string]struct{})
-	c.roleByName = make(map[string]uint64)
 	for _, r := range roles {
 		c.roleByID[r.ID] = r.Name
-		c.roleByName[r.Name] = r.ID
 		ps := make(map[string]struct{}, len(r.Permissions))
 		for _, p := range r.Permissions {
 			ps[p.Permission] = struct{}{}
@@ -149,11 +145,4 @@ func (c *Cache) TokenVersion(userID uint64) (uint64, bool) {
 	defer c.mu.RUnlock()
 	v, ok := c.tokenVer[userID]
 	return v, ok
-}
-
-// RoleName 返回角色 id 对应的角色名。
-func (c *Cache) RoleName(roleID uint64) string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.roleByID[roleID]
 }

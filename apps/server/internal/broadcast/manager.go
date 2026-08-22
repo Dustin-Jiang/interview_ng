@@ -12,7 +12,7 @@ type Sink func(ev *state.Event)
 
 // Manager 负责把 StateStore 产出的房间事件扇出到对应房间的 WS 连接。
 // 它只是事件流的"分发器"：不校验状态、不落库、不决定对错。
-// 任何房间在首次有成员连接时应当调用 Register 注册扇出回调。
+// 任何房间在首次有成员连接时应当调用 Bind 注册扇出回调。
 type Manager struct {
 	mu    sync.RWMutex
 	sinks map[uint64]Sink // roomID -> 该房间的扇出回调
@@ -21,14 +21,6 @@ type Manager struct {
 // New 构建广播管理器。
 func New() *Manager {
 	return &Manager{sinks: make(map[uint64]Sink)}
-}
-
-// Register 为某房间注册扇出回调（通常由 WS handler 在首个成员连接时调用）。
-// 重复注册时后注册者将覆盖先注册者；应保持单份。
-func (m *Manager) Register(roomID uint64, sink Sink) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.sinks[roomID] = sink
 }
 
 // Bind 为某房间绑定额外的扇出；若房间已存在则返回 false（不覆盖），

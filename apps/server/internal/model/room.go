@@ -12,6 +12,5 @@ type Room struct {
 	Candidate   *Candidate   `gorm:"foreignKey:CandidateID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"candidate,omitempty"`
 	CreatedAt   time.Time    `json:"created_at"`
 	UpdatedAt   time.Time    `json:"updated_at"`
-	Messages    []Message    `gorm:"-" json:"messages,omitempty"`
 	Members     []RoomMember `gorm:"foreignKey:RoomID" json:"members,omitempty"`
 }

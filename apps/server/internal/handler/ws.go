@@ -47,7 +47,6 @@ type wsClient struct {
 	send chan []byte // 带缓冲的写队列，由 writer goroutine 消费；广播与命令回复都走这里
 
 	mu        sync.Mutex // 串行化对底层 conn 的并发写保护
-	lastSeq   uint64     // 该连接所见最近事件 Seq（幂等对齐）
 	lastMsgID uint64     // 该连接所见最近消息 id（续传游标，按候选人维度）
 }
 
@@ -328,14 +327,6 @@ func (w *WSServer) handleMovePhase(ctx context.Context, client *wsClient, req *r
 }
 
 //--- helpers ---
-
-func mustRawEnvelope(intype string, data any) []byte {
-	b, err := json.Marshal(&Envelope{Type: intype, Data: mustRaw(data)})
-	if err != nil {
-		return nil
-	}
-	return b
-}
 
 func mustRaw(v any) json.RawMessage {
 	b, _ := json.Marshal(v)

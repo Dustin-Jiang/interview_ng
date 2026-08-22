@@ -19,19 +19,15 @@ type reqAuth struct {
 }
 
 type reqSync struct {
-	RoomID    uint64 `json:"room_id"`
 	LastMsgID uint64 `json:"last_msg_id"`
-	LastSeq   uint64 `json:"last_seq"`
 }
 
 type reqSendMsg struct {
-	RoomID  uint64 `json:"room_id"`
 	Content string `json:"content"`
 }
 
 type reqMovePhase struct {
-	RoomID uint64 `json:"room_id"`
-	To     string `json:"to"`
+	To string `json:"to"`
 }
 
 //---- 服务端推送 ----

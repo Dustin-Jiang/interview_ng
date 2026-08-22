@@ -512,28 +512,13 @@ func statusLiteral(s string) dsmodel.CandidateStatus {
 }
 
 // stateErr 把 state 层错误映射为 HTTP 状态码与错误信息。
+// 除 not_found（资源不存在 → 404）外，所有 *state.Error 业务码统一 400，其余落 500。
 func stateErr(err error) (int, string) {
-	var se *state.Error
-	if ok := asStateErr(err, &se); ok {
-		switch se.Code {
-		case "not_found":
+	if se, ok := err.(*state.Error); ok {
+		if se.Code == "not_found" {
 			return http.StatusNotFound, se.Msg
-		case "no_room", "room_not_empty", "role_in_use", "already_assigned", "room_full", "user_in_room", "not_member", "illegal_status":
-			return http.StatusBadRequest, se.Msg
-		default:
-			return http.StatusBadRequest, se.Msg
 		}
+		return http.StatusBadRequest, se.Msg
 	}
 	return http.StatusInternalServerError, err.Error()
-}
-
-func asStateErr(err error, target **state.Error) bool {
-	if err == nil {
-		return false
-	}
-	if se, ok := err.(*state.Error); ok {
-		*target = se
-		return true
-	}
-	return false
 }

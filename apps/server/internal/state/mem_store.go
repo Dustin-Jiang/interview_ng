@@ -292,9 +292,6 @@ func (s *MemStateStore) JoinRoom(ctx context.Context, roomID, userID uint64) (*d
 	if existing > 0 {
 		return nil, nil, ErrUserInRoom
 	}
-	var count int64
-	_ = s.db.WithContext(ctx).Model(&dsmodel.RoomMember{}).
-		Where("room_id = ?", roomID).Count(&count)
 	// 幂等重连：若已是本房间成员，直接返回现有快照，不重复创建（避免唯一约束冲突）。
 	already := s.isMemberLocked(ctx, roomID, userID)
 	if already {
