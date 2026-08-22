@@ -22,7 +22,7 @@ pnpm monorepo：`apps/web`（Vue 3 + Vite + TS + shadcn-vue，包名 `@interview
 
 - `internal/state/store.go`：`StateStore` 是唯一权威。当前实现为 `MemStateStore`（内存权威，Gorm 持久化）。所有写操作必须先落库成功，再产出事件（“先落库后广播”）——持久化成功前绝不广播。
 - 候选人状态机：`NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED`；非法迁移通过 `state.Error` 错误码拒绝（`store.go:59`）。管理端「重置到任意档」（`PUT /api/candidates/:id/status`）向后自动解绑房间、向前须已有房间。
-- 房间是**独立于候选人的物理会议室记录**：`candidate_id` 可空，无房间状态机，房间“状态”= 候选人状态的查询投影；仅空房可删。消息**按候选人归属**（`messages.candidate_id`），候选人维度续传游标，删候选人级联删其消息。
+- 房间是**独立于候选人的物理会议室记录**：`candidate_id` 可空，无房间状态机，房间“状态”= 候选人状态的查询投影；仅空房可删。消息**按候选人归属**（`messages.candidate_id`），候选人维度续传游标，删候选人级联删其消息。候选人完成（推进或重置到 `COMPLETED`）**自动清房**（`rooms.candidate_id` 与候选人 `room_id` 置空），房间转空闲、成员留守，可立即拉取下一位；消息仍按候选人归档保留。
 - **分配 = 房间内拉取**（`POST /api/rooms/:id/pull_candidate`），取代旧的 `POST /api/candidates/:id/assign`。
 - 一个房间 = 一个候选人 + 多个面试官；`room_members` 对 `(room_id, user_id)` 唯一，因此一个用户至多同时处于一个活跃房间。
 - 事件带全局单调 `Seq`；消息带候选人维度 `id` 作续传游标。WS 走 RESTful 路径 `GET /ws/room/:roomId`（无 query 参数），连接后首条消息必须为 `auth`（携带 JWT，10 秒超时），成功后自动 JoinRoom；JSON 信封 `{op, req_id, data}`。

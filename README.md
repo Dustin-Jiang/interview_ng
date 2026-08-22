@@ -60,6 +60,7 @@ interview_ng/
 - **房间**：独立于候选人的物理会议室记录（`candidate_id` 可空，可先建房后绑人、重置解绑后房保留）；**无房间状态机**，房间状态 = 候选人状态的查询投影；仅空房可删；不归档。
 - **分配**：候选人被房间内面试官**拉取**（`pull_candidate`），取代"页面推分配"；并发拉取由状态机原子拒绝。
 - **候选人与状态机**：五档状态 `NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED` 为唯一权威；管理端支持"重置到任意档"（向后自动解绑房间、向前须已有房间）。
+- **完成后自动清房**：候选人完成（无论房间内推进到 `COMPLETED`，还是管理端重置到 `COMPLETED`）自动清空房间绑定（`rooms.candidate_id` 与候选人 `room_id` 置空），房间转空闲、成员留守，可立即拉取下一位候选人；消息仍**按候选人归档保留**，新候选人会话从零开始。
 - **鉴权**：登录 + JWT（7 天，`ver` 吊销计数）；RBAC 角色↔权限（9 枚权限目录），权限判断走内存缓存即时生效；`users.manage` 下可管理用户与角色。
 
 ---
@@ -88,7 +89,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 | `role_permissions` | role_id, permission（联合唯一） | 角色↔权限关联 |
 | `user_roles` | user_id, role_id（联合唯一） | 用户↔角色 M2M |
 | `candidates` | id, name, profile, status, room_id | 候选人（非登录用户） |
-| `rooms` | id, candidate_id(可空), current_interviewer_id | 房间 = 独立物理会议室记录，`candidate_id` 可空；房间无状态机，"状态"= 候选人状态的查询投影 |
+| `rooms` | id, candidate_id(可空) | 房间 = 独立物理会议室记录，`candidate_id` 可空；无状态机、无主持人，"状态"= 候选人状态的查询投影 |
 | `room_members` | room_id, user_id（`idx_room_user` 唯一） | 房间成员，一次一活跃房间 |
 | `messages` | id, candidate_id, sender_id(可空), content | 群聊记录（长存），**按候选人归属**，`id` 即候选人维度续传游标 |
 
@@ -103,7 +104,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 请求（客户端 → 服务端）：
 ```json
 {"op":"auth",        "req_id":"a1", "data":{"token":"<jwt>"}}
-{"op":"sync",        "req_id":"r1", "data":{"last_msg_id":0,"last_seq":0}}
+{"op":"sync",        "req_id":"r1", "data":{"last_msg_id":0}}
 {"op":"send_msg",    "req_id":"r2", "data":{"content":"hello"}}
 {"op":"move_phase",  "req_id":"r4", "data":{"to":"IN_PROGRESS"}}
 ```
@@ -163,7 +164,6 @@ pnpm dev                      # http://localhost:8000 （vite 已把 /api 与 /w
 - `POST /api/rooms`（建空房，`rooms.manage`）
 - `DELETE /api/rooms/:id`（仅空房可删）
 - `POST /api/rooms/:id/members` `{user_id}`、`DELETE /api/rooms/:id/members/:userId`
-- `PUT  /api/rooms/:id/current_interviewer` `{interviewer_id}`
 - `POST /api/rooms/:id/pull_candidate` `{candidate_id}`（**拉取式分配**：候选人从待分配池被拉入房间，取代旧的 `POST /api/candidates/:id/assign`）
 - `GET/POST /api/users`、`PUT/DELETE /api/users/:id`、`POST /api/users/:id/reset_password`（`users.manage`）
 - `GET/POST /api/roles`、`PUT/DELETE /api/roles/:id`（`users.manage`，角色管理）
