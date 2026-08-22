@@ -124,10 +124,6 @@ export const roomApi = {
     return request({ url: '/rooms', params })
   },
 
-  get(id: number): Promise<Room> {
-    return request(`/rooms/${id}`)
-  },
-
   create(): Promise<{ id: number }> {
     return post('/rooms')
   },

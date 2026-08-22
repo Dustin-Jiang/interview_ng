@@ -18,8 +18,6 @@ export interface AsyncState<T> {
   error: Ref<string | null>
   /** 执行加载并写入 data。返回数据或 promise 拒绝信息。 */
   run: () => Promise<T | null>
-  /** 手动清空数据与错误。 */
-  reset: () => void
 }
 
 function asMessage(e: unknown): string {
@@ -50,11 +48,5 @@ export function useAsync<T>(loader: () => Promise<T>): AsyncState<T> {
     }
   }
 
-  function reset(): void {
-    data.value = null
-    error.value = null
-    loading.value = false
-  }
-
-  return { data, loading, error, run, reset }
+  return { data, loading, error, run }
 }

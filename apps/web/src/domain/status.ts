@@ -15,12 +15,6 @@ export function nextPhaseOf(status: CandidateStatus | null): CandidateStatus | n
   return CANDIDATE_STATUSES[idx + 1]
 }
 
-/** 某状态在五档序列中的序号（-1 表示未知），供进度高亮。 */
-export function phaseIndex(status: CandidateStatus | null): number {
-  if (!status) return -1
-  return CANDIDATE_STATUSES.indexOf(status)
-}
-
 /** 从房间快照推导当前状态（= 绑定候选人状态）；无候选人或未绑定视为空闲（null）。 */
 export function roomPhaseOf(room: Room): CandidateStatus | null {
   return room.candidate?.status ?? null

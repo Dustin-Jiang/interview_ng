@@ -90,7 +90,6 @@ export interface Room {
   candidate?: Candidate
   created_at: string
   updated_at: string
-  messages?: Message[]
   members?: RoomMember[]
 }
 

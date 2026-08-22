@@ -117,15 +117,15 @@ export class RoomChannel {
   }
 
   sync(lastMsgId: number): string {
-    return this.send('sync', { room_id: this.roomId, last_msg_id: lastMsgId, last_seq: 0 })
+    return this.send('sync', { last_msg_id: lastMsgId })
   }
 
   sendMessage(content: string): string {
-    return this.send('send_msg', { room_id: this.roomId, content })
+    return this.send('send_msg', { content })
   }
 
   movePhase(to: string): string {
-    return this.send('move_phase', { room_id: this.roomId, to })
+    return this.send('move_phase', { to })
   }
 
   close(): void {
