@@ -1,11 +1,10 @@
 /**
- * HTTP API 客户端 —— MVVM 的 Service（Model 访问）层。
+ * HTTP API 客户端 —— MVVM 的 Service（Model 访问）层，基于 axios。
  * 职责：封装对后端 REST 接口的访问，只做数据收发与类型映射，不含任何 UI 状态。
- * 鉴权：自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
+ * 鉴权：请求拦截器自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
  */
+import axios, { type AxiosRequestConfig } from 'axios'
 import type { Candidate, CandidateStatus, Permission, Role, Room, User, UserProfile } from '@/models'
-
-const BASE = '/api'
 
 /** 401 处理器：由 useAuth 注册（登出 + 跳登录页），避免循环依赖。 */
 let onUnauthorized: (() => void) | null = null
@@ -24,36 +23,47 @@ export function getAuthToken(): string {
   return currentToken
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (currentToken) headers.Authorization = `Bearer ${currentToken}`
-  const res = await fetch(`${BASE}${path}`, { headers, ...init })
-  if (res.status === 401) {
-    onUnauthorized?.()
+/** 统一 axios 实例：baseURL=/api，自动带 JWT，统一 401 与错误信息。 */
+const client = axios.create({
+  baseURL: '/api',
+  headers: { 'Content-Type': 'application/json' },
+})
+
+client.interceptors.request.use((config) => {
+  if (currentToken) {
+    config.headers = config.headers ?? {}
+    config.headers.Authorization = `Bearer ${currentToken}`
   }
-  if (!res.ok) {
-    let msg = res.statusText
-    try {
-      const body = await res.json()
-      msg = body?.error ?? msg
-    } catch {
-      /* ignore */
+  return config
+})
+
+client.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      onUnauthorized?.()
     }
-    throw new Error(msg || `HTTP ${res.status}`)
-  }
-  return res.json() as Promise<T>
+    const data = error.response?.data as { error?: string } | undefined
+    const msg = data?.error ?? (axios.isAxiosError(error) ? error.message : String(error))
+    return Promise.reject(new Error(msg))
+  },
+)
+
+async function request<T>(config: AxiosRequestConfig | string): Promise<T> {
+  const res = await client.request<T>(typeof config === 'string' ? { url: config } : config)
+  return res.data
 }
 
 function post<T>(path: string, body?: unknown): Promise<T> {
-  return request<T>(path, { method: 'POST', body: body == null ? undefined : JSON.stringify(body) })
+  return request<T>({ method: 'POST', url: path, data: body })
 }
 
 function put<T>(path: string, body?: unknown): Promise<T> {
-  return request<T>(path, { method: 'PUT', body: body == null ? undefined : JSON.stringify(body) })
+  return request<T>({ method: 'PUT', url: path, data: body })
 }
 
 function del<T>(path: string): Promise<T> {
-  return request<T>(path, { method: 'DELETE' })
+  return request<T>({ method: 'DELETE', url: path })
 }
 
 // ---- 认证 ----
@@ -79,13 +89,7 @@ export const candidateApi = {
     limit?: number
     offset?: number
   }): Promise<{ items: Candidate[] }> {
-    const q = new URLSearchParams()
-    if (params?.status) q.set('status', params.status)
-    if (params?.q) q.set('q', params.q)
-    if (params?.limit != null) q.set('limit', String(params.limit))
-    if (params?.offset != null) q.set('offset', String(params.offset))
-    const suffix = q.toString() ? `?${q.toString()}` : ''
-    return request(`/candidates${suffix}`)
+    return request({ url: '/candidates', params })
   },
 
   get(id: number): Promise<Candidate> {
@@ -117,11 +121,7 @@ export const candidateApi = {
 
 export const roomApi = {
   list(params?: { limit?: number; offset?: number }): Promise<{ items: Room[] }> {
-    const q = new URLSearchParams()
-    if (params?.limit != null) q.set('limit', String(params.limit))
-    if (params?.offset != null) q.set('offset', String(params.offset))
-    const suffix = q.toString() ? `?${q.toString()}` : ''
-    return request(`/rooms${suffix}`)
+    return request({ url: '/rooms', params })
   },
 
   get(id: number): Promise<Room> {
@@ -136,18 +136,6 @@ export const roomApi = {
     return del(`/rooms/${id}`)
   },
 
-  addMember(roomId: number, userId: number): Promise<{ ok: boolean }> {
-    return post(`/rooms/${roomId}/members`, { user_id: userId })
-  },
-
-  removeMember(roomId: number, userId: number): Promise<{ ok: boolean }> {
-    return del(`/rooms/${roomId}/members/${userId}`)
-  },
-
-  setCurrentInterviewer(roomId: number, interviewerId: number): Promise<{ ok: boolean }> {
-    return put(`/rooms/${roomId}/current_interviewer`, { interviewer_id: interviewerId })
-  },
-
   pullCandidate(roomId: number, candidateId: number): Promise<{ ok: boolean }> {
     return post(`/rooms/${roomId}/pull_candidate`, { candidate_id: candidateId })
   },
@@ -157,12 +145,7 @@ export const roomApi = {
 
 export const userApi = {
   list(params?: { q?: string; limit?: number; offset?: number }): Promise<{ items: User[] }> {
-    const q = new URLSearchParams()
-    if (params?.q) q.set('q', params.q)
-    if (params?.limit != null) q.set('limit', String(params.limit))
-    if (params?.offset != null) q.set('offset', String(params.offset))
-    const suffix = q.toString() ? `?${q.toString()}` : ''
-    return request(`/users${suffix}`)
+    return request({ url: '/users', params })
   },
   create(body: { username: string; name: string; password: string; role_ids: number[] }): Promise<{ id: number }> {
     return post('/users', body)

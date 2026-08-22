@@ -14,7 +14,7 @@ import { RoomChannel } from '@/api/ws'
 import type { ChanEvent, ReplyPayload } from '@/api/ws-model'
 import { useAuth } from '@/composables/useAuth'
 import type { CandidateStatus, Message, Room } from '@/models'
-import { phaseRoom } from '@/domain/status'
+import { phaseRoom, clearRoomCandidate } from '@/domain/status'
 import {
   appendMessage,
   lastMessageId,
@@ -61,8 +61,24 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
   let channel: RoomChannel | null = null
   const pendingReplies = new Map<string, (p: ReplyPayload) => void>()
 
+  // 待分配池实时刷新：签到/拉走等"池变化"事件合并触发（防抖，避免事件风暴时频繁 HTTP 拉取）。
+  let poolRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  function schedulePoolRefresh(): void {
+    if (!channel) return
+    if (poolRefreshTimer) clearTimeout(poolRefreshTimer)
+    poolRefreshTimer = setTimeout(() => {
+      poolRefreshTimer = null
+      void refreshPullPool()
+    }, 300)
+  }
+
   // ---- 事件/回执处理（经 domain 纯函数，不可变更新） ----
   function applyEvent(ev: ChanEvent): void {
+    // candidate_signed_in / candidate_assigned → "待分配池"变化，刷新拉取列表
+    if (ev.type === 'candidate_signed_in' || ev.type === 'candidate_assigned') {
+      schedulePoolRefresh()
+      return
+    }
     // message_appended → 追加消息（幂等去重）
     const msg = room.value ? messageFromEvent(ev) : null
     if (msg) {
@@ -71,8 +87,15 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     }
     // room_phase_changed → 不可变更新房间阶段
     if (ev.type === 'room_phase_changed' && room.value) {
-      const to = (ev.data as { To?: CandidateStatus })?.To
-      if (to) room.value = phaseRoom(room.value, to)
+      const to = (ev.data as { To?: CandidateStatus | null })?.To
+      if (to === 'COMPLETED') {
+        // 候选人完成：后端已自动清空房间（解绑候选人与 room_id）；
+        // 消息按候选人归档保留，本地清空会话等待下一位候选人。
+        room.value = clearRoomCandidate(room.value)
+        messages.value = []
+      } else if (to) {
+        room.value = phaseRoom(room.value, to)
+      }
     }
   }
 
@@ -139,6 +162,10 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     room.value = null
     messages.value = []
     pendingReplies.clear()
+    if (poolRefreshTimer) {
+      clearTimeout(poolRefreshTimer)
+      poolRefreshTimer = null
+    }
   }
 
   // roomId 变化（含初始）自动连接 / 断开

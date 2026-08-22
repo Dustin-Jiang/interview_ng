@@ -36,3 +36,15 @@ export function phaseRoom(room: Room, status: CandidateStatus): Room {
     candidate: { ...room.candidate, status },
   }
 }
+
+/**
+ * 不可变地清空房间候选人（房间转空闲），返回新 Room（不修改入参）。
+ * 用于候选人完成（COMPLETED）后的房间清空事件：后端已解绑候选人与 room_id，
+ * 本地快照同步移除 candidate/candidate_id。
+ */
+export function clearRoomCandidate(room: Room): Room {
+  const next: Room = { ...room }
+  delete next.candidate
+  delete next.candidate_id
+  return next
+}

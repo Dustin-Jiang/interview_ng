@@ -88,7 +88,6 @@ export interface Room {
   id: number
   candidate_id?: number
   candidate?: Candidate
-  current_interviewer_id?: number
   created_at: string
   updated_at: string
   messages?: Message[]

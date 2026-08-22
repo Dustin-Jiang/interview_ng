@@ -16,7 +16,10 @@ const TOKEN_KEY = 'interview_ng_token'
 /** 模块级单例状态：登录态全局唯一（由 App.vue 在 setup 中初始化）。 */
 const profile = ref<UserProfile | null>(null)
 const booting = ref(true)
-let initialized = false
+/** token 是否已从 localStorage 恢复过（与 401 处理器注册标志分离，避免互相阻塞）。 */
+let tokenRestored = false
+/** 401 处理器是否已注册。 */
+let handlerRegistered = false
 
 function persistToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token)
@@ -28,10 +31,11 @@ function clearToken(): void {
   setAuthToken('')
 }
 
-/** 读取并恢复本地 token（页面刷新时）。 */
+/** 读取并恢复本地 token（页面刷新时）。注意：必须在 useAuth() 之前/之后都能可靠执行，
+ *  不能被 useAuth() 的处理器注册标志提前短路——App.vue setup 先于路由守卫运行。 */
 export function initAuth(): void {
-  if (initialized) return
-  initialized = true
+  if (tokenRestored) return
+  tokenRestored = true
   const saved = localStorage.getItem(TOKEN_KEY)
   if (saved) setAuthToken(saved)
 }
@@ -49,7 +53,7 @@ export async function ensureAuthReady(): Promise<boolean> {
     profile.value = await authApi.me()
     return true
   } catch {
-    clearToken()
+    // 401 由 axios 拦截器触发登出（清 token）；此处不主动清 token，避免网络抖动误删登录态。
     return false
   } finally {
     booting.value = false
@@ -94,8 +98,9 @@ export function useAuth(): UseAuth {
   }
 
   // 注册全局 401 处理器：任何接口 401 即登出跳登录页。
-  if (!initialized) {
-    initialized = true
+  // 用独立标志，不影响 initAuth 的 token 恢复。
+  if (!handlerRegistered) {
+    handlerRegistered = true
     setUnauthorizedHandler(logout)
   }
 

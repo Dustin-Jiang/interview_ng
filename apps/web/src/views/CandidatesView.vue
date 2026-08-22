@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { Plus, RefreshCw } from 'lucide-vue-next'
+import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useCandidates } from '@/composables/useCandidates'
 import { useAuth } from '@/composables/useAuth'
@@ -13,11 +14,11 @@ import { formatDateTime } from '@/lib/format'
 // --- shadcn-vue UI ---
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import DataTable from '@/components/ui/table/data-table.vue'
+import DataTableColumnHeader from '@/components/ui/table/data-table-column-header.vue'
+import type { DataTableFeatures } from '@/components/ui/table/features'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
@@ -141,12 +142,76 @@ function goRoom(roomId?: number) {
   router.push({ name: 'room', params: { roomId: String(roomId) } })
 }
 
+// ---- DataTable 列定义（h() 渲染，闭包捕获视图处理函数） ----
+const columnHelper = createColumnHelper<DataTableFeatures, Candidate>()
+const columns: ColumnDef<DataTableFeatures, Candidate>[] = columnHelper.columns([
+  columnHelper.accessor('id', {
+    header: 'ID',
+    enableSorting: false,
+    cell: ({ getValue }) => h('div', { class: 'font-mono text-xs' }, String(getValue())),
+  }),
+  columnHelper.accessor('name', {
+    header: ({ column }) => h(DataTableColumnHeader, { column: column as any, title: '姓名' }),
+  }),
+  columnHelper.accessor('status', {
+    header: '状态',
+    enableSorting: false,
+    cell: ({ row }) =>
+      h(
+        Badge,
+        { variant: STATUS_PRESENTATION[row.original.status].badge },
+        () => STATUS_PRESENTATION[row.original.status].label,
+      ),
+  }),
+  columnHelper.accessor('room_id', {
+    header: '房间',
+    enableSorting: false,
+    cell: ({ row }) => {
+      const roomId = row.original.room_id
+      if (!roomId) return h('span', { class: 'text-muted-foreground' }, '-')
+      return h(Button, { variant: 'link', class: 'h-auto p-0', onClick: () => goRoom(roomId) }, () => `#${roomId}`)
+    },
+  }),
+  columnHelper.accessor('profile', {
+    header: '简介',
+    enableSorting: false,
+    cell: ({ getValue }) =>
+      h('div', { class: 'max-w-[220px] truncate text-muted-foreground' }, getValue() || '-'),
+  }),
+  columnHelper.accessor('created_at', {
+    header: ({ column }) => h(DataTableColumnHeader, { column: column as any, title: '创建时间' }),
+    cell: ({ getValue }) => h('div', { class: 'text-muted-foreground' }, formatDateTime(String(getValue()))),
+  }),
+  columnHelper.display({
+    id: 'actions',
+    header: '操作',
+    enableHiding: false,
+    cell: ({ row }) => renderActions(row.original),
+  }),
+])
+
+/** 操作列渲染（按权限与状态显隐，均为有边框按钮；删除用 destructive）。 */
+function renderActions(c: Candidate) {
+  const buttons: ReturnType<typeof h>[] = []
+  if (c.status === 'NOT_CHECKED_IN' && hasPermission(PERMISSIONS.CANDIDATES_CHECKIN)) {
+    buttons.push(h(Button, { size: 'sm', variant: 'outline', onClick: () => handleCheckin(c) }, () => '签到'))
+  }
+  if (hasPermission(PERMISSIONS.CANDIDATES_MANAGE)) {
+    buttons.push(
+      h(Button, { size: 'sm', variant: 'outline', onClick: () => openEdit(c) }, () => '编辑'),
+      h(Button, { size: 'sm', variant: 'outline', onClick: () => openReset(c) }, () => '重置状态'),
+      h(Button, { size: 'sm', variant: 'destructive', onClick: () => handleDelete(c) }, () => '删除'),
+    )
+  }
+  return h('div', { class: 'flex gap-2' }, buttons)
+}
+
 onMounted(() => load())
 </script>
 
 <template>
   <div class="h-full overflow-y-auto">
-    <div class="mx-auto max-w-6xl space-y-4 px-4 py-6">
+    <div class="mx-auto max-w-[800px] space-y-4 px-4 py-6">
       <div class="flex items-end justify-between">
         <div>
           <h1 class="text-2xl font-semibold tracking-tight">候选人管理</h1>
@@ -185,10 +250,10 @@ onMounted(() => load())
         </div>
       </div>
 
-      <Card>
-        <CardHeader class="flex-row items-center justify-between gap-4 space-y-0">
+      <div class="space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="flex items-center gap-3">
-            <CardTitle>候选人列表</CardTitle>
+            <h2 class="text-sm font-semibold">候选人列表</h2>
             <Input
               v-model="keyword"
               placeholder="搜索姓名 / 简介…"
@@ -207,90 +272,16 @@ onMounted(() => load())
               </SelectItem>
             </SelectContent>
           </Select>
-        </CardHeader>
-        <CardContent>
-          <!-- 加载态 -->
-          <div v-if="loading" class="space-y-2 py-4">
-            <Skeleton v-for="i in 4" :key="i" class="h-10 w-full" />
-          </div>
+        </div>
 
-          <!-- 空态 -->
-          <div v-else-if="candidates.length === 0" class="py-12 text-center text-muted-foreground">
-            暂无候选人
-          </div>
+        <!-- 空态（加载中留空） -->
+        <div v-if="!loading && candidates.length === 0" class="py-12 text-center text-muted-foreground">
+          暂无候选人
+        </div>
 
-          <!-- 数据表格 -->
-          <Table v-else>
-            <TableHeader>
-              <TableRow>
-                <TableHead class="w-[60px]">ID</TableHead>
-                <TableHead>姓名</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>房间</TableHead>
-                <TableHead>简介</TableHead>
-                <TableHead>创建时间</TableHead>
-                <TableHead class="text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <TableRow v-for="c in candidates" :key="c.id">
-                <TableCell class="font-mono text-xs">{{ c.id }}</TableCell>
-                <TableCell class="font-medium">{{ c.name }}</TableCell>
-                <TableCell>
-                  <Badge :variant="STATUS_PRESENTATION[c.status].badge">
-                    {{ STATUS_PRESENTATION[c.status].label }}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  <Button v-if="c.room_id" variant="link" class="h-auto p-0" @click="goRoom(c.room_id)">
-                    #{{ c.room_id }}
-                  </Button>
-                  <span v-else class="text-muted-foreground">-</span>
-                </TableCell>
-                <TableCell class="max-w-[220px] truncate text-muted-foreground">{{ c.profile || '-' }}</TableCell>
-                <TableCell class="text-muted-foreground">{{ formatDateTime(c.created_at) }}</TableCell>
-                <TableCell class="text-right">
-                  <div class="flex justify-end gap-2">
-                    <Button
-                      v-if="c.status === 'NOT_CHECKED_IN' && hasPermission(PERMISSIONS.CANDIDATES_CHECKIN)"
-                      size="sm"
-                      variant="secondary"
-                      @click="handleCheckin(c)"
-                    >
-                      签到
-                    </Button>
-                    <Button
-                      v-if="hasPermission(PERMISSIONS.CANDIDATES_MANAGE)"
-                      size="sm"
-                      variant="outline"
-                      @click="openEdit(c)"
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      v-if="hasPermission(PERMISSIONS.CANDIDATES_MANAGE)"
-                      size="sm"
-                      variant="outline"
-                      @click="openReset(c)"
-                    >
-                      重置状态
-                    </Button>
-                    <Button
-                      v-if="hasPermission(PERMISSIONS.CANDIDATES_MANAGE)"
-                      size="sm"
-                      variant="ghost"
-                      class="text-destructive"
-                      @click="handleDelete(c)"
-                    >
-                      删除
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+        <!-- 数据表格 -->
+        <DataTable v-else :columns="columns" :data="candidates" />
+      </div>
 
       <!-- 编辑对话框 -->
       <Dialog :open="!!editTarget" @update:open="editTarget = $event ? editTarget : null">

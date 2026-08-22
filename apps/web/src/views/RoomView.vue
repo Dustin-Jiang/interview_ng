@@ -14,7 +14,6 @@ import { formatDateTime } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
 
 import RoomChat from './RoomChat.vue'
 
@@ -86,7 +85,7 @@ async function deleteEmptyRoom(roomId: number) {
 
   <!-- 房间列表 -->
   <div v-else class="h-full overflow-y-auto">
-    <div class="mx-auto max-w-6xl space-y-4 px-4 py-6">
+    <div class="mx-auto max-w-[800px] space-y-4 px-4 py-6">
       <div class="flex items-end justify-between">
         <div>
           <h1 class="text-2xl font-semibold tracking-tight">面试房间</h1>
@@ -106,13 +105,8 @@ async function deleteEmptyRoom(roomId: number) {
         </div>
       </div>
 
-      <!-- 加载态 -->
-      <div v-if="loading" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Skeleton v-for="i in 6" :key="i" class="h-24 w-full" />
-      </div>
-
-      <!-- 空态 -->
-      <Card v-else-if="rooms.length === 0">
+      <!-- 空态（加载中留空） -->
+      <Card v-if="!loading && rooms.length === 0">
         <CardContent class="flex flex-col items-center justify-center gap-3 py-14 text-center text-muted-foreground">
           <DoorOpen class="h-8 w-8" />
           <p>暂无面试房间</p>
@@ -148,9 +142,9 @@ async function deleteEmptyRoom(roomId: number) {
           </button>
           <Button
             v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE) && !room.candidate"
-            variant="ghost"
+            variant="destructive"
             size="sm"
-            class="absolute right-2 top-10 text-destructive"
+            class="absolute right-2 top-10"
             @click="deleteEmptyRoom(room.id)"
           >
             删除空房

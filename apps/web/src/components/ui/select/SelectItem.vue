@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { SelectItemProps } from 'reka-ui'
+import type { HTMLAttributes } from 'vue'
 import { SelectItem, SelectItemIndicator, SelectItemText } from 'reka-ui'
 import { Check } from 'lucide-vue-next'
 import { cn } from '@/lib/utils'
 
-const props = defineProps<SelectItemProps>()
+const props = defineProps<SelectItemProps & { class?: HTMLAttributes['class'] }>()
 </script>
 
 <template>
@@ -13,6 +14,7 @@ const props = defineProps<SelectItemProps>()
     :class="
       cn(
         'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+        props.class,
       )
     "
   >

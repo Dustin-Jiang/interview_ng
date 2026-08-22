@@ -39,7 +39,7 @@ onMounted(() => {
       v-if="showNav"
       class="z-40 w-full shrink-0 border-b bg-background/95 backdrop-blur"
     >
-      <div class="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4">
+      <div class="mx-auto flex h-14 max-w-[800px] items-center gap-6 px-4">
         <span class="text-lg font-semibold tracking-tight">面试系统 · 控制台</span>
         <nav class="flex items-center gap-1">
           <RouterLink

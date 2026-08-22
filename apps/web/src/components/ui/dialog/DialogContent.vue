@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import type { DialogContentEmits, DialogContentProps } from 'reka-ui'
+import type { HTMLAttributes } from 'vue'
+import { X } from 'lucide-vue-next'
 import {
   DialogClose,
   DialogContent,
@@ -7,13 +9,15 @@ import {
   DialogPortal,
   useForwardPropsEmits,
 } from 'reka-ui'
-import { X } from 'lucide-vue-next'
 import { cn } from '@/lib/utils'
 
-const props = defineProps<DialogContentProps>()
+// 关键：显式声明 class prop 并合入 cn —— 否则视图传入的 class（如 sm:max-w-[425px]）
+// 会经 attrs 落到 DialogPortal 而非内容面板，导致所有弹窗宽度退化为默认 max-w-lg。
+const props = defineProps<DialogContentProps & { class?: HTMLAttributes['class'] }>()
 const emits = defineEmits<DialogContentEmits>()
 
-const forwarded = useForwardPropsEmits(props, emits)
+const { class: _class, ...delegated } = props
+const forwarded = useForwardPropsEmits(delegated, emits)
 </script>
 
 <template>
@@ -25,7 +29,8 @@ const forwarded = useForwardPropsEmits(props, emits)
       v-bind="forwarded"
       :class="
         cn(
-          'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-lg',
+          'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg',
+          props.class,
         )
       "
     >
@@ -35,6 +40,7 @@ const forwarded = useForwardPropsEmits(props, emits)
         aria-label="关闭"
       >
         <X class="h-4 w-4" />
+        <span class="sr-only">关闭</span>
       </DialogClose>
     </DialogContent>
   </DialogPortal>

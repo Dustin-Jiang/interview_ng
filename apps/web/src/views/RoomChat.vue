@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ArrowLeft, ChevronRight, Send, UserPlus, UserRound, UserRoundCheck } from 'lucide-vue-next'
+import { ArrowLeft, ChevronRight, Send, UserPlus, UserRound } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 
 import { useRoomChat } from '@/composables/useRoomChat'
 import { useAuth } from '@/composables/useAuth'
-import { roomApi, userApi } from '@/api/http'
 import { nextPhaseOf } from '@/domain/status'
 import { CANDIDATE_STATUSES, PERMISSIONS, type CandidateStatus } from '@/models'
 import { STATUS_PRESENTATION } from '@/presenters/status'
@@ -15,7 +14,6 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
 
 const props = defineProps<{ roomId: number }>()
 const emit = defineEmits<{ back: [] }>()
@@ -33,7 +31,6 @@ const {
   sendMessage,
   movePhase,
   pullCandidate,
-  reloadRoom,
 } = useRoomChat(() => props.roomId)
 
 const { hasPermission } = useAuth()
@@ -44,12 +41,6 @@ const draft = ref('')
 const nextPhase = computed<CandidateStatus | null>(() => nextPhaseOf(phase.value))
 
 const hasCandidate = computed(() => !!room.value?.candidate)
-
-/** 成员管理状态 */
-const memberMode = ref(false)
-const addMemberUserId = ref('')
-const allUsers = ref<import('@/models').User[]>([])
-const loadingUsers = ref(false)
 
 function senderLabel(senderId: number | null): string {
   if (senderId == null) return '已删除用户'
@@ -77,57 +68,6 @@ async function handlePull(candidateId: number) {
     toast.error((e as Error).message)
   }
 }
-
-async function toggleMemberMode() {
-  memberMode.value = !memberMode.value
-  if (memberMode.value && allUsers.value.length === 0) {
-    loadingUsers.value = true
-    try {
-      const res = await userApi.list()
-      allUsers.value = res.items
-    } catch (e) {
-      toast.error((e as Error).message)
-    } finally {
-      loadingUsers.value = false
-    }
-  }
-}
-
-async function addMember() {
-  const uid = Number(addMemberUserId.value)
-  if (!uid) return
-  try {
-    await roomApi.addMember(props.roomId, uid)
-    toast.success('成员已加入')
-    addMemberUserId.value = ''
-    await reloadRoom()
-  } catch (e) {
-    toast.error((e as Error).message)
-  }
-}
-
-async function removeMember(userId: number) {
-  if (!window.confirm('确认将该面试官移出房间？')) return
-  try {
-    await roomApi.removeMember(props.roomId, userId)
-    toast.success('成员已移出')
-    await reloadRoom()
-  } catch (e) {
-    toast.error((e as Error).message)
-  }
-}
-
-async function setInterviewer(userId: number) {
-  try {
-    await roomApi.setCurrentInterviewer(props.roomId, userId)
-    toast.success('主持人已切换')
-    await reloadRoom()
-  } catch (e) {
-    toast.error((e as Error).message)
-  }
-}
-
-const members = computed(() => room.value?.members ?? [])
 </script>
 
 <template>
@@ -172,11 +112,6 @@ const members = computed(() => room.value?.members ?? [])
           <div v-if="!messages.length && hasCandidate && !connecting" class="py-12 text-center text-muted-foreground">
             暂无消息
           </div>
-          <div v-if="connecting">
-            <div class="space-y-3">
-              <Skeleton v-for="i in 3" :key="i" class="h-12 w-full" />
-            </div>
-          </div>
           <div
             v-for="m in messages"
             :key="m.id"
@@ -212,7 +147,7 @@ const members = computed(() => room.value?.members ?? [])
         </div>
       </div>
 
-      <!-- 侧栏：候选人 / 拉取 / 成员 / 状态 -->
+      <!-- 侧栏：候选人 / 拉取 / 状态 -->
       <aside class="flex w-80 shrink-0 flex-col border-l bg-muted/20">
         <div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
           <!-- 候选人信息 -->
@@ -262,68 +197,7 @@ const members = computed(() => room.value?.members ?? [])
                     {{ c.name }}
                     <span v-if="c.profile" class="text-xs text-muted-foreground">· {{ c.profile }}</span>
                   </span>
-                  <Button size="sm" @click="handlePull(c.id)">拉取</Button>
-                </li>
-              </ul>
-            </CardContent>
-          </Card>
-
-          <!-- 成员管理 -->
-          <Card v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE)">
-            <CardContent class="space-y-3 p-4">
-              <div class="flex items-center justify-between">
-                <p class="text-sm font-medium">成员</p>
-                <Button variant="outline" size="sm" @click="toggleMemberMode">
-                  {{ memberMode ? '收起' : '添加' }}
-                </Button>
-              </div>
-              <div v-if="memberMode" class="space-y-2">
-                <div class="flex gap-2">
-                  <Input
-                    v-model="addMemberUserId"
-                    inputmode="numeric"
-                    placeholder="面试官 ID"
-                  />
-                  <Button size="sm" :disabled="loadingUsers || !addMemberUserId" @click="addMember">
-                    加入
-                  </Button>
-                </div>
-              </div>
-              <ul class="space-y-2">
-                <li
-                  v-for="m in members"
-                  :key="m.user_id"
-                  class="flex items-center justify-between gap-2 rounded-md bg-muted p-2"
-                >
-                  <span class="flex min-w-0 items-center gap-2 text-sm">
-                    {{ m.user?.name ?? `面试官 ${m.user_id}` }}
-                    <span class="text-xs text-muted-foreground">#{{ m.user_id }}</span>
-                    <span
-                      v-if="room?.current_interviewer_id === m.user_id"
-                      class="flex items-center gap-0.5 text-xs text-primary"
-                    >
-                      <UserRoundCheck class="h-3 w-3" /> 主持人
-                    </span>
-                  </span>
-                  <div class="flex shrink-0 items-center gap-1">
-                    <Button
-                      v-if="room?.current_interviewer_id !== m.user_id"
-                      variant="ghost"
-                      size="sm"
-                      @click="setInterviewer(m.user_id)"
-                    >
-                      设为主持
-                    </Button>
-                    <Button
-                      v-if="m.user_id !== currentUserId"
-                      variant="ghost"
-                      size="sm"
-                      class="text-destructive"
-                      @click="removeMember(m.user_id)"
-                    >
-                      移出
-                    </Button>
-                  </div>
+                  <Button size="sm" variant="outline" @click="handlePull(c.id)">拉取</Button>
                 </li>
               </ul>
             </CardContent>

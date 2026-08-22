@@ -1,22 +1,23 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { Plus, RefreshCw } from 'lucide-vue-next'
+import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useUsers } from '@/composables/useUsers'
 import { useAuth } from '@/composables/useAuth'
+import { groupPermissionEntries, PERMISSION_ORDER, permissionGroup, type PermissionGroup } from '@/presenters/permissions'
 import type { Role, User } from '@/models'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import DataTable from '@/components/ui/table/data-table.vue'
+import type { DataTableFeatures } from '@/components/ui/table/features'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
-const { users, roles, loading, keyword, allPermissions, load, setKeyword, createUser, updateUser, deleteUser, resetUserPassword, createRole, updateRole, deleteRole } = useUsers()
+const { users, roles, loading, keyword, load, setKeyword, createUser, updateUser, deleteUser, resetUserPassword, createRole, updateRole, deleteRole } = useUsers()
 const { currentUserId } = useAuth()
 
 onMounted(() => void load())
@@ -164,12 +165,129 @@ function toggleRolePerm(p: string) {
   else roleForm.value.permissions.push(p)
 }
 
+/** 角色的权限按「管理/流程」分组有序展示（View 纯函数）。 */
+function rolePerms(r: Role): Record<PermissionGroup, string[]> {
+  return groupPermissionEntries((r.permissions ?? []).map((p) => p.permission))
+}
+
+/** 全量权限目录按「管理/流程」分组（编辑角色勾选用）。 */
+const permGroups = computed<Record<PermissionGroup, string[]>>(() => {
+  const out: Record<PermissionGroup, string[]> = { 管理: [], 流程: [] }
+  for (const p of PERMISSION_ORDER) {
+    const g = permissionGroup(p)
+    if (g) out[g].push(p)
+  }
+  return out
+})
+
 const isSelf = (u: User) => u.id === currentUserId.value
+
+// ---- DataTable 列定义 ----
+const userColumnHelper = createColumnHelper<DataTableFeatures, User>()
+const userColumns: ColumnDef<DataTableFeatures, User>[] = userColumnHelper.columns([
+  userColumnHelper.accessor('id', {
+    header: 'ID',
+    enableSorting: false,
+    cell: ({ getValue }) => h('div', { class: 'font-mono text-xs' }, String(getValue())),
+  }),
+  userColumnHelper.accessor('username', {
+    header: '用户名',
+    cell: ({ getValue }) => h('div', { class: 'font-medium' }, getValue()),
+  }),
+  userColumnHelper.accessor('name', {
+    header: '姓名',
+    cell: ({ getValue }) => getValue() || '-',
+  }),
+  userColumnHelper.accessor('roles', {
+    header: '角色',
+    enableSorting: false,
+    cell: ({ row }) => {
+      const rs = row.original.roles ?? []
+      if (!rs.length) return h('span', { class: 'text-muted-foreground' }, '-')
+      return h(
+        'div',
+        { class: 'flex flex-wrap gap-1' },
+        rs.map((r) => h(Badge, { variant: 'secondary' }, () => r.name)),
+      )
+    },
+  }),
+  userColumnHelper.display({
+    id: 'actions',
+    header: '操作',
+    enableHiding: false,
+    cell: ({ row }) => renderUserActions(row.original),
+  }),
+])
+
+/** 面试官操作列（编辑 / 重置密码 / 删除；删除不可作用于自己）。 */
+function renderUserActions(u: User) {
+  const buttons: ReturnType<typeof h>[] = [
+    h(Button, { size: 'sm', variant: 'outline', onClick: () => openEditUser(u) }, () => '编辑'),
+    h(Button, { size: 'sm', variant: 'outline', onClick: () => handleResetPassword(u) }, () => '重置密码'),
+  ]
+  if (!isSelf(u)) {
+    buttons.push(h(Button, { size: 'sm', variant: 'destructive', onClick: () => handleDeleteUser(u) }, () => '删除'))
+  }
+  return h('div', { class: 'flex gap-2' }, buttons)
+}
+
+const roleColumnHelper = createColumnHelper<DataTableFeatures, Role>()
+const roleColumns: ColumnDef<DataTableFeatures, Role>[] = roleColumnHelper.columns([
+  roleColumnHelper.accessor('name', {
+    header: '角色名',
+    cell: ({ getValue }) => h('div', { class: 'font-medium' }, getValue()),
+  }),
+  roleColumnHelper.accessor('description', {
+    header: '描述',
+    cell: ({ getValue }) => h('div', { class: 'text-muted-foreground' }, getValue() || '-'),
+  }),
+  roleColumnHelper.accessor('permissions', {
+    header: '权限',
+    enableSorting: false,
+    cell: ({ row }) => {
+      const groups = rolePerms(row.original)
+      const has = groups['管理'].length || groups['流程'].length
+      if (!has) return h('span', { class: 'text-muted-foreground' }, '-')
+      return h(
+        'div',
+        { class: 'flex max-w-[420px] flex-col gap-1.5' },
+        (['管理', '流程'] as const).map((g) =>
+          groups[g].length
+            ? h(
+                'div',
+                { class: 'flex flex-wrap items-center gap-1' },
+                [
+                  h('span', { class: 'w-10 shrink-0 text-[11px] text-muted-foreground' }, g),
+                  ...groups[g].map((key) =>
+                    h(Badge, { variant: 'outline', class: 'font-mono text-[11px]' }, () => key),
+                  ),
+                ],
+              )
+            : null,
+        ),
+      )
+    },
+  }),
+  roleColumnHelper.display({
+    id: 'actions',
+    header: '操作',
+    enableHiding: false,
+    cell: ({ row }) =>
+      h(
+        'div',
+        { class: 'flex gap-2' },
+        [
+          h(Button, { size: 'sm', variant: 'outline', onClick: () => openEditRole(row.original) }, () => '编辑'),
+          h(Button, { size: 'sm', variant: 'destructive', onClick: () => handleDeleteRole(row.original) }, () => '删除'),
+        ],
+      ),
+  }),
+])
 </script>
 
 <template>
   <div class="h-full overflow-y-auto">
-    <div class="mx-auto max-w-6xl space-y-4 px-4 py-6">
+    <div class="mx-auto max-w-[800px] space-y-4 px-4 py-6">
       <div class="flex items-end justify-between">
         <div>
           <h1 class="text-2xl font-semibold tracking-tight">面试官管理</h1>
@@ -211,54 +329,7 @@ const isSelf = (u: User) => u.id === currentUserId.value
             新增面试官
           </Button>
         </div>
-        <Card>
-          <CardContent class="pt-6">
-            <div v-if="loading" class="space-y-2 py-4">
-              <Skeleton v-for="i in 4" :key="i" class="h-10 w-full" />
-            </div>
-            <Table v-else>
-              <TableHeader>
-                <TableRow>
-                  <TableHead class="w-[60px]">ID</TableHead>
-                  <TableHead>用户名</TableHead>
-                  <TableHead>姓名</TableHead>
-                  <TableHead>角色</TableHead>
-                  <TableHead class="text-right">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow v-for="u in users" :key="u.id">
-                  <TableCell class="font-mono text-xs">{{ u.id }}</TableCell>
-                  <TableCell class="font-medium">{{ u.username }}</TableCell>
-                  <TableCell>{{ u.name || '-' }}</TableCell>
-                  <TableCell>
-                    <div class="flex flex-wrap gap-1">
-                      <Badge v-for="r in u.roles ?? []" :key="r.id" variant="secondary">
-                        {{ r.name }}
-                      </Badge>
-                      <span v-if="!(u.roles?.length)" class="text-muted-foreground">-</span>
-                    </div>
-                  </TableCell>
-                  <TableCell class="text-right">
-                    <div class="flex justify-end gap-2">
-                      <Button size="sm" variant="outline" @click="openEditUser(u)">编辑</Button>
-                      <Button size="sm" variant="outline" @click="handleResetPassword(u)">重置密码</Button>
-                      <Button
-                        v-if="!isSelf(u)"
-                        size="sm"
-                        variant="ghost"
-                        class="text-destructive"
-                        @click="handleDeleteUser(u)"
-                      >
-                        删除
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <DataTable :columns="userColumns" :data="users" />
       </div>
 
       <!-- 角色 -->
@@ -269,40 +340,7 @@ const isSelf = (u: User) => u.id === currentUserId.value
             新增角色
           </Button>
         </div>
-        <Card>
-          <CardContent class="pt-6">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>角色名</TableHead>
-                  <TableHead>描述</TableHead>
-                  <TableHead>权限</TableHead>
-                  <TableHead class="text-right">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow v-for="r in roles" :key="r.id">
-                  <TableCell class="font-medium">{{ r.name }}</TableCell>
-                  <TableCell class="text-muted-foreground">{{ r.description || '-' }}</TableCell>
-                  <TableCell>
-                    <div class="flex max-w-[360px] flex-wrap gap-1">
-                      <Badge v-for="p in r.permissions ?? []" :key="p.id" variant="outline">
-                        {{ p.permission }}
-                      </Badge>
-                      <span v-if="!(r.permissions?.length)" class="text-muted-foreground">-</span>
-                    </div>
-                  </TableCell>
-                  <TableCell class="text-right">
-                    <div class="flex justify-end gap-2">
-                      <Button size="sm" variant="outline" @click="openEditRole(r)">编辑</Button>
-                      <Button size="sm" variant="ghost" class="text-destructive" @click="handleDeleteRole(r)">删除</Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <DataTable :columns="roleColumns" :data="roles" />
       </div>
 
       <!-- 用户对话框 -->
@@ -367,20 +405,27 @@ const isSelf = (u: User) => u.id === currentUserId.value
             </div>
             <div class="grid gap-2">
               <Label>权限组</Label>
-              <div class="grid grid-cols-1 gap-1.5 rounded-md border p-3">
-                <label
-                  v-for="p in allPermissions"
-                  :key="p"
-                  class="flex items-center gap-2 text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    class="accent-primary"
-                    :checked="roleForm.permissions.includes(p)"
-                    @change="toggleRolePerm(p)"
-                  />
-                  <code class="text-xs">{{ p }}</code>
-                </label>
+              <div class="grid gap-2 rounded-md border p-3">
+                <template v-for="g in ['管理', '流程'] as const" :key="g">
+                  <div class="space-y-1.5">
+                    <p class="text-xs font-medium text-muted-foreground">{{ g }}</p>
+                    <div class="grid grid-cols-1 gap-1.5">
+                      <label
+                        v-for="p in permGroups[g]"
+                        :key="p"
+                        class="flex items-center gap-2 text-sm"
+                      >
+                        <input
+                          type="checkbox"
+                          class="accent-primary"
+                          :checked="roleForm.permissions.includes(p)"
+                          @change="toggleRolePerm(p)"
+                        />
+                        <code class="font-mono text-xs">{{ p }}</code>
+                      </label>
+                    </div>
+                  </div>
+                </template>
               </div>
             </div>
           </div>
