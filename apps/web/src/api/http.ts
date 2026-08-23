@@ -4,7 +4,7 @@
  * 鉴权：请求拦截器自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
  */
 import axios, { type AxiosRequestConfig } from 'axios'
-import type { Candidate, CandidateStatus, Permission, Role, Room, User, UserProfile } from '@/models'
+import type { Candidate, CandidateStatus, Message, Permission, Role, Room, User, UserProfile } from '@/models'
 
 /** 401 处理器：由 useAuth 注册（登出 + 跳登录页），避免循环依赖。 */
 let onUnauthorized: (() => void) | null = null
@@ -111,6 +111,11 @@ export const candidateApi = {
 
   resetStatus(id: number, status: CandidateStatus): Promise<{ ok: boolean }> {
     return put(`/candidates/${id}/status`, { status })
+  },
+
+  /** 候选人面试记录归档（按候选人维度，完成后仍可查；需 rooms.view）。 */
+  messages(id: number): Promise<{ items: Message[] }> {
+    return request(`/candidates/${id}/messages`)
   },
 }
 

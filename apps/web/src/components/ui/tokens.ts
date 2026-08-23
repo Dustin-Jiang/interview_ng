@@ -44,3 +44,21 @@ export const tileVariants = cva(
 )
 
 export type TileVariants = VariantProps<typeof tileVariants>
+
+/** 聊天气泡：房间实时聊天与归档回看共用的统一外观。 */
+export const chatBubbleVariants = cva(
+  'max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm leading-relaxed sm:max-w-[75%]',
+  {
+    variants: {
+      side: {
+        own: 'rounded-br-md bg-primary text-primary-foreground',
+        other: 'rounded-bl-md bg-muted',
+      },
+    },
+    defaultVariants: {
+      side: 'other',
+    },
+  },
+)
+
+export type ChatBubbleVariants = VariantProps<typeof chatBubbleVariants>

@@ -6,6 +6,7 @@ import { toast } from 'vue-sonner'
 import { useRoomChat } from '@/composables/useRoomChat'
 import { useAuth } from '@/composables/useAuth'
 import { nextPhaseOf } from '@/domain/status'
+import { senderLabel } from '@/domain/messages'
 import { CANDIDATE_STATUSES, PERMISSIONS, type CandidateStatus } from '@/models'
 import { STATUS_PRESENTATION } from '@/presenters/status'
 import { formatDateTime } from '@/lib/format'
@@ -16,7 +17,9 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { Spinner } from '@/components/ui/spinner'
+import { chatBubbleVariants } from '@/components/ui/tokens'
 import EmptyState from '@/components/app/EmptyState.vue'
+import { cn } from '@/lib/utils'
 
 const props = defineProps<{ roomId: number }>()
 const emit = defineEmits<{ back: [] }>()
@@ -44,12 +47,6 @@ const draft = ref('')
 const nextPhase = computed<CandidateStatus | null>(() => nextPhaseOf(phase.value))
 
 const hasCandidate = computed(() => !!room.value?.candidate)
-
-function senderLabel(senderId: number | null): string {
-  if (senderId == null) return '已删除用户'
-  if (senderId === currentUserId.value) return '我'
-  return `面试官 ${senderId}`
-}
 
 function send() {
   const text = draft.value.trim()
@@ -168,17 +165,10 @@ const phaseIndex = computed(() =>
             :class="m.sender_id === currentUserId ? 'items-end' : 'items-start'"
           >
             <div class="flex items-baseline gap-2 px-1 text-xs text-muted-foreground">
-              <span class="font-medium">{{ senderLabel(m.sender_id) }}</span>
+              <span class="font-medium">{{ senderLabel(m.sender_id, currentUserId, m.sender?.name || m.sender?.username) }}</span>
               <time>{{ formatDateTime(m.created_at) }}</time>
             </div>
-            <div
-              class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm leading-relaxed sm:max-w-[75%]"
-              :class="
-                m.sender_id === currentUserId
-                  ? 'rounded-br-md bg-primary text-primary-foreground'
-                  : 'rounded-bl-md bg-muted'
-              "
-            >
+            <div :class="cn(chatBubbleVariants({ side: m.sender_id === currentUserId ? 'own' : 'other' }))">
               {{ m.content }}
             </div>
           </div>

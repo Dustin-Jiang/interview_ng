@@ -59,3 +59,18 @@ export function appendMessage(messages: readonly Message[], msg: Message): Messa
 export function lastMessageId(messages: readonly Message[]): number {
   return messages.reduce((max, m) => (m.id > max ? m.id : max), 0)
 }
+
+/**
+ * 消息发送者展示名：自己 → 「我」；发送者已删 → 「已删除用户」；
+ * 有预加载资料 → 姓名/用户名；否则退化为「面试官 {id}」（实时事件不携带 sender）。
+ */
+export function senderLabel(
+  senderId: number | null,
+  currentUserId: number | null,
+  senderName?: string,
+): string {
+  if (senderId == null) return '已删除用户'
+  if (currentUserId != null && senderId === currentUserId) return '我'
+  if (senderName) return senderName
+  return `面试官 ${senderId}`
+}
