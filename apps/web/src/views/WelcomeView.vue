@@ -5,11 +5,11 @@ import { ChevronRight } from 'lucide-vue-next'
 
 import { useAuth } from '@/composables/useAuth'
 import { PERMISSIONS } from '@/models'
-import { groupPermissionEntries, type PermissionGroup } from '@/presenters/permissions'
+import { groupPermissionEntries, hasAnyManagePermission, type PermissionGroup } from '@/presenters/permissions'
 import { formatDateTime } from '@/lib/format'
 
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { tileVariants } from '@/components/ui/tokens'
 import PageShell from '@/components/app/PageShell.vue'
 import { cn } from '@/lib/utils'
@@ -26,32 +26,22 @@ const quickLinks = computed(() => {
     {
       name: '候选人',
       to: { name: 'candidates' },
-      description: '名册与面试过程记录',
       visible: true,
     },
     {
       name: '候场大屏',
       to: { name: 'waiting' },
-      description: '未完成名单与签到',
       visible: true,
     },
     {
       name: '面试房间',
       to: { name: 'room' },
-      description: '进入房间拉取候选人、记录面试',
       visible: hasPermission(PERMISSIONS.ROOMS_VIEW),
     },
     {
-      name: '候选人管理',
-      to: { name: 'candidate-manage' },
-      description: '签到、资料维护与状态重置',
-      visible: hasPermission(PERMISSIONS.CANDIDATES_MANAGE),
-    },
-    {
-      name: '面试官管理',
-      to: { name: 'users' },
-      description: '管理账号、角色与权限',
-      visible: hasPermission(PERMISSIONS.USERS_MANAGE),
+      name: '设置',
+      to: { name: 'settings' },
+      visible: hasAnyManagePermission(permissions.value),
     },
   ]
   return links.filter((l) => l.visible)
@@ -59,13 +49,12 @@ const quickLinks = computed(() => {
 </script>
 
 <template>
-  <PageShell :title="`你好，${user?.name || user?.username || '访客'}`" description="欢迎回来，祝面试工作顺利。">
+  <PageShell :title="`你好，${user?.name || user?.username || '访客'}`">
     <div class="grid gap-4 lg:grid-cols-2">
-      <!-- 个人信息 -->
+      <!-- 我的账号 -->
       <Card>
         <CardHeader>
-          <CardTitle>个人信息</CardTitle>
-          <CardDescription>当前登录账号的基本资料。</CardDescription>
+          <CardTitle>我的账号</CardTitle>
         </CardHeader>
         <CardContent class="space-y-2 text-sm">
           <div class="flex items-center justify-between gap-3">
@@ -98,7 +87,6 @@ const quickLinks = computed(() => {
       <Card>
         <CardHeader>
           <CardTitle>我的权限</CardTitle>
-          <CardDescription>来自所属角色的功能权限。</CardDescription>
         </CardHeader>
         <CardContent class="space-y-3 text-sm">
           <template v-if="hasAnyPermission">
@@ -131,7 +119,6 @@ const quickLinks = computed(() => {
         >
           <div class="min-w-0">
             <p class="truncate text-sm font-medium">{{ link.name }}</p>
-            <p class="truncate text-xs text-muted-foreground">{{ link.description }}</p>
           </div>
           <ChevronRight class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         </RouterLink>

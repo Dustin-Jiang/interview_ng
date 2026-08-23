@@ -6,12 +6,13 @@ import { LogOut } from 'lucide-vue-next'
 
 import { useAuth, ensureAuthReady } from '@/composables/useAuth'
 import { PERMISSIONS } from '@/models'
+import { hasAnyManagePermission } from '@/presenters/permissions'
 import { Button } from '@/components/ui/button'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { tabItemVariants } from '@/components/ui/tokens'
 
 const route = useRoute()
-const { user, isLoggedIn, hasPermission, logout } = useAuth()
+const { user, isLoggedIn, hasPermission, permissions, logout } = useAuth()
 
 const navItems = computed(() => {
   const items = [
@@ -23,11 +24,9 @@ const navItems = computed(() => {
   if (hasPermission(PERMISSIONS.ROOMS_VIEW)) {
     items.push({ name: '面试房间', to: { name: 'room' } })
   }
-  if (hasPermission(PERMISSIONS.CANDIDATES_MANAGE)) {
-    items.push({ name: '候选人管理', to: { name: 'candidate-manage' } })
-  }
-  if (hasPermission(PERMISSIONS.USERS_MANAGE)) {
-    items.push({ name: '面试官管理', to: { name: 'users' } })
+  // 管理功能整合进设置页（左右分栏）。
+  if (hasAnyManagePermission(permissions.value)) {
+    items.push({ name: '设置', to: { name: 'settings' } })
   }
   return items
 })
@@ -53,7 +52,7 @@ onMounted(() => {
       v-if="showNav"
       class="z-40 w-full shrink-0 border-b bg-background/95 backdrop-blur"
     >
-      <div class="mx-auto flex h-14 max-w-5xl items-center gap-4 px-4">
+      <div class="mx-auto flex h-14 max-w-content items-center gap-4 px-4">
         <!-- 品牌：点击回到欢迎页 -->
         <RouterLink
           :to="{ name: 'home' }"

@@ -22,10 +22,27 @@ export const router = createRouter({
       component: () => import('@/views/CandidateRecordsView.vue'),
     },
     {
-      // 候选人管理页（管理员功能，对普通用户不可见）。
-      path: '/candidates/manage',
-      name: 'candidate-manage',
-      component: () => import('@/views/CandidatesManageView.vue'),
+      // 设置页：管理功能左右分栏整合（候选人管理 / 面试官 / 角色）。
+      path: '/settings',
+      name: 'settings',
+      component: () => import('@/views/SettingsView.vue'),
+      children: [
+        {
+          path: 'candidates',
+          name: 'settings-candidates',
+          component: () => import('@/views/SettingsCandidatesView.vue'),
+        },
+        {
+          path: 'users',
+          name: 'settings-users',
+          component: () => import('@/views/SettingsUsersView.vue'),
+        },
+        {
+          path: 'roles',
+          name: 'settings-roles',
+          component: () => import('@/views/SettingsRolesView.vue'),
+        },
+      ],
     },
     {
       // 候场大屏：未完成名单 + 签到操作。
@@ -38,10 +55,14 @@ export const router = createRouter({
       name: 'room',
       component: () => import('@/views/RoomView.vue'),
     },
+    // 旧管理路径重定向到设置分区（保持书签/分享可用）。
+    {
+      path: '/candidates/manage',
+      redirect: { name: 'settings-candidates' },
+    },
     {
       path: '/users',
-      name: 'users',
-      component: () => import('@/views/UsersView.vue'),
+      redirect: { name: 'settings-users' },
     },
   ],
 })

@@ -50,6 +50,10 @@ module.exports = {
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
       },
+      // 页面容器宽度语义档位（替代散落的 max-w-5xl / max-w-6xl 魔法值）。
+      maxWidth: {
+        content: '64rem',
+      },
     },
   },
   plugins: [require('tailwindcss-animate')],

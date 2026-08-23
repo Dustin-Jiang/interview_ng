@@ -2,7 +2,7 @@
 import { computed, h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import { ShieldAlert, Plus, RefreshCw, UsersRound } from 'lucide-vue-next'
+import { Plus, RefreshCw, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useCandidates } from '@/composables/useCandidates'
@@ -22,7 +22,7 @@ import { Spinner } from '@/components/ui/spinner'
 import DataTable from '@/components/ui/table/data-table.vue'
 import DataTableColumnHeader from '@/components/ui/table/data-table-column-header.vue'
 import type { DataTableFeatures } from '@/components/ui/table/features'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import EmptyState from '@/components/app/EmptyState.vue'
@@ -33,14 +33,6 @@ const router = useRouter()
 const { hasPermission } = useAuth()
 // 组合式函数（函数式 ViewModel）：顶层解构，模板直接引用（ref 自动解包）。
 const { candidates, statusFilter, keyword, loading, load, create, checkin, update, remove, resetStatus, setStatusFilter, setKeyword } = useCandidates()
-
-/** 管理页可见性：持有任一候选人管理类权限（对普通只读用户不可见）。 */
-const canAccessManage = computed(
-  () =>
-    hasPermission(PERMISSIONS.CANDIDATES_MANAGE) ||
-    hasPermission(PERMISSIONS.CANDIDATES_CREATE) ||
-    hasPermission(PERMISSIONS.CANDIDATES_CHECKIN),
-)
 
 // 创建候选人对话框状态
 const createOpen = ref(false)
@@ -245,13 +237,13 @@ function renderActions(c: Candidate) {
 }
 
 onMounted(() => {
-  if (canAccessManage.value) void load()
+  void load()
 })
 </script>
 
 <template>
-  <PageShell title="候选人管理" description="签到候选人、维护资料与状态重置（管理员功能）。">
-    <template v-if="canAccessManage" #actions>
+  <PageShell title="候选人管理">
+    <template #actions>
       <Button variant="outline" size="icon" aria-label="刷新候选人列表" @click="load">
         <RefreshCw :class="loading ? 'animate-spin' : ''" aria-hidden="true" />
       </Button>
@@ -287,13 +279,6 @@ onMounted(() => {
       </Dialog>
     </template>
 
-    <!-- 普通用户不可见：无任一管理权限时仅显示提示 -->
-    <EmptyState v-if="!canAccessManage" bare :icon="ShieldAlert" class="py-16">
-      无候选人管理权限
-      <template #hint>该界面仅对持有候选人管理权限的用户可见</template>
-    </EmptyState>
-
-    <template v-else>
     <div class="space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <h2 class="text-sm font-semibold">候选人列表</h2>
@@ -326,9 +311,6 @@ onMounted(() => {
       <!-- 空态：说明 + 引导动作 -->
       <EmptyState v-else-if="candidates.length === 0" :icon="UsersRound">
         {{ keyword ? '没有匹配的候选人' : '暂无候选人' }}
-        <template v-if="!keyword && hasPermission(PERMISSIONS.CANDIDATES_CREATE)" #hint>
-          点击右上角「新增候选人」开始使用
-        </template>
       </EmptyState>
 
       <!-- 数据表格 -->
@@ -366,9 +348,6 @@ onMounted(() => {
       <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>重置状态</DialogTitle>
-          <DialogDescription v-if="resetTarget">
-            将「{{ resetTarget.name }}」从「{{ STATUS_PRESENTATION[resetTarget.status].label }}」重置到目标状态。
-          </DialogDescription>
         </DialogHeader>
         <div class="grid gap-3">
           <div class="grid gap-2">
@@ -384,17 +363,6 @@ onMounted(() => {
               </SelectContent>
             </Select>
           </div>
-          <p class="text-xs text-muted-foreground">
-            <template v-if="isForwardTarget && !resetTarget?.room_id">
-              该候选人未绑定房间，不能重置到「待面试 / 面试中 / 已结束」。
-            </template>
-            <template v-else-if="isForwardTarget">
-              重置到该状态需保持当前房间绑定（#{{ resetTarget?.room_id }}）。
-            </template>
-            <template v-else>
-              重置到「未签到 / 排队中」将自动解绑当前房间。
-            </template>
-          </p>
         </div>
         <DialogFooter>
           <Button variant="outline" :disabled="resetting" @click="resetTarget = null">取消</Button>
@@ -410,17 +378,11 @@ onMounted(() => {
     <ConfirmDialog
       :open="!!deleteTarget"
       title="删除候选人"
-      :description="
-        deleteTarget
-          ? `确认删除「${deleteTarget.name}」？${deleteTarget.room_id ? '将解绑其所在房间，' : ''}面试记录一并删除，操作不可撤销。`
-          : ''
-      "
       confirm-text="删除"
       destructive
       :loading="deleting"
       @update:open="deleteTarget = $event ? deleteTarget : null"
       @confirm="confirmDelete"
     />
-    </template>
   </PageShell>
 </template>

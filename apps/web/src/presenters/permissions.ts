@@ -37,6 +37,16 @@ export const PERMISSION_ORDER = [
   PERMISSIONS.ROOMS_MOVE_PHASE,
 ]
 
+/** 是否持有任一管理类权限（设置页入口与侧栏分区的显隐前提）。 */
+export function hasAnyManagePermission(perms: readonly string[]): boolean {
+  return [
+    PERMISSIONS.USERS_MANAGE,
+    PERMISSIONS.CANDIDATES_MANAGE,
+    PERMISSIONS.CANDIDATES_CREATE,
+    PERMISSIONS.CANDIDATES_CHECKIN,
+  ].some((p) => perms.includes(p))
+}
+
 /** 将一组权限 key 按「管理/流程」分组有序返回（无权限的组为空数组）。 */
 export function groupPermissionEntries(perms: readonly string[]): Record<PermissionGroup, string[]> {
   const set = new Set(perms)

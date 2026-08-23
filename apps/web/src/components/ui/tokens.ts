@@ -25,6 +25,27 @@ export const tabItemVariants = cva(
 export type TabItemVariants = VariantProps<typeof tabItemVariants>
 
 /**
+ * 设置页左侧栏导航项：纵向列表式导航。
+ * 激活弱化实底（区别于页顶 tab 的主色实底），全宽 + 图标 + 文字。
+ */
+export const navItemVariants = cva(
+  'flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+  {
+    variants: {
+      active: {
+        true: 'bg-accent text-accent-foreground',
+        false: 'text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground',
+      },
+    },
+    defaultVariants: {
+      active: false,
+    },
+  },
+)
+
+export type NavItemVariants = VariantProps<typeof navItemVariants>
+
+/**
  * 可交互卡片表面：房间卡片、快捷入口等点击式 tile 的统一外观。
  * interactive 态统一提供 hover 反馈与 focus-within 焦点环。
  */
