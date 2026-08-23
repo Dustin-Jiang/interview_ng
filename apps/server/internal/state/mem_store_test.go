@@ -75,13 +75,14 @@ func TestLifecycleThroughStore(t *testing.T) {
 		t.Fatalf("expected duplicate checkin error")
 	}
 
-	// 分配（新建房间）
-	ev, roomID, err := st.AssignCandidate(ctx, id, 0)
+	// 建房 → 房间内拉取候选人（叫号式）
+	roomID, err := st.CreateRoom(ctx)
 	if err != nil {
-		t.Fatalf("assign: %v", err)
+		t.Fatalf("create room: %v", err)
 	}
-	if roomID == 0 {
-		t.Fatalf("roomID=0")
+	ev, err := st.PullCandidate(ctx, roomID, id)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
 	}
 	if ev.RoomID != roomID {
 		t.Fatalf("event room mismatch")
@@ -92,9 +93,9 @@ func TestLifecycleThroughStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	// 已分配候选人不允许重复分配
-	if _, _, err := st.AssignCandidate(ctx, id, 0); err == nil {
-		t.Fatalf("expected duplicate assign error")
+	// 已入房候选人不允许被再次拉取
+	if _, err := st.PullCandidate(ctx, roomID, id); err == nil {
+		t.Fatalf("expected duplicate pull error")
 	}
 
 	// 进入进行中（成员即可推进，无主持人概念）
@@ -127,7 +128,8 @@ func TestSubscribeDeliversEvents(t *testing.T) {
 	st := newTestStore(t)
 	id, _ := st.CreateCandidate(ctx, "李四", "前端")
 	_, _ = st.CheckIn(ctx, id)
-	_, roomID, _ := st.AssignCandidate(ctx, id, 0)
+	roomID, _ := st.CreateRoom(ctx)
+	_, _ = st.PullCandidate(ctx, roomID, id)
 
 	ch, cancel := st.Subscribe(roomID, 0)
 	defer cancel()

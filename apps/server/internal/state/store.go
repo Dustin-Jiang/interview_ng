@@ -34,12 +34,9 @@ type StateStore interface {
 	CheckIn(ctx context.Context, candidateID uint64) (*Event, error)
 	// CreateCandidate 新建候选人（初始状态 NOT_CHECKED_IN），返回其 id。
 	CreateCandidate(ctx context.Context, name, profile string) (uint64, error)
-	// AssignCandidate 分配候选人到房间：CHECKED_IN_PENDING_ASSIGN -> ASSIGNED。
-	// 返回事件与本房间 id（roomID 为 0 时自动新建）。
-	AssignCandidate(ctx context.Context, candidateID, roomID uint64) (*Event, uint64, error)
 	// MovePhase 推进阶段：ASSIGNED -> IN_PROGRESS -> COMPLETED。
 	// 由当前房间成员调用（无主持人概念，成员即可推进）。
-	// 推进到 COMPLETED 自动解绑房间（rooms.candidate_id 与候选人 room_id 置空），
+	// 推进到 COMPLETED 自动解绑房间（rooms.candidate_id 置空，绑定唯一权威），
 	// 房间转空闲可拉取下一候选人；消息仍按候选人归档保留。
 	MovePhase(ctx context.Context, roomID, operatorID uint64, to dsmodel.CandidateStatus) (*Event, error)
 	// AppendMessage 在房间内追加一条聊天消息，返回事件(带 MsgID)。

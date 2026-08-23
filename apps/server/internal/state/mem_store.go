@@ -52,6 +52,49 @@ func (s *MemStateStore) deliver(roomID uint64, ev *Event) {
 	}
 }
 
+func (s *MemStateStore) ensureRoom(ctx context.Context, id uint64) (*dsmodel.Room, error) {
+	var r dsmodel.Room
+	err := s.db.WithContext(ctx).Preload("Candidate").Preload("Members.User").First(&r, id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	decorateRoom(&r)
+	return &r, nil
+}
+
+// decorateRoom 补齐房间内绑定候选人的 RoomID 投影（房间侧 rooms.candidate_id 是绑定的唯一权威）。
+func decorateRoom(r *dsmodel.Room) {
+	if r.Candidate != nil && r.Candidate.RoomID == nil {
+		rid := r.ID
+		r.Candidate.RoomID = &rid
+	}
+}
+
+// roomByCandidate 返回当前绑定该候选人的房间；未绑定返回 ErrNotFound。
+func (s *MemStateStore) roomByCandidate(ctx context.Context, candidateID uint64) (*dsmodel.Room, error) {
+	var r dsmodel.Room
+	err := s.db.WithContext(ctx).Where("candidate_id = ?", candidateID).First(&r).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// fillRoomID 单个候选人补齐 RoomID 投影。
+func (s *MemStateStore) fillRoomID(ctx context.Context, c *dsmodel.Candidate) {
+	room, err := s.roomByCandidate(ctx, c.ID)
+	if err == nil {
+		rid := room.ID
+		c.RoomID = &rid
+	}
+}
+
 func (s *MemStateStore) ensureCandidate(ctx context.Context, id uint64) (*dsmodel.Candidate, error) {
 	var c dsmodel.Candidate
 	if err := s.db.WithContext(ctx).First(&c, id).Error; err != nil {
@@ -63,22 +106,15 @@ func (s *MemStateStore) ensureCandidate(ctx context.Context, id uint64) (*dsmode
 	return &c, nil
 }
 
-func (s *MemStateStore) ensureRoom(ctx context.Context, id uint64) (*dsmodel.Room, error) {
-	var r dsmodel.Room
-	err := s.db.WithContext(ctx).Preload("Candidate").Preload("Members.User").First(&r, id).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	return &r, nil
-}
-
 //---- 读 ----
 
 func (s *MemStateStore) GetCandidate(ctx context.Context, id uint64) (*dsmodel.Candidate, error) {
-	return s.ensureCandidate(ctx, id)
+	c, err := s.ensureCandidate(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	s.fillRoomID(ctx, c)
+	return c, nil
 }
 
 func (s *MemStateStore) GetCandidateByRoom(ctx context.Context, roomID uint64) (*dsmodel.Candidate, error) {
@@ -109,6 +145,9 @@ func (s *MemStateStore) ListRooms(ctx context.Context, limit, offset int) ([]*ds
 		Find(&out).Error; err != nil {
 		return nil, err
 	}
+	for i := range out {
+		decorateRoom(out[i])
+	}
 	return out, nil
 }
 
@@ -127,6 +166,28 @@ func (s *MemStateStore) ListCandidates(ctx context.Context, status dsmodel.Candi
 	var out []*dsmodel.Candidate
 	if err := qdb.Order("id asc").Limit(limit).Offset(offset).Find(&out).Error; err != nil {
 		return nil, err
+	}
+	if len(out) > 0 {
+		ids := make([]uint64, 0, len(out))
+		for _, c := range out {
+			ids = append(ids, c.ID)
+		}
+		var rooms []dsmodel.Room
+		if err := s.db.WithContext(ctx).Select("id", "candidate_id").
+			Where("candidate_id IN ?", ids).Find(&rooms).Error; err != nil {
+			return nil, err
+		}
+		roomByCand := make(map[uint64]uint64, len(rooms))
+		for _, r := range rooms {
+			if r.CandidateID != nil {
+				roomByCand[*r.CandidateID] = r.ID
+			}
+		}
+		for _, c := range out {
+			if rid, ok := roomByCand[c.ID]; ok {
+				c.RoomID = &rid
+			}
+		}
 	}
 	return out, nil
 }
@@ -172,41 +233,6 @@ func (s *MemStateStore) CreateCandidate(ctx context.Context, name, profile strin
 	return c.ID, nil
 }
 
-func (s *MemStateStore) AssignCandidate(ctx context.Context, candidateID, roomID uint64) (*Event, uint64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	c, err := s.ensureCandidate(ctx, candidateID)
-	if err != nil {
-		return nil, 0, err
-	}
-	if err := guardTransition(c.Status, dsmodel.StatusAssigned); err != nil {
-		return nil, 0, err
-	}
-	if c.RoomID != nil {
-		return nil, 0, ErrAlreadyAssigned
-	}
-	// 分配：候选人与房间一对一；若未传房间则新建。
-	if roomID == 0 {
-		room := &dsmodel.Room{CandidateID: &candidateID}
-		if err := s.db.WithContext(ctx).Create(room).Error; err != nil {
-			return nil, 0, err
-		}
-		roomID = room.ID
-	}
-	if err := s.db.WithContext(ctx).Model(c).Updates(map[string]any{
-		"room_id": roomID,
-		"status":  dsmodel.StatusAssigned,
-	}).Error; err != nil {
-		return nil, 0, err
-	}
-	ev := &Event{Type: EventCandidateAssigned, Data: struct {
-		CandidateID uint64
-		RoomID      uint64
-	}{candidateID, roomID}}
-	s.emit(roomID, ev)
-	return ev, roomID, nil
-}
-
 func (s *MemStateStore) MovePhase(ctx context.Context, roomID, operatorID uint64, to dsmodel.CandidateStatus) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -225,7 +251,7 @@ func (s *MemStateStore) MovePhase(ctx context.Context, roomID, operatorID uint64
 	if err := guardTransition(c.Status, to); err != nil {
 		return nil, err
 	}
-	// 推进到 COMPLETED（完成）即自动清房：房间解绑候选人并解除候选人 room_id，
+	// 推进到 COMPLETED（完成）即自动清房：房间解绑候选人（rooms.candidate_id 置空），
 	// 房间转空闲可继续拉取下一位；消息仍按候选人归档保留。
 	updates := map[string]any{"status": to}
 	if to == dsmodel.StatusCompleted {
@@ -233,7 +259,6 @@ func (s *MemStateStore) MovePhase(ctx context.Context, roomID, operatorID uint64
 			UpdateColumn("candidate_id", nil).Error; err != nil {
 			return nil, err
 		}
-		updates["room_id"] = nil
 	}
 	if err := s.db.WithContext(ctx).Model(c).Updates(updates).Error; err != nil {
 		return nil, err
@@ -517,13 +542,12 @@ func (s *MemStateStore) UpdateCandidate(ctx context.Context, id uint64, name, pr
 func (s *MemStateStore) DeleteCandidate(ctx context.Context, id uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c, err := s.ensureCandidate(ctx, id)
-	if err != nil {
+	if _, err := s.ensureCandidate(ctx, id); err != nil {
 		return err
 	}
-	// 解绑房间（房间保留为空记录，FK 亦 SET NULL 兜底）
-	if c.RoomID != nil {
-		if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", *c.RoomID).
+	// 解绑房间（房间保留为空记录；绑定的唯一权威在 rooms.candidate_id）
+	if room, err := s.roomByCandidate(ctx, id); err == nil {
+		if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", room.ID).
 			UpdateColumn("candidate_id", nil).Error; err != nil {
 			return err
 		}
@@ -552,26 +576,25 @@ func (s *MemStateStore) ResetCandidateStatus(ctx context.Context, id uint64, to 
 	updates := map[string]any{"status": to}
 	switch {
 	case forward:
-		if c.RoomID == nil {
+		room, err := s.roomByCandidate(ctx, id)
+		if err != nil {
 			return nil, &Error{Code: "no_room", Msg: "向前重置须先绑定房间"}
 		}
-		roomID = *c.RoomID
+		roomID = room.ID
 		// 重置到 COMPLETED 与推进路径一致：完成即自动解绑房间（消息按候选人保留）。
 		if to == dsmodel.StatusCompleted {
-			if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", *c.RoomID).
+			if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", roomID).
 				UpdateColumn("candidate_id", nil).Error; err != nil {
 				return nil, err
 			}
-			updates["room_id"] = nil
 		}
 	case backward:
-		// 自动解绑房间（room 保留为空记录）
-		if c.RoomID != nil {
-			if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", *c.RoomID).
+		// 自动解绑房间（room 保留为空记录）；事件保持全局广播（回到排队池变化）。
+		if room, err := s.roomByCandidate(ctx, id); err == nil {
+			if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", room.ID).
 				UpdateColumn("candidate_id", nil).Error; err != nil {
 				return nil, err
 			}
-			updates["room_id"] = nil
 		}
 	default:
 		return nil, ErrIllegalStatus
@@ -637,17 +660,14 @@ func (s *MemStateStore) PullCandidate(ctx context.Context, roomID, candidateID u
 	if err := guardTransition(c.Status, dsmodel.StatusAssigned); err != nil {
 		return nil, err
 	}
-	if c.RoomID != nil {
+	if _, err := s.roomByCandidate(ctx, candidateID); err == nil {
 		return nil, ErrAlreadyAssigned
 	}
 	if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", roomID).
 		UpdateColumn("candidate_id", candidateID).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.WithContext(ctx).Model(c).Updates(map[string]any{
-		"room_id": roomID,
-		"status":  dsmodel.StatusAssigned,
-	}).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(c).Update("status", dsmodel.StatusAssigned).Error; err != nil {
 		return nil, err
 	}
 	ev := &Event{Type: EventCandidateAssigned, Data: struct {

@@ -46,16 +46,6 @@ func (s *InterviewService) Publish(ev *state.Event) {
 	s.broad.Publish(ev)
 }
 
-// AssignCandidate 分配候选人到房间，返回实际房间 id。先落库后广播。
-func (s *InterviewService) AssignCandidate(ctx context.Context, candidateID, roomID uint64) (uint64, error) {
-	ev, roomID, err := s.store.AssignCandidate(ctx, candidateID, roomID)
-	if err != nil {
-		return 0, err
-	}
-	s.broad.Publish(ev)
-	return roomID, nil
-}
-
 // MovePhase 推进阶段。先落库后广播。
 func (s *InterviewService) MovePhase(ctx context.Context, roomID, operatorID uint64, to dsmodel.CandidateStatus) error {
 	ev, err := s.store.MovePhase(ctx, roomID, operatorID, to)

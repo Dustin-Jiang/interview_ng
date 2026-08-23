@@ -46,8 +46,10 @@ func CanTransition(from, to CandidateStatus) bool {
 
 // Candidate 面试者（非登录用户，是被面试/被记录的客体）。
 type Candidate struct {
-	ID        uint64          `gorm:"primaryKey" json:"id"`
-	RoomID    *uint64         `gorm:"index" json:"room_id,omitempty"` // 绑定房间(已分配后非空)
+	ID uint64 `gorm:"primaryKey" json:"id"`
+	// RoomID 是房间主导字段 rooms.candidate_id 的查询投影，不持久化（gorm:"-"）。
+	// 候选人与房间的绑定唯一权威在 rooms.candidate_id（银行叫号：房间占用候选人）。
+	RoomID    *uint64         `gorm:"-" json:"room_id,omitempty"`
 	Name      string          `gorm:"size:128" json:"name"`
 	Profile   string          `gorm:"type:text" json:"profile"`
 	Status    CandidateStatus `gorm:"size:32;index" json:"status"`
