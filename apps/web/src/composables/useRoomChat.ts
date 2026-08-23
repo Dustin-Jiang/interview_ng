@@ -39,8 +39,6 @@ export interface UseRoomChat {
   movePhase: (to: CandidateStatus) => void
   /** 拉取一名候选人进房。 */
   pullCandidate: (candidateId: number) => Promise<void>
-  /** 断线续传：以本地最大 msg_id 拉取增量。 */
-  resume: () => void
   reloadRoom: () => Promise<void>
 }
 
@@ -204,19 +202,6 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     await reloadRoom()
   }
 
-  function resume(): void {
-    const r = room.value
-    if (!r || !channel) return
-    const lastId = lastMessageId(messages.value)
-    const reqId = channel.sync(lastId)
-    expectReply(reqId, (p) => {
-      if (p.ok && p.room) room.value = p.room
-      if (p.messages && p.messages.length) {
-        messages.value = mergeMessages(messages.value, p.messages)
-      }
-    })
-  }
-
   /** 刷新房间快照（WS sync 拉最新），并同步待分配池。 */
   async function reloadRoom(): Promise<void> {
     const r = room.value
@@ -252,7 +237,6 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     sendMessage,
     movePhase,
     pullCandidate,
-    resume,
     reloadRoom,
   }
 }

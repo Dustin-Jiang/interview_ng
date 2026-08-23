@@ -65,7 +65,6 @@ export interface UseAuth {
   readonly currentUserId: ComputedRef<number | null>
   readonly roles: Ref<string[]>
   readonly permissions: Ref<Permission[]>
-  readonly booting: Ref<boolean>
   readonly isLoggedIn: ComputedRef<boolean>
   hasPermission: (perm: Permission) => boolean
   login: (username: string, password: string) => Promise<void>
@@ -109,7 +108,6 @@ export function useAuth(): UseAuth {
     currentUserId,
     roles,
     permissions,
-    booting,
     isLoggedIn,
     hasPermission,
     login,

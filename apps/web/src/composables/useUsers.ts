@@ -4,7 +4,7 @@
 import { computed, ref, type Ref } from 'vue'
 import { roleApi, userApi } from '@/api/http'
 import { useAsync } from '@/composables/useAsync'
-import { PERMISSIONS, type Role, type User } from '@/models'
+import type { Role, User } from '@/models'
 
 export interface UseUsers {
   readonly users: Ref<readonly User[]>
@@ -12,7 +12,6 @@ export interface UseUsers {
   readonly loading: Ref<boolean>
   readonly error: Ref<string | null>
   readonly keyword: Ref<string>
-  readonly allPermissions: readonly string[]
   load: () => Promise<void>
   setKeyword: (value: string) => void
   createUser: (body: { username: string; name: string; password: string; role_ids: number[] }) => Promise<void>
@@ -82,7 +81,6 @@ export function useUsers(): UseUsers {
     loading: computed(() => userAsync.loading.value || roleAsync.loading.value),
     error: computed(() => userAsync.error.value || roleAsync.error.value),
     keyword,
-    allPermissions: Object.values(PERMISSIONS),
     load,
     setKeyword,
     createUser,

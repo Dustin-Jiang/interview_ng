@@ -75,9 +75,6 @@ export const authApi = {
   me(): Promise<UserProfile> {
     return request('/me')
   },
-  changePassword(oldPassword: string, newPassword: string): Promise<{ ok: boolean }> {
-    return post('/auth/password', { old_password: oldPassword, new_password: newPassword })
-  },
 }
 
 // ---- 候选人 ----

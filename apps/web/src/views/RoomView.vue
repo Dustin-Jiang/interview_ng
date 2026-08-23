@@ -4,16 +4,17 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { DoorOpen, Plus, RefreshCw } from 'lucide-vue-next'
 
-import { useRoomList, roomStatus } from '@/composables/useRoomList'
+import { useRoomList } from '@/composables/useRoomList'
 import { useAuth } from '@/composables/useAuth'
 import { roomApi } from '@/api/http'
 import { PERMISSIONS, type CandidateStatus } from '@/models'
+import { roomPhaseOf } from '@/domain/status'
 import { STATUS_PRESENTATION, EMPTY_PRESENTATION } from '@/presenters/status'
 import { formatDateTime } from '@/lib/format'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 
 import RoomChat from './RoomChat.vue'
 
@@ -48,7 +49,7 @@ function backToList() {
 }
 
 function statusOf(room: import('@/models').Room): { label: string; badge: 'outline' | 'secondary' | 'default' | 'destructive' } {
-  const s = roomStatus(room) as CandidateStatus | null
+  const s = roomPhaseOf(room) as CandidateStatus | null
   return s ? STATUS_PRESENTATION[s] : EMPTY_PRESENTATION
 }
 

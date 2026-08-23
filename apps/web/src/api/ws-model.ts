@@ -17,13 +17,6 @@ export interface WsCommand {
   data: Record<string, unknown>
 }
 
-/** 服务端统一信封。 */
-export interface ServerEnvelope {
-  type: string
-  req_id?: string
-  data?: unknown
-}
-
 /** 服务端推送的事件载荷（对应后端 chanEvent）。 */
 export interface ChanEvent {
   type: string

@@ -5,7 +5,6 @@
 import { computed, type Ref } from 'vue'
 import { roomApi } from '@/api/http'
 import { useAsync } from '@/composables/useAsync'
-import { roomPhaseOf } from '@/domain/status'
 import type { Room } from '@/models'
 
 export interface UseRoomList {
@@ -28,6 +27,3 @@ export function useRoomList(): UseRoomList {
 
   return { rooms, loading: async.loading, error: async.error, load }
 }
-
-/** 房间当前状态（= 绑定候选人状态）—— 纯函数转发，便于视图直接调用。 */
-export { roomPhaseOf as roomStatus }

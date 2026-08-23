@@ -26,7 +26,6 @@ const router = useRouter()
 const { hasPermission } = useAuth()
 // 组合式函数（函数式 ViewModel）：顶层解构，模板直接引用（ref 自动解包）。
 const { candidates, statusFilter, keyword, loading, load, create, checkin, update, remove, resetStatus, setStatusFilter, setKeyword } = useCandidates()
-onMounted(() => load())
 
 // 创建候选人对话框状态
 const createOpen = ref(false)
