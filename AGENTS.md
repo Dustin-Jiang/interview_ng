@@ -34,3 +34,4 @@ pnpm monorepo：`apps/web`（Vue 3 + Vite + TS + shadcn-vue，包名 `@interview
 ## 前端约定
 
 - 无 Pinia/全局 store。MVVM 通过组合式函数（`src/composables/useXxx`，状态在调用方作用域内自管理，`onScopeDispose` 清理）+ 纯函数 `src/domain/` + `src/api/` 服务层实现。视图只绑定 VM；`src/models/` 与后端 JSON 契约一一对应。
+- **视觉 token 一律符合全局设计**：颜色/圆角/边框/阴影只能取自 `src/assets/index.css`（`:root`/`.dark` CSS 变量）与 `tailwind.config.cjs`（`theme.extend` 的语义色映射、radius 档位）的语义 token（如 `bg-muted`、`text-muted-foreground`、`bg-border`、`bg-accent`），禁止硬编码 hex/rgb/hsl 或任意值色。新增/扩展组件须沿用 `components/ui/<name>/index.ts` + cva 变体约定（参考 button/badge/icon-badge），并在既有变体基础上扩展；状态只通过带文字标签的 Badge 传达，不依赖颜色单通道。
