@@ -10,8 +10,8 @@ export const STATUS_PRESENTATION: Record<
   { label: string; badge: NonNullable<BadgeVariants['variant']> }
 > = {
   NOT_CHECKED_IN: { label: '未签到', badge: 'outline' },
-  CHECKED_IN_PENDING_ASSIGN: { label: '已签到待分配', badge: 'secondary' },
-  ASSIGNED: { label: '已分配', badge: 'secondary' },
+  CHECKED_IN_PENDING_ASSIGN: { label: '排队中', badge: 'secondary' },
+  ASSIGNED: { label: '待面试', badge: 'secondary' },
   IN_PROGRESS: { label: '面试中', badge: 'default' },
   COMPLETED: { label: '已结束', badge: 'destructive' },
 }

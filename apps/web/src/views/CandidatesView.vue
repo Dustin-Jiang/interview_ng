@@ -112,7 +112,7 @@ async function submitReset() {
     return
   }
   if (isForwardTarget.value && !resetTarget.value.room_id) {
-    toast.error('该候选人尚未绑定房间，不能重置到已分配/面试中/已结束')
+    toast.error('该候选人尚未绑定房间，不能重置到待面试/面试中/已结束')
     return
   }
   try {
@@ -135,7 +135,7 @@ async function handleCheckin(c: Candidate) {
 
 function goRoom(roomId?: number) {
   if (!roomId) {
-    toast.error('该候选人尚未分配房间')
+    toast.error('该候选人尚未进入房间')
     return
   }
   router.push({ name: 'room', params: { roomId: String(roomId) } })
@@ -327,13 +327,13 @@ onMounted(() => load())
             </div>
             <p class="text-xs text-muted-foreground">
               <template v-if="isForwardTarget && !resetTarget?.room_id">
-                该候选人未绑定房间，不能重置到「已分配 / 面试中 / 已结束」。
+                该候选人未绑定房间，不能重置到「待面试 / 面试中 / 已结束」。
               </template>
               <template v-else-if="isForwardTarget">
                 重置到该状态需保持当前房间绑定（#{{ resetTarget?.room_id }}）。
               </template>
               <template v-else>
-                重置到「未签到 / 已签到待分配」将自动解绑当前房间。
+                重置到「未签到 / 排队中」将自动解绑当前房间。
               </template>
             </p>
           </div>
