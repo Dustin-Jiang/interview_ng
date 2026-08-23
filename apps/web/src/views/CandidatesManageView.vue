@@ -2,7 +2,7 @@
 import { computed, h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import { Plus, RefreshCw, UsersRound } from 'lucide-vue-next'
+import { ShieldAlert, Plus, RefreshCw, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useCandidates } from '@/composables/useCandidates'
@@ -33,6 +33,14 @@ const router = useRouter()
 const { hasPermission } = useAuth()
 // 组合式函数（函数式 ViewModel）：顶层解构，模板直接引用（ref 自动解包）。
 const { candidates, statusFilter, keyword, loading, load, create, checkin, update, remove, resetStatus, setStatusFilter, setKeyword } = useCandidates()
+
+/** 管理页可见性：持有任一候选人管理类权限（对普通只读用户不可见）。 */
+const canAccessManage = computed(
+  () =>
+    hasPermission(PERMISSIONS.CANDIDATES_MANAGE) ||
+    hasPermission(PERMISSIONS.CANDIDATES_CREATE) ||
+    hasPermission(PERMISSIONS.CANDIDATES_CHECKIN),
+)
 
 // 创建候选人对话框状态
 const createOpen = ref(false)
@@ -236,12 +244,14 @@ function renderActions(c: Candidate) {
   return h('div', { class: 'flex gap-2' }, buttons)
 }
 
-onMounted(() => load())
+onMounted(() => {
+  if (canAccessManage.value) void load()
+})
 </script>
 
 <template>
-  <PageShell title="候选人管理" description="签到候选人、维护资料，并在面试房间中拉取面试。">
-    <template #actions>
+  <PageShell title="候选人管理" description="签到候选人、维护资料与状态重置（管理员功能）。">
+    <template v-if="canAccessManage" #actions>
       <Button variant="outline" size="icon" aria-label="刷新候选人列表" @click="load">
         <RefreshCw :class="loading ? 'animate-spin' : ''" aria-hidden="true" />
       </Button>
@@ -277,6 +287,13 @@ onMounted(() => load())
       </Dialog>
     </template>
 
+    <!-- 普通用户不可见：无任一管理权限时仅显示提示 -->
+    <EmptyState v-if="!canAccessManage" bare :icon="ShieldAlert" class="py-16">
+      无候选人管理权限
+      <template #hint>该界面仅对持有候选人管理权限的用户可见</template>
+    </EmptyState>
+
+    <template v-else>
     <div class="space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <h2 class="text-sm font-semibold">候选人列表</h2>
@@ -404,5 +421,6 @@ onMounted(() => load())
       @update:open="deleteTarget = $event ? deleteTarget : null"
       @confirm="confirmDelete"
     />
+    </template>
   </PageShell>
 </template>

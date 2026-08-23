@@ -42,3 +42,30 @@ export function clearRoomCandidate(room: Room): Room {
   delete next.candidate_id
   return next
 }
+
+/** 候场大屏的阶段列定义（未完成名单按状态机顺序分栏）。 */
+export interface WaitingColumn {
+  status: CandidateStatus
+  candidates: { id: number; name: string; profile: string }[]
+}
+
+/**
+ * 把名册按「未完成」四档分组成大屏列（COMPLETED 不上屏）。
+ * 纯函数：输入不被修改；各组内按创建时间升序（叫号次序）。
+ */
+export function groupWaitingColumns(
+  items: readonly { id: number; name: string; profile: string; status: CandidateStatus; created_at: string }[],
+): WaitingColumn[] {
+  const byStatus = new Map<CandidateStatus, WaitingColumn['candidates']>()
+  for (const c of [...items].sort((a, b) => a.created_at.localeCompare(b.created_at))) {
+    if (c.status === 'COMPLETED') continue
+    let list = byStatus.get(c.status)
+    if (!list) {
+      list = []
+      byStatus.set(c.status, list)
+    }
+    list.push({ id: c.id, name: c.name, profile: c.profile })
+  }
+  return (['NOT_CHECKED_IN', 'CHECKED_IN_PENDING_ASSIGN', 'ASSIGNED', 'IN_PROGRESS'] as const)
+    .map((status) => ({ status, candidates: byStatus.get(status) ?? [] }))
+}

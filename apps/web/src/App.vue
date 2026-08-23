@@ -16,9 +16,16 @@ const { user, isLoggedIn, hasPermission, logout } = useAuth()
 const navItems = computed(() => {
   const items = [
     { name: '首页', to: { name: 'home' } },
-    { name: '候选人管理', to: { name: 'candidates' } },
-    { name: '面试房间', to: { name: 'room' } },
+    // 查看与管理分离：名册对所有人可见，管理入口仅对持权限者渲染。
+    { name: '候选人', to: { name: 'candidates' } },
+    { name: '候场大屏', to: { name: 'waiting' } },
   ]
+  if (hasPermission(PERMISSIONS.ROOMS_VIEW)) {
+    items.push({ name: '面试房间', to: { name: 'room' } })
+  }
+  if (hasPermission(PERMISSIONS.CANDIDATES_MANAGE)) {
+    items.push({ name: '候选人管理', to: { name: 'candidate-manage' } })
+  }
   if (hasPermission(PERMISSIONS.USERS_MANAGE)) {
     items.push({ name: '面试官管理', to: { name: 'users' } })
   }

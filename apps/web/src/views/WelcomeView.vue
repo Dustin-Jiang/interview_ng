@@ -20,13 +20,19 @@ const { user, roles, permissions, hasPermission } = useAuth()
 const myPermGroups = computed<Record<PermissionGroup, string[]>>(() => groupPermissionEntries(permissions.value))
 const hasAnyPermission = computed(() => myPermGroups.value['管理'].length > 0 || myPermGroups.value['流程'].length > 0)
 
-/** 快捷入口：按权限显隐。 */
+/** 快捷入口：按权限显隐（查看类入口对所有人开放，管理类仅持权限者可见）。 */
 const quickLinks = computed(() => {
   const links = [
     {
-      name: '候选人管理',
+      name: '候选人',
       to: { name: 'candidates' },
-      description: '签到候选人、维护资料',
+      description: '名册与面试过程记录',
+      visible: true,
+    },
+    {
+      name: '候场大屏',
+      to: { name: 'waiting' },
+      description: '未完成名单与签到',
       visible: true,
     },
     {
@@ -34,6 +40,12 @@ const quickLinks = computed(() => {
       to: { name: 'room' },
       description: '进入房间拉取候选人、记录面试',
       visible: hasPermission(PERMISSIONS.ROOMS_VIEW),
+    },
+    {
+      name: '候选人管理',
+      to: { name: 'candidate-manage' },
+      description: '签到、资料维护与状态重置',
+      visible: hasPermission(PERMISSIONS.CANDIDATES_MANAGE),
     },
     {
       name: '面试官管理',

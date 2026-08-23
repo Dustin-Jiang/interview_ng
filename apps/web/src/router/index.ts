@@ -16,9 +16,22 @@ export const router = createRouter({
       component: () => import('@/views/WelcomeView.vue'),
     },
     {
+      // 候选人查看页（左名册右详情，普通用户可见）。
       path: '/candidates',
       name: 'candidates',
-      component: () => import('@/views/CandidatesView.vue'),
+      component: () => import('@/views/CandidateRecordsView.vue'),
+    },
+    {
+      // 候选人管理页（管理员功能，对普通用户不可见）。
+      path: '/candidates/manage',
+      name: 'candidate-manage',
+      component: () => import('@/views/CandidatesManageView.vue'),
+    },
+    {
+      // 候场大屏：未完成名单 + 签到操作。
+      path: '/waiting',
+      name: 'waiting',
+      component: () => import('@/views/WaitingBoardView.vue'),
     },
     {
       path: '/room/:roomId?',
