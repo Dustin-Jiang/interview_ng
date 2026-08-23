@@ -43,29 +43,28 @@ export function clearRoomCandidate(room: Room): Room {
   return next
 }
 
-/** 候场大屏的阶段列定义（未完成名单按状态机顺序分栏）。 */
-export interface WaitingColumn {
-  status: CandidateStatus
-  candidates: { id: number; name: string; profile: string }[]
+/** 候场大屏的展示优先级：正在面试 > 等待开始 > 等待分配 > 其他（未签到）。 */
+const WAITING_STATUS_RANK: Record<CandidateStatus, number> = {
+  IN_PROGRESS: 0,
+  ASSIGNED: 1,
+  CHECKED_IN_PENDING_ASSIGN: 2,
+  NOT_CHECKED_IN: 3,
+  COMPLETED: 4,
 }
 
 /**
- * 把名册按「未完成」四档分组成大屏列（COMPLETED 不上屏）。
- * 纯函数：输入不被修改；各组内按创建时间升序（叫号次序）。
+ * 候场名单排序：过滤「已结束」不上屏，按状态优先级升序，同组内按创建时间升序（叫号次序）。
+ * 纯函数：输入不被修改。
  */
-export function groupWaitingColumns(
-  items: readonly { id: number; name: string; profile: string; status: CandidateStatus; created_at: string }[],
-): WaitingColumn[] {
-  const byStatus = new Map<CandidateStatus, WaitingColumn['candidates']>()
-  for (const c of [...items].sort((a, b) => a.created_at.localeCompare(b.created_at))) {
-    if (c.status === 'COMPLETED') continue
-    let list = byStatus.get(c.status)
-    if (!list) {
-      list = []
-      byStatus.set(c.status, list)
-    }
-    list.push({ id: c.id, name: c.name, profile: c.profile })
-  }
-  return (['NOT_CHECKED_IN', 'CHECKED_IN_PENDING_ASSIGN', 'ASSIGNED', 'IN_PROGRESS'] as const)
-    .map((status) => ({ status, candidates: byStatus.get(status) ?? [] }))
+export function sortWaitingBoard<T extends { status: CandidateStatus; created_at: string }>(
+  items: readonly T[],
+): T[] {
+  return items
+    .filter((c) => c.status !== 'COMPLETED')
+    .slice()
+    .sort(
+      (a, b) =>
+        WAITING_STATUS_RANK[a.status] - WAITING_STATUS_RANK[b.status] ||
+        a.created_at.localeCompare(b.created_at),
+    )
 }
