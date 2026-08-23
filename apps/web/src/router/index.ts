@@ -10,7 +10,13 @@ export const router = createRouter({
       component: () => import('@/views/LoginView.vue'),
     },
     {
+      // 根路由：欢迎界面（个人信息 + 快捷入口）。
       path: '/',
+      name: 'home',
+      component: () => import('@/views/WelcomeView.vue'),
+    },
+    {
+      path: '/candidates',
       name: 'candidates',
       component: () => import('@/views/CandidatesView.vue'),
     },
@@ -27,11 +33,11 @@ export const router = createRouter({
   ],
 })
 
-// 全局守卫：未登录访问非 /login → 跳登录；已登录访问 /login → 跳候选人管理。
+// 全局守卫：未登录访问非 /login → 跳登录；已登录访问 /login → 跳欢迎页。
 router.beforeEach(async (to) => {
   const authed = await ensureAuthReady()
   if (to.name === 'login') {
-    return authed ? { name: 'candidates' } : true
+    return authed ? { name: 'home' } : true
   }
   return authed ? true : { name: 'login' }
 })
