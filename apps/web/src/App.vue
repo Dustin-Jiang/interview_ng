@@ -7,12 +7,15 @@ import { LogOut } from 'lucide-vue-next'
 import { useAuth, ensureAuthReady } from '@/composables/useAuth'
 import { PERMISSIONS } from '@/models'
 import { Button } from '@/components/ui/button'
+import { IconBadge } from '@/components/ui/icon-badge'
+import { tabItemVariants } from '@/components/ui/tokens'
 
 const route = useRoute()
 const { user, isLoggedIn, hasPermission, logout } = useAuth()
 
 const navItems = computed(() => {
   const items = [
+    { name: '首页', to: { name: 'home' } },
     { name: '候选人管理', to: { name: 'candidates' } },
     { name: '面试房间', to: { name: 'room' } },
   ]
@@ -21,6 +24,10 @@ const navItems = computed(() => {
   }
   return items
 })
+
+/** 用户展示名与头像首字符。 */
+const displayName = computed(() => user.value?.name || user.value?.username || '')
+const avatarChar = computed(() => displayName.value.slice(0, 1).toUpperCase())
 
 /** 是否处于房间内部（全屏专注界面，header 由房间视图自绘，无全局导航）。 */
 const isInRoom = computed(() => route.name === 'room' && !!route.params.roomId)
@@ -39,29 +46,33 @@ onMounted(() => {
       v-if="showNav"
       class="z-40 w-full shrink-0 border-b bg-background/95 backdrop-blur"
     >
-      <div class="mx-auto flex h-14 max-w-[800px] items-center gap-6 px-4">
-        <span class="text-lg font-semibold tracking-tight">面试系统 · 控制台</span>
-        <nav class="flex items-center gap-1">
+      <div class="mx-auto flex h-14 max-w-5xl items-center gap-4 px-4">
+        <!-- 品牌：点击回到欢迎页 -->
+        <RouterLink
+          :to="{ name: 'home' }"
+          class="hidden shrink-0 rounded-md text-lg font-semibold tracking-tight transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:inline"
+        >
+          面试系统 · 控制台
+        </RouterLink>
+        <!-- 小屏下导航可横向滚动，避免溢出换行 -->
+        <nav class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto md:flex-none" aria-label="主导航">
           <RouterLink
             v-for="item in navItems"
             :key="item.name"
             :to="item.to"
-            class="rounded-md px-3 py-2 text-sm font-medium transition-colors"
-            :class="
-              route.name === item.to.name
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-            "
+            :class="tabItemVariants({ active: route.name === item.to.name })"
           >
             {{ item.name }}
           </RouterLink>
         </nav>
-        <div class="ml-auto flex items-center gap-2">
-          <span class="text-sm text-muted-foreground">
-            {{ user?.name ?? user?.username ?? '' }}
-          </span>
+        <div class="ml-auto flex shrink-0 items-center gap-2">
+          <!-- 用户标识：首字母头像 + 姓名 -->
+          <IconBadge size="sm" class="text-xs font-semibold" :title="displayName" aria-hidden="true">
+            {{ avatarChar }}
+          </IconBadge>
+          <span class="max-w-[8rem] truncate text-sm text-muted-foreground">{{ displayName }}</span>
           <Button variant="ghost" size="icon" aria-label="退出登录" @click="logout">
-            <LogOut class="h-4 w-4" />
+            <LogOut class="h-4 w-4" aria-hidden="true" />
           </Button>
         </div>
       </div>

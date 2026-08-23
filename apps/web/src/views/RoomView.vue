@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import { DoorOpen, Plus, RefreshCw } from 'lucide-vue-next'
+import { DoorOpen, Plus, RefreshCw, Trash2 } from 'lucide-vue-next'
 
 import { useRoomList } from '@/composables/useRoomList'
 import { useAuth } from '@/composables/useAuth'
@@ -11,10 +11,15 @@ import { PERMISSIONS, type CandidateStatus } from '@/models'
 import { roomPhaseOf } from '@/domain/status'
 import { STATUS_PRESENTATION, EMPTY_PRESENTATION } from '@/presenters/status'
 import { formatDateTime } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import { tileVariants } from '@/components/ui/tokens'
+import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
+import EmptyState from '@/components/app/EmptyState.vue'
+import PageShell from '@/components/app/PageShell.vue'
 
 import RoomChat from './RoomChat.vue'
 
@@ -63,14 +68,22 @@ async function createRoom() {
   }
 }
 
-async function deleteEmptyRoom(roomId: number) {
-  if (!window.confirm(`确认删除空房间 #${roomId}？`)) return
+// 删除空房确认对话框（替代 window.confirm）。
+const deleteTarget = ref<import('@/models').Room | null>(null)
+const deleting = ref(false)
+
+async function confirmDelete() {
+  if (!deleteTarget.value) return
+  deleting.value = true
   try {
-    await roomApi.remove(roomId)
-    toast.success(`已删除房间 #${roomId}`)
+    await roomApi.remove(deleteTarget.value.id)
+    toast.success(`已删除房间 #${deleteTarget.value.id}`)
+    deleteTarget.value = null
     await load()
   } catch (e) {
     toast.error((e as Error).message)
+  } finally {
+    deleting.value = false
   }
 }
 </script>
@@ -85,73 +98,89 @@ async function deleteEmptyRoom(roomId: number) {
   />
 
   <!-- 房间列表 -->
-  <div v-else class="h-full overflow-y-auto">
-    <div class="mx-auto max-w-[800px] space-y-4 px-4 py-6">
-      <div class="flex items-end justify-between">
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight">面试房间</h1>
-        </div>
-        <div class="flex items-center gap-2">
-          <Button
-            v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE)"
-            size="sm"
-            @click="createRoom"
-          >
-            <Plus class="h-4 w-4" />
-            新建房间
-          </Button>
-          <Button variant="outline" size="icon" aria-label="刷新" @click="load">
-            <RefreshCw class="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
+  <PageShell v-else title="面试房间" description="进入房间拉取候选人、记录面试并推进状态。">
+    <template #actions>
+      <Button
+        v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE)"
+        size="sm"
+        @click="createRoom"
+      >
+        <Plus aria-hidden="true" />
+        新建房间
+      </Button>
+      <Button variant="outline" size="icon" aria-label="刷新房间列表" @click="load">
+        <RefreshCw :class="loading ? 'animate-spin' : ''" aria-hidden="true" />
+      </Button>
+    </template>
 
-      <!-- 空态（加载中留空） -->
-      <Card v-if="!loading && rooms.length === 0">
-        <CardContent class="flex flex-col items-center justify-center gap-3 py-14 text-center text-muted-foreground">
-          <DoorOpen class="h-8 w-8" />
-          <p>暂无面试房间</p>
-        </CardContent>
-      </Card>
+    <!-- 空态：说明 + 引导动作 -->
+    <EmptyState v-if="!loading && rooms.length === 0" :icon="DoorOpen">
+      暂无面试房间
+      <template v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE)" #action>
+        <Button size="sm" variant="outline" @click="createRoom">
+          <Plus aria-hidden="true" />
+          新建第一个房间
+        </Button>
+      </template>
+    </EmptyState>
 
-      <!-- 房间卡片网格 -->
-      <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <div
-          v-for="room in rooms"
-          :key="room.id"
-          class="group relative rounded-xl border bg-card text-left shadow-sm transition-colors hover:bg-accent/40 hover:shadow"
+    <!-- 加载骨架屏 -->
+    <div v-else-if="loading && rooms.length === 0" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-busy="true">
+      <Skeleton v-for="i in 6" :key="i" class="h-[104px] rounded-xl" />
+    </div>
+
+    <!-- 房间卡片网格（tileVariants 统一可交互表面） -->
+    <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div
+        v-for="room in rooms"
+        :key="room.id"
+        :class="cn(tileVariants(), 'group flex flex-col overflow-hidden')"
+      >
+        <!-- 可点击主区：进入房间（独立按钮，避免与操作区嵌套） -->
+        <button
+          class="flex min-w-0 flex-1 cursor-pointer p-4 text-left outline-none"
+          :aria-label="`进入房间 #${room.id}`"
+          @click="openRoom(room.id)"
         >
-          <button class="w-full p-0 text-left" @click="openRoom(room.id)">
-            <CardContent class="p-4">
-              <div class="flex items-start justify-between gap-2">
-                <div class="min-w-0">
-                  <p class="truncate font-medium">
-                    房间 #{{ room.id }}
-                  </p>
-                  <p class="mt-0.5 truncate text-sm text-muted-foreground">
-                    {{ room.candidate?.name ?? '空闲' }}
-                  </p>
-                </div>
-                <Badge :variant="statusOf(room).badge">
-                  {{ statusOf(room).label }}
-                </Badge>
-              </div>
-              <p class="mt-3 text-xs text-muted-foreground">
-                {{ formatDateTime(room.created_at) }}
-              </p>
-            </CardContent>
-          </button>
+          <span class="flex w-full items-start justify-between gap-2">
+            <span class="min-w-0">
+              <span class="block truncate font-medium">房间 #{{ room.id }}</span>
+              <span class="mt-0.5 block truncate text-sm text-muted-foreground">
+                {{ room.candidate?.name ?? '空闲' }}
+              </span>
+            </span>
+            <Badge :variant="statusOf(room).badge" class="shrink-0">
+              {{ statusOf(room).label }}
+            </Badge>
+          </span>
+        </button>
+        <!-- 卡片脚注：时间与操作分离，不再重叠 -->
+        <div class="flex items-center justify-between border-t bg-muted/30 px-4 py-2">
+          <time class="text-xs text-muted-foreground">{{ formatDateTime(room.created_at) }}</time>
           <Button
             v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE) && !room.candidate"
-            variant="destructive"
+            variant="ghost"
             size="sm"
-            class="absolute right-2 top-10"
-            @click="deleteEmptyRoom(room.id)"
+            class="h-7 gap-1 px-2 text-xs text-destructive hover:text-destructive"
+            @click="deleteTarget = room"
           >
+            <Trash2 aria-hidden="true" />
             删除空房
           </Button>
         </div>
       </div>
     </div>
-  </div>
+
+    <!-- 删除空房确认 -->
+    <ConfirmDialog
+      :open="!!deleteTarget"
+      title="删除空房间"
+      :description="deleteTarget ? `确认删除空房间 #${deleteTarget.id}？该操作不可撤销。` : ''"
+      confirm-text="删除"
+      destructive
+      :loading="deleting"
+      @update:open="deleteTarget = $event ? deleteTarget : null"
+      @confirm="confirmDelete"
+    />
+  </PageShell>
 </template>

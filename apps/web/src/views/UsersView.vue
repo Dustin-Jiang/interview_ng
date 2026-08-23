@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
-import { Plus, RefreshCw } from 'lucide-vue-next'
+import { Plus, RefreshCw, ShieldCheck, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useUsers } from '@/composables/useUsers'
@@ -15,7 +15,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import DataTable from '@/components/ui/table/data-table.vue'
 import type { DataTableFeatures } from '@/components/ui/table/features'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
+import { tabItemVariants } from '@/components/ui/tokens'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
+import EmptyState from '@/components/app/EmptyState.vue'
+import PageShell from '@/components/app/PageShell.vue'
+import SearchInput from '@/components/app/SearchInput.vue'
 
 const { users, roles, loading, keyword, load, setKeyword, createUser, updateUser, deleteUser, resetUserPassword, createRole, updateRole, deleteRole } = useUsers()
 const { currentUserId } = useAuth()
@@ -27,11 +34,13 @@ const tab = ref<'users' | 'roles'>('users')
 // ---- 用户操作 ----
 const userDialogOpen = ref(false)
 const editingUser = ref<User | null>(null)
+const savingUser = ref(false)
 const userForm = ref({ username: '', name: '', password: '', role_ids: [] as number[] })
 
 function openCreateUser() {
   editingUser.value = null
   userForm.value = { username: '', name: '', password: '', role_ids: [] }
+  savingUser.value = false
   userDialogOpen.value = true
 }
 
@@ -43,6 +52,7 @@ function openEditUser(u: User) {
     password: '',
     role_ids: (u.roles ?? []).map((r) => r.id),
   }
+  savingUser.value = false
   userDialogOpen.value = true
 }
 
@@ -51,8 +61,10 @@ async function submitUser() {
     toast.error('请输入用户名')
     return
   }
+  if (savingUser.value) return
   try {
     if (editingUser.value) {
+      savingUser.value = true
       await updateUser(editingUser.value.id, { name: userForm.value.name, role_ids: userForm.value.role_ids })
       toast.success('已保存')
     } else {
@@ -60,6 +72,7 @@ async function submitUser() {
         toast.error('请设置初始密码')
         return
       }
+      savingUser.value = true
       await createUser({
         username: userForm.value.username.trim(),
         name: userForm.value.name,
@@ -71,27 +84,55 @@ async function submitUser() {
     userDialogOpen.value = false
   } catch (e) {
     toast.error((e as Error).message)
+  } finally {
+    savingUser.value = false
   }
 }
 
-async function handleDeleteUser(u: User) {
-  if (!window.confirm(`确认删除面试官「${u.name || u.username}」？其房间席位将被移除，已发消息保留。`)) return
+// 删除面试官确认对话框（替代 window.confirm）。
+const deleteTarget = ref<User | null>(null)
+const deleting = ref(false)
+
+async function confirmDelete() {
+  if (!deleteTarget.value || deleting.value) return
+  deleting.value = true
   try {
-    await deleteUser(u.id)
+    await deleteUser(deleteTarget.value.id)
     toast.success('已删除')
+    deleteTarget.value = null
   } catch (e) {
     toast.error((e as Error).message)
+  } finally {
+    deleting.value = false
   }
 }
 
-async function handleResetPassword(u: User) {
-  const pass = window.prompt(`为「${u.name || u.username}」设置新密码：`)
-  if (pass == null || !pass) return
+// 重置密码对话框（替代 window.prompt）：显式输入 + 校验。
+const resetTarget = ref<User | null>(null)
+const newPassword = ref('')
+const resetting = ref(false)
+
+function openResetPassword(u: User) {
+  resetTarget.value = u
+  newPassword.value = ''
+  resetting.value = false
+}
+
+async function submitResetPassword() {
+  if (!resetTarget.value || resetting.value) return
+  if (!newPassword.value) {
+    toast.error('请输入新密码')
+    return
+  }
+  resetting.value = true
   try {
-    await resetUserPassword(u.id, pass)
+    await resetUserPassword(resetTarget.value.id, newPassword.value)
     toast.success('密码已重置，该用户旧登录已失效')
+    resetTarget.value = null
   } catch (e) {
     toast.error((e as Error).message)
+  } finally {
+    resetting.value = false
   }
 }
 
@@ -104,11 +145,17 @@ function toggleUserRole(rid: number) {
 // ---- 角色操作 ----
 const roleDialogOpen = ref(false)
 const editingRole = ref<Role | null>(null)
+const savingRole = ref(false)
 const roleForm = ref({ name: '', description: '', permissions: [] as string[] })
+
+// 角色删除确认对话框。
+const deleteRoleTarget = ref<Role | null>(null)
+const deletingRole = ref(false)
 
 function openCreateRole() {
   editingRole.value = null
   roleForm.value = { name: '', description: '', permissions: [] }
+  savingRole.value = false
   roleDialogOpen.value = true
 }
 
@@ -119,6 +166,7 @@ function openEditRole(r: Role) {
     description: r.description ?? '',
     permissions: (r.permissions ?? []).map((p) => p.permission),
   }
+  savingRole.value = false
   roleDialogOpen.value = true
 }
 
@@ -127,6 +175,8 @@ async function submitRole() {
     toast.error('请输入角色名')
     return
   }
+  if (savingRole.value) return
+  savingRole.value = true
   try {
     if (editingRole.value) {
       await updateRole(editingRole.value.id, {
@@ -146,16 +196,22 @@ async function submitRole() {
     roleDialogOpen.value = false
   } catch (e) {
     toast.error((e as Error).message)
+  } finally {
+    savingRole.value = false
   }
 }
 
-async function handleDeleteRole(r: Role) {
-  if (!window.confirm(`确认删除角色「${r.name}」？仍被用户使用的角色无法删除。`)) return
+async function confirmDeleteRole() {
+  if (!deleteRoleTarget.value || deletingRole.value) return
+  deletingRole.value = true
   try {
-    await deleteRole(r.id)
+    await deleteRole(deleteRoleTarget.value.id)
     toast.success('角色已删除')
+    deleteRoleTarget.value = null
   } catch (e) {
     toast.error((e as Error).message)
+  } finally {
+    deletingRole.value = false
   }
 }
 
@@ -223,10 +279,10 @@ const userColumns: ColumnDef<DataTableFeatures, User>[] = userColumnHelper.colum
 function renderUserActions(u: User) {
   const buttons: ReturnType<typeof h>[] = [
     h(Button, { size: 'sm', variant: 'outline', onClick: () => openEditUser(u) }, () => '编辑'),
-    h(Button, { size: 'sm', variant: 'outline', onClick: () => handleResetPassword(u) }, () => '重置密码'),
+    h(Button, { size: 'sm', variant: 'outline', onClick: () => openResetPassword(u) }, () => '重置密码'),
   ]
   if (!isSelf(u)) {
-    buttons.push(h(Button, { size: 'sm', variant: 'destructive', onClick: () => handleDeleteUser(u) }, () => '删除'))
+    buttons.push(h(Button, { size: 'sm', variant: 'destructive', onClick: () => (deleteTarget.value = u) }, () => '删除'))
   }
   return h('div', { class: 'flex gap-2' }, buttons)
 }
@@ -278,7 +334,7 @@ const roleColumns: ColumnDef<DataTableFeatures, Role>[] = roleColumnHelper.colum
         { class: 'flex gap-2' },
         [
           h(Button, { size: 'sm', variant: 'outline', onClick: () => openEditRole(row.original) }, () => '编辑'),
-          h(Button, { size: 'sm', variant: 'destructive', onClick: () => handleDeleteRole(row.original) }, () => '删除'),
+          h(Button, { size: 'sm', variant: 'destructive', onClick: () => (deleteRoleTarget.value = row.original) }, () => '删除'),
         ],
       ),
   }),
@@ -286,155 +342,243 @@ const roleColumns: ColumnDef<DataTableFeatures, Role>[] = roleColumnHelper.colum
 </script>
 
 <template>
-  <div class="h-full overflow-y-auto">
-    <div class="mx-auto max-w-[800px] space-y-4 px-4 py-6">
-      <div class="flex items-end justify-between">
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight">面试官管理</h1>
-        </div>
-        <Button variant="outline" size="icon" aria-label="刷新" @click="load">
-          <RefreshCw class="h-4 w-4" />
+  <PageShell title="面试官管理" description="管理面试官账号、角色与 RBAC 权限。">
+    <template #actions>
+      <Button variant="outline" size="icon" aria-label="刷新列表" @click="load">
+        <RefreshCw :class="loading ? 'animate-spin' : ''" aria-hidden="true" />
+      </Button>
+    </template>
+
+    <!-- 页签 -->
+    <div class="flex items-center gap-1" role="tablist" aria-label="面试官 / 角色">
+      <button
+        role="tab"
+        :aria-selected="tab === 'users'"
+        :class="tabItemVariants({ active: tab === 'users' })"
+        @click="tab = 'users'"
+      >
+        面试官
+      </button>
+      <button
+        role="tab"
+        :aria-selected="tab === 'roles'"
+        :class="tabItemVariants({ active: tab === 'roles' })"
+        @click="tab = 'roles'"
+      >
+        角色
+      </button>
+    </div>
+
+    <!-- 面试官 -->
+    <div v-if="tab === 'users'" class="space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <!-- 搜索框：图标 + 可清空（Enter / 清空均触发检索）。 -->
+        <SearchInput
+          v-model="keyword"
+          placeholder="搜索用户名 / 姓名…"
+          @search="setKeyword"
+        />
+        <Button size="sm" @click="openCreateUser">
+          <Plus aria-hidden="true" />
+          新增面试官
         </Button>
       </div>
 
-      <!-- 页签 -->
-      <div class="flex items-center gap-1">
-        <button
-          class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
-          :class="tab === 'users' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent'"
-          @click="tab = 'users'"
-        >
-          面试官
-        </button>
-        <button
-          class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
-          :class="tab === 'roles' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent'"
-          @click="tab = 'roles'"
-        >
-          角色
-        </button>
+      <!-- 加载骨架屏 -->
+      <div v-if="loading && users.length === 0" class="space-y-2" aria-busy="true">
+        <Skeleton v-for="i in 5" :key="i" class="h-12 w-full rounded-md" />
       </div>
 
-      <!-- 面试官 -->
-      <div v-if="tab === 'users'" class="space-y-4">
-        <div class="flex items-center justify-between">
-          <Input
-            v-model="keyword"
-            placeholder="搜索用户名 / 姓名…"
-            class="w-56"
-            @keydown.enter="setKeyword(keyword)"
-          />
-          <Button size="sm" @click="openCreateUser">
-            <Plus class="h-4 w-4" />
-            新增面试官
-          </Button>
-        </div>
-        <DataTable :columns="userColumns" :data="users" />
-      </div>
+      <!-- 空态 -->
+      <EmptyState v-else-if="users.length === 0" :icon="UsersRound">
+        {{ keyword ? '没有匹配的面试官' : '暂无面试官' }}
+      </EmptyState>
 
-      <!-- 角色 -->
-      <div v-else class="space-y-4">
-        <div class="flex items-center justify-end">
-          <Button size="sm" @click="openCreateRole">
-            <Plus class="h-4 w-4" />
-            新增角色
-          </Button>
-        </div>
-        <DataTable :columns="roleColumns" :data="roles" />
-      </div>
-
-      <!-- 用户对话框 -->
-      <Dialog :open="userDialogOpen" @update:open="userDialogOpen = $event">
-        <DialogContent class="sm:max-w-[440px]">
-          <DialogHeader>
-            <DialogTitle>{{ editingUser ? '编辑面试官' : '新增面试官' }}</DialogTitle>
-          </DialogHeader>
-          <div class="grid gap-4">
-            <div class="grid gap-2">
-              <Label for="u-username">用户名（登录名，不可修改）</Label>
-              <Input id="u-username" v-model="userForm.username" :disabled="!!editingUser" placeholder="登录用户名" />
-            </div>
-            <div class="grid gap-2">
-              <Label for="u-name">姓名</Label>
-              <Input id="u-name" v-model="userForm.name" placeholder="显示姓名" />
-            </div>
-            <div v-if="!editingUser" class="grid gap-2">
-              <Label for="u-password">初始密码</Label>
-              <Input id="u-password" v-model="userForm.password" type="password" placeholder="初始密码" />
-            </div>
-            <div class="grid gap-2">
-              <Label>角色</Label>
-              <div class="grid grid-cols-2 gap-2">
-                <label
-                  v-for="r in roles"
-                  :key="r.id"
-                  class="flex items-center gap-2 rounded-md border p-2 text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    class="accent-primary"
-                    :checked="userForm.role_ids.includes(r.id)"
-                    @change="toggleUserRole(r.id)"
-                  />
-                  {{ r.name }}
-                </label>
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" @click="userDialogOpen = false">取消</Button>
-            <Button @click="submitUser">{{ editingUser ? '保存' : '创建' }}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <!-- 角色对话框 -->
-      <Dialog :open="roleDialogOpen" @update:open="roleDialogOpen = $event">
-        <DialogContent class="sm:max-w-[480px]">
-          <DialogHeader>
-            <DialogTitle>{{ editingRole ? '编辑角色' : '新增角色' }}</DialogTitle>
-          </DialogHeader>
-          <div class="grid gap-4">
-            <div class="grid gap-2">
-              <Label for="r-name">角色名</Label>
-              <Input id="r-name" v-model="roleForm.name" placeholder="如 auditor" />
-            </div>
-            <div class="grid gap-2">
-              <Label for="r-desc">描述</Label>
-              <Input id="r-desc" v-model="roleForm.description" placeholder="角色说明（可选）" />
-            </div>
-            <div class="grid gap-2">
-              <Label>权限组</Label>
-              <div class="grid gap-2 rounded-md border p-3">
-                <template v-for="g in ['管理', '流程'] as const" :key="g">
-                  <div class="space-y-1.5">
-                    <p class="text-xs font-medium text-muted-foreground">{{ g }}</p>
-                    <div class="grid grid-cols-1 gap-1.5">
-                      <label
-                        v-for="p in permGroups[g]"
-                        :key="p"
-                        class="flex items-center gap-2 text-sm"
-                      >
-                        <input
-                          type="checkbox"
-                          class="accent-primary"
-                          :checked="roleForm.permissions.includes(p)"
-                          @change="toggleRolePerm(p)"
-                        />
-                        <code class="font-mono text-xs">{{ p }}</code>
-                      </label>
-                    </div>
-                  </div>
-                </template>
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" @click="roleDialogOpen = false">取消</Button>
-            <Button @click="submitRole">{{ editingRole ? '保存' : '创建' }}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DataTable v-else :columns="userColumns" :data="users" />
     </div>
-  </div>
+
+    <!-- 角色 -->
+    <div v-else class="space-y-4">
+      <div class="flex items-center justify-end">
+        <Button size="sm" @click="openCreateRole">
+          <Plus aria-hidden="true" />
+          新增角色
+        </Button>
+      </div>
+
+      <!-- 加载骨架屏 -->
+      <div v-if="loading && roles.length === 0" class="space-y-2" aria-busy="true">
+        <Skeleton v-for="i in 3" :key="i" class="h-16 w-full rounded-md" />
+      </div>
+
+      <!-- 空态 -->
+      <EmptyState v-else-if="roles.length === 0" :icon="ShieldCheck">
+        暂无角色，创建角色以分配权限
+      </EmptyState>
+
+      <DataTable v-else :columns="roleColumns" :data="roles" />
+    </div>
+
+    <!-- 用户对话框 -->
+    <Dialog :open="userDialogOpen" @update:open="userDialogOpen = $event">
+      <DialogContent size="md">
+        <DialogHeader>
+          <DialogTitle>{{ editingUser ? '编辑面试官' : '新增面试官' }}</DialogTitle>
+        </DialogHeader>
+        <div class="grid gap-4">
+          <div class="grid gap-2">
+            <Label for="u-username">用户名（登录名，不可修改）</Label>
+            <Input id="u-username" v-model="userForm.username" :disabled="!!editingUser" placeholder="登录用户名" autocomplete="off" />
+          </div>
+          <div class="grid gap-2">
+            <Label for="u-name">姓名</Label>
+            <Input id="u-name" v-model="userForm.name" placeholder="显示姓名" />
+          </div>
+          <div v-if="!editingUser" class="grid gap-2">
+            <Label for="u-password">初始密码</Label>
+            <Input id="u-password" v-model="userForm.password" type="password" placeholder="初始密码" autocomplete="new-password" />
+          </div>
+          <div class="grid gap-2">
+            <Label>角色</Label>
+            <div v-if="roles.length === 0" class="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+              暂无可选角色，请先在「角色」页签创建。
+            </div>
+            <div v-else class="grid grid-cols-2 gap-2">
+              <label
+                v-for="r in roles"
+                :key="r.id"
+                class="flex cursor-pointer items-center gap-2 rounded-md border p-2 text-sm transition-colors hover:bg-accent/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+              >
+                <input
+                  type="checkbox"
+                  class="accent-primary"
+                  :checked="userForm.role_ids.includes(r.id)"
+                  @change="toggleUserRole(r.id)"
+                />
+                {{ r.name }}
+              </label>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" :disabled="savingUser" @click="userDialogOpen = false">取消</Button>
+          <Button :disabled="savingUser" @click="submitUser">
+            <Spinner v-if="savingUser" />
+            {{ editingUser ? '保存' : '创建' }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- 角色对话框 -->
+    <Dialog :open="roleDialogOpen" @update:open="roleDialogOpen = $event">
+      <DialogContent size="lg">
+        <DialogHeader>
+          <DialogTitle>{{ editingRole ? '编辑角色' : '新增角色' }}</DialogTitle>
+        </DialogHeader>
+        <div class="grid gap-4">
+          <div class="grid gap-2">
+            <Label for="r-name">角色名</Label>
+            <Input id="r-name" v-model="roleForm.name" placeholder="如 auditor" autocomplete="off" />
+          </div>
+          <div class="grid gap-2">
+            <Label for="r-desc">描述</Label>
+            <Input id="r-desc" v-model="roleForm.description" placeholder="角色说明（可选）" />
+          </div>
+          <div class="grid gap-2">
+            <Label>权限组</Label>
+            <div class="grid max-h-64 gap-2 overflow-y-auto rounded-md border p-3">
+              <template v-for="g in ['管理', '流程'] as const" :key="g">
+                <div class="space-y-1.5">
+                  <p class="text-xs font-medium text-muted-foreground">{{ g }}</p>
+                  <div class="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                    <label
+                      v-for="p in permGroups[g]"
+                      :key="p"
+                      class="flex cursor-pointer items-center gap-2 rounded-sm text-sm transition-colors hover:bg-accent/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+                    >
+                      <input
+                        type="checkbox"
+                        class="accent-primary"
+                        :checked="roleForm.permissions.includes(p)"
+                        @change="toggleRolePerm(p)"
+                      />
+                      <code class="font-mono text-xs">{{ p }}</code>
+                    </label>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" :disabled="savingRole" @click="roleDialogOpen = false">取消</Button>
+          <Button :disabled="savingRole" @click="submitRole">
+            <Spinner v-if="savingRole" />
+            {{ editingRole ? '保存' : '创建' }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- 重置密码对话框 -->
+    <Dialog :open="!!resetTarget" @update:open="resetTarget = $event ? resetTarget : null">
+      <DialogContent size="sm">
+        <DialogHeader>
+          <DialogTitle>重置密码</DialogTitle>
+        </DialogHeader>
+        <div class="grid gap-2">
+          <Label for="reset-pass">新密码（为「{{ resetTarget?.name || resetTarget?.username }}」设置）</Label>
+          <Input
+            id="reset-pass"
+            v-model="newPassword"
+            type="password"
+            placeholder="输入新密码"
+            autocomplete="new-password"
+            @keydown.enter="submitResetPassword"
+          />
+          <p class="text-xs text-muted-foreground">重置后该用户当前登录态将立即失效。</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" :disabled="resetting" @click="resetTarget = null">取消</Button>
+          <Button :disabled="resetting || !newPassword" @click="submitResetPassword">
+            <Spinner v-if="resetting" />
+            重置密码
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- 删除面试官确认 -->
+    <ConfirmDialog
+      :open="!!deleteTarget"
+      title="删除面试官"
+      :description="
+        deleteTarget
+          ? `确认删除「${deleteTarget.name || deleteTarget.username}」？其房间席位将被移除，已发消息保留。`
+          : ''
+      "
+      confirm-text="删除"
+      destructive
+      :loading="deleting"
+      @update:open="deleteTarget = $event ? deleteTarget : null"
+      @confirm="confirmDelete"
+    />
+
+    <!-- 删除角色确认 -->
+    <ConfirmDialog
+      :open="!!deleteRoleTarget"
+      title="删除角色"
+      :description="
+        deleteRoleTarget
+          ? `确认删除角色「${deleteRoleTarget.name}」？仍被用户使用的角色无法删除。`
+          : ''
+      "
+      confirm-text="删除"
+      destructive
+      :loading="deletingRole"
+      @update:open="deleteRoleTarget = $event ? deleteRoleTarget : null"
+      @confirm="confirmDeleteRole"
+    />
+  </PageShell>
 </template>

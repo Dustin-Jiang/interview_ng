@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { ArrowLeft, ChevronRight, Send, UserPlus, UserRound } from 'lucide-vue-next'
+import { computed, nextTick, ref, watch } from 'vue'
+import { ArrowLeft, MessageSquare, Send, UserPlus, UserRound } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 
 import { useRoomChat } from '@/composables/useRoomChat'
@@ -14,6 +14,9 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { IconBadge } from '@/components/ui/icon-badge'
+import { Spinner } from '@/components/ui/spinner'
+import EmptyState from '@/components/app/EmptyState.vue'
 
 const props = defineProps<{ roomId: number }>()
 const emit = defineEmits<{ back: [] }>()
@@ -44,7 +47,7 @@ const hasCandidate = computed(() => !!room.value?.candidate)
 
 function senderLabel(senderId: number | null): string {
   if (senderId == null) return '已删除用户'
-  if (senderId === currentUserId.value) return `我 (${senderId})`
+  if (senderId === currentUserId.value) return '我'
   return `面试官 ${senderId}`
 }
 
@@ -68,95 +71,146 @@ async function handlePull(candidateId: number) {
     toast.error((e as Error).message)
   }
 }
+
+// ---- 消息区自动滚动：跟随新消息贴底；用户上翻阅读历史时不打断。 ----
+const scrollBox = ref<HTMLElement | null>(null)
+/** 视口是否处于底部附近（48px 容差）。 */
+const atBottom = ref(true)
+
+function onScroll() {
+  const el = scrollBox.value
+  if (!el) return
+  atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+}
+
+async function scrollToBottom() {
+  await nextTick()
+  const el = scrollBox.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+// 新消息到达且视口在底部 → 自动贴底。
+watch(
+  () => messages.value.length,
+  (len, prev) => {
+    if (len > (prev ?? 0) && atBottom.value) void scrollToBottom()
+  },
+)
+
+// 连接建立完成（首帧同步到达）→ 贴底展示最新消息。
+watch(connecting, (v, prev) => {
+  if (prev && !v) void scrollToBottom()
+})
+
+// ---- 状态机步骤条：当前档高亮，已完成档打勾填充。 ----
+const phaseIndex = computed(() =>
+  phase.value ? CANDIDATE_STATUSES.indexOf(phase.value) : -1,
+)
 </script>
 
 <template>
   <div class="flex h-full flex-col overflow-hidden">
-    <!-- 房间头部：返回键 + 房间名 -->
+    <!-- 房间头部：返回键 + 房间名 + 连接状态 -->
     <header class="flex h-14 shrink-0 items-center gap-3 border-b px-4">
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="返回房间列表"
-        @click="emit('back')"
-      >
-        <ArrowLeft class="h-5 w-5" />
+      <Button variant="ghost" size="icon" aria-label="返回房间列表" @click="emit('back')">
+        <ArrowLeft />
       </Button>
-      <h1 class="text-base font-semibold tracking-tight">房间 #{{ props.roomId }}</h1>
-      <span class="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+      <h1 class="truncate text-base font-semibold tracking-tight">房间 #{{ props.roomId }}</h1>
+      <Badge v-if="phase" :variant="STATUS_PRESENTATION[phase].badge" class="hidden sm:inline-flex">
+        {{ STATUS_PRESENTATION[phase].label }}
+      </Badge>
+      <span class="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+        <Spinner v-if="connecting" class="h-3.5 w-3.5" />
+        <!-- 连接状态点：语义色 token（success/destructive）。 -->
         <span
+          v-else
           class="inline-block h-2 w-2 rounded-full"
-          :class="connected ? 'bg-emerald-500' : 'bg-slate-300'"
+          :class="connected ? 'bg-success' : 'bg-destructive'"
+          aria-hidden="true"
         />
-        {{ connected ? '已连接' : '未连接' }}
+        <span role="status">{{ connecting ? '连接中…' : connected ? '已连接' : '未连接' }}</span>
       </span>
     </header>
 
     <!-- 连接错误提示 -->
     <div
       v-if="error"
+      role="alert"
       class="shrink-0 border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive"
     >
       {{ error }}
     </div>
 
-    <!-- 主区域：聊天 + 侧栏 -->
-    <div class="flex min-h-0 flex-1">
+    <!-- 主区域：聊天 + 侧栏（小屏上下堆叠） -->
+    <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
       <!-- 聊天区 -->
       <div class="flex min-w-0 flex-1 flex-col">
-        <!-- 消息滚动区 -->
-        <div class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
-          <div v-if="!hasCandidate && !connecting" class="py-12 text-center text-muted-foreground">
-            房间空闲，等待候选人
-          </div>
-          <div v-if="!messages.length && hasCandidate && !connecting" class="py-12 text-center text-muted-foreground">
-            暂无消息
-          </div>
+        <!-- 消息滚动区：role=log + aria-live 便于读屏播报新消息 -->
+        <div
+          ref="scrollBox"
+          class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
+          role="log"
+          aria-live="polite"
+          @scroll.passive="onScroll"
+        >
+          <!-- 空房/无消息空态（bare：直接置于聊天滚动区，无卡片包裹） -->
+          <EmptyState v-if="!hasCandidate && !connecting" bare :icon="UserRound" class="py-12">
+            房间空闲，从右侧「拉取候选人」开始面试
+          </EmptyState>
+          <EmptyState v-else-if="!messages.length && !connecting" bare :icon="MessageSquare" class="py-12">
+            暂无消息，发送第一条面试记录吧
+          </EmptyState>
+
           <div
             v-for="m in messages"
             :key="m.id"
-            class="flex flex-col gap-1"
+            class="flex max-w-full flex-col gap-1"
             :class="m.sender_id === currentUserId ? 'items-end' : 'items-start'"
           >
-            <div class="text-xs text-muted-foreground">
-              {{ senderLabel(m.sender_id) }} · {{ formatDateTime(m.created_at) }}
+            <div class="flex items-baseline gap-2 px-1 text-xs text-muted-foreground">
+              <span class="font-medium">{{ senderLabel(m.sender_id) }}</span>
+              <time>{{ formatDateTime(m.created_at) }}</time>
             </div>
             <div
-              class="max-w-[75%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm"
+              class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm leading-relaxed sm:max-w-[75%]"
               :class="
                 m.sender_id === currentUserId
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted'
+                  ? 'rounded-br-md bg-primary text-primary-foreground'
+                  : 'rounded-bl-md bg-muted'
               "
             >
               {{ m.content }}
             </div>
           </div>
         </div>
+
         <!-- 输入区 -->
         <div class="flex shrink-0 items-center gap-2 border-t p-3">
           <Input
             v-model="draft"
             :disabled="!hasCandidate"
-            :placeholder="hasCandidate ? '输入面试记录…' : '等待候选人进房后可发送消息'"
+            :placeholder="hasCandidate ? '输入面试记录，Enter 发送…' : '等待候选人进房后可发送消息'"
+            aria-label="消息内容"
             @keydown.enter.prevent="send"
           />
-          <Button size="icon" @click="send" :disabled="!draft.trim() || !hasCandidate">
-            <Send class="h-4 w-4" />
+          <Button size="icon" aria-label="发送消息" :disabled="!draft.trim() || !hasCandidate" @click="send">
+            <Send aria-hidden="true" />
           </Button>
         </div>
       </div>
 
       <!-- 侧栏：候选人 / 拉取 / 状态 -->
-      <aside class="flex w-80 shrink-0 flex-col border-l bg-muted/20">
+      <aside
+        class="flex w-full shrink-0 flex-col border-t lg:h-full lg:w-80 lg:border-l lg:border-t-0 lg:bg-muted/20"
+      >
         <div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
           <!-- 候选人信息 -->
           <Card>
             <CardContent class="space-y-3 p-4">
               <div class="flex items-center gap-3">
-                <div class="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
-                  <UserRound class="h-5 w-5" />
-                </div>
+                <IconBadge size="md" tone="primary">
+                  <UserRound aria-hidden="true" />
+                </IconBadge>
                 <div class="min-w-0">
                   <p class="truncate font-medium">
                     {{ room?.candidate?.name ?? '（空房）' }}
@@ -169,9 +223,9 @@ async function handlePull(candidateId: number) {
                   <span class="text-muted-foreground">房间</span>
                   <span class="font-mono">#{{ props.roomId }}</span>
                 </div>
-                <div v-if="room?.candidate?.profile" class="flex justify-between gap-2">
+                <div v-if="room?.candidate?.profile" class="flex justify-between gap-3">
                   <span class="shrink-0 text-muted-foreground">简介</span>
-                  <span class="truncate text-right">{{ room.candidate.profile }}</span>
+                  <span class="break-words text-right">{{ room.candidate.profile }}</span>
                 </div>
               </div>
             </CardContent>
@@ -181,11 +235,11 @@ async function handlePull(candidateId: number) {
           <Card v-if="hasPermission(PERMISSIONS.CANDIDATES_ASSIGN) && !hasCandidate">
             <CardContent class="space-y-3 p-4">
               <p class="flex items-center gap-2 text-sm font-medium">
-                <UserPlus class="h-4 w-4" />
+                <UserPlus class="h-4 w-4" aria-hidden="true" />
                 拉取候选人
               </p>
               <div v-if="pullPool.length === 0" class="text-xs text-muted-foreground">
-                待分配池为空
+                待分配池为空，请先在「候选人管理」中签到候选人。
               </div>
               <ul class="space-y-2">
                 <li
@@ -193,7 +247,7 @@ async function handlePull(candidateId: number) {
                   :key="c.id"
                   class="flex items-center justify-between gap-2 rounded-md bg-muted p-2"
                 >
-                  <span class="truncate text-sm">
+                  <span class="min-w-0 truncate text-sm">
                     {{ c.name }}
                     <span v-if="c.profile" class="text-xs text-muted-foreground">· {{ c.profile }}</span>
                   </span>
@@ -214,22 +268,49 @@ async function handlePull(candidateId: number) {
                 <Badge v-else variant="outline">—</Badge>
               </div>
 
-              <!-- 状态机进度 -->
-              <div class="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-                <p class="mb-2 font-medium text-foreground">状态机</p>
-                <ol class="space-y-1">
-                  <li
-                    v-for="(s, i) in CANDIDATE_STATUSES"
-                    :key="s"
-                    class="flex items-center gap-1"
+              <!-- 状态机竖向步骤条：已完成实心、当前高亮、未达置灰 -->
+              <ol class="flex flex-col" aria-label="面试状态机进度">
+                <li
+                  v-for="(s, i) in CANDIDATE_STATUSES"
+                  :key="s"
+                  class="flex gap-3"
+                >
+                  <!-- 节点列：圆点 + 连接线 -->
+                  <div class="flex flex-col items-center">
+                    <span
+                      class="mt-1 flex h-3 w-3 shrink-0 items-center justify-center rounded-full border-2"
+                      :class="
+                        i < phaseIndex
+                          ? 'border-primary bg-primary'
+                          : i === phaseIndex
+                            ? 'border-primary bg-background ring-4 ring-primary/15'
+                            : 'border-muted-foreground/30 bg-transparent'
+                      "
+                      aria-hidden="true"
+                    />
+                    <span
+                      v-if="i < CANDIDATE_STATUSES.length - 1"
+                      class="min-h-4 w-0.5 flex-1"
+                      :class="i < phaseIndex ? 'bg-primary' : 'bg-border'"
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <!-- 标签列 -->
+                  <span
+                    class="pb-4 text-xs leading-none"
+                    :class="
+                      i === phaseIndex
+                        ? 'font-semibold text-foreground'
+                        : i < phaseIndex
+                          ? 'text-muted-foreground'
+                          : 'text-muted-foreground/60'
+                    "
+                    :aria-current="i === phaseIndex ? 'step' : undefined"
                   >
-                    <span v-if="i > 0"><ChevronRight class="h-3 w-3" /></span>
-                    <span :class="phase === s ? 'font-semibold text-foreground' : ''">
-                      {{ STATUS_PRESENTATION[s].label }}
-                    </span>
-                  </li>
-                </ol>
-              </div>
+                    {{ STATUS_PRESENTATION[s].label }}
+                  </span>
+                </li>
+              </ol>
 
               <Button
                 v-if="hasPermission(PERMISSIONS.ROOMS_MOVE_PHASE)"
