@@ -10,10 +10,15 @@ import type { HTMLAttributes } from 'vue'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
-const props = defineProps<{
-  placeholder?: string
-  class?: HTMLAttributes['class']
-}>()
+const props = withDefaults(
+  defineProps<{
+    placeholder?: string
+    /** 撑满父容器宽度（默认固定 w-56，用于表格工具栏）。 */
+    full?: boolean
+    class?: HTMLAttributes['class']
+  }>(),
+  { full: false },
+)
 
 const emit = defineEmits<{ search: [value: string] }>()
 
@@ -36,7 +41,7 @@ function onClear() {
       v-model="keyword"
       type="text"
       :placeholder="placeholder"
-      class="w-56 pl-8 pr-8"
+      :class="props.full ? 'w-full pl-8 pr-8' : 'w-56 pl-8 pr-8'"
       @keydown.enter="emit('search', String(keyword))"
     />
     <button
