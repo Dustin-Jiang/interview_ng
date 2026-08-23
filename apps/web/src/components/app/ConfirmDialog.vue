@@ -1,6 +1,6 @@
 <!--
   ConfirmDialog —— 应用级确认对话框（替代 window.confirm / window.prompt）。
-  用于删除等破坏性操作的二次确认：明确后果描述 + destructive 视觉意图 + 提交 loading 态。
+  用于删除等破坏性操作的二次确认：destructive 视觉意图 + 提交 loading 态。
 -->
 <script setup lang="ts">
 import { Info, TriangleAlert } from 'lucide-vue-next'
@@ -8,7 +8,6 @@ import { Info, TriangleAlert } from 'lucide-vue-next'
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -21,7 +20,6 @@ const props = withDefaults(
   defineProps<{
     open: boolean
     title: string
-    description?: string
     confirmText?: string
     cancelText?: string
     /** 破坏性操作：确认按钮与图标使用 destructive 色。 */
@@ -30,7 +28,6 @@ const props = withDefaults(
     loading?: boolean
   }>(),
   {
-    description: '',
     confirmText: '确认',
     cancelText: '取消',
     destructive: false,
@@ -65,9 +62,6 @@ function onConfirm() {
           </IconBadge>
           <DialogTitle class="text-left">{{ title }}</DialogTitle>
         </div>
-        <DialogDescription v-if="description" class="text-left">
-          {{ description }}
-        </DialogDescription>
       </DialogHeader>
       <!-- 具名插槽：承载额外表单内容（如重置密码输入框）。 -->
       <slot />

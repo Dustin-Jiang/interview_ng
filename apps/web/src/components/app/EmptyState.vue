@@ -1,5 +1,5 @@
 <!--
-  EmptyState —— 列表/聊天区统一空态：图标 + 主文案 + 次要提示 + 动作插槽。
+  EmptyState —— 列表/聊天区统一空态：图标 + 主文案 + 动作插槽。
   收编原先 6 处手写实现（gap-2/gap-3、py-12/py-14 曾各自漂移），此处统一为
   `gap-2 py-14`；bare=true 用于非卡片容器（如聊天滚动区）。
 -->
@@ -28,8 +28,6 @@ const stackClass = 'flex flex-col items-center justify-center gap-2 py-14 text-c
     <CardContent :class="cn(stackClass, props.class)">
       <component :is="props.icon" v-if="props.icon" class="h-8 w-8 opacity-50" aria-hidden="true" />
       <p><slot /></p>
-      <!-- 次要提示行（引导文案）。 -->
-      <p v-if="$slots.hint" class="text-xs"><slot name="hint" /></p>
       <!-- 动作区（如「新建第一个房间」）。 -->
       <div v-if="$slots.action"><slot name="action" /></div>
     </CardContent>
@@ -37,7 +35,6 @@ const stackClass = 'flex flex-col items-center justify-center gap-2 py-14 text-c
   <div v-else :class="cn(stackClass, props.class)">
     <component :is="props.icon" v-if="props.icon" class="h-8 w-8 opacity-50" aria-hidden="true" />
     <p><slot /></p>
-    <p v-if="$slots.hint" class="text-xs"><slot name="hint" /></p>
     <div v-if="$slots.action"><slot name="action" /></div>
   </div>
 </template>

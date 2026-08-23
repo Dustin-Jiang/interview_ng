@@ -6,7 +6,7 @@ import { ClipboardList } from 'lucide-vue-next'
 
 import { useAuth } from '@/composables/useAuth'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { IconBadge } from '@/components/ui/icon-badge'
@@ -42,12 +42,11 @@ async function submit() {
   <div class="flex h-full items-center justify-center bg-muted/30 p-4">
     <Card class="w-full max-w-sm">
       <CardHeader class="items-center text-center">
-        <!-- 品牌标识：图标 + 标题 + 副标题 -->
+        <!-- 品牌标识：图标 + 标题 -->
         <IconBadge size="lg" tone="solid" class="mx-auto mb-1" aria-hidden="true">
           <ClipboardList />
         </IconBadge>
         <CardTitle>面试系统 · 控制台</CardTitle>
-        <CardDescription>登录以管理候选人与面试房间</CardDescription>
       </CardHeader>
       <CardContent class="grid gap-4">
         <div class="grid gap-2">

@@ -228,9 +228,6 @@ const phaseIndex = computed(() =>
                 <UserPlus class="h-4 w-4" aria-hidden="true" />
                 拉取候选人
               </p>
-              <div v-if="pullPool.length === 0" class="text-xs text-muted-foreground">
-                待分配池为空，请先在「候选人管理」中签到候选人。
-              </div>
               <ul class="space-y-2">
                 <li
                   v-for="c in pullPool"

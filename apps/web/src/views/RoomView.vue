@@ -98,7 +98,7 @@ async function confirmDelete() {
   />
 
   <!-- 房间列表 -->
-  <PageShell v-else title="面试房间" description="进入房间拉取候选人、记录面试并推进状态。">
+  <PageShell v-else title="面试房间">
     <template #actions>
       <Button
         v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE)"
@@ -175,7 +175,6 @@ async function confirmDelete() {
     <ConfirmDialog
       :open="!!deleteTarget"
       title="删除空房间"
-      :description="deleteTarget ? `确认删除空房间 #${deleteTarget.id}？该操作不可撤销。` : ''"
       confirm-text="删除"
       destructive
       :loading="deleting"

@@ -35,3 +35,4 @@ pnpm monorepo：`apps/web`（Vue 3 + Vite + TS + shadcn-vue，包名 `@interview
 
 - 无 Pinia/全局 store。MVVM 通过组合式函数（`src/composables/useXxx`，状态在调用方作用域内自管理，`onScopeDispose` 清理）+ 纯函数 `src/domain/` + `src/api/` 服务层实现。视图只绑定 VM；`src/models/` 与后端 JSON 契约一一对应。
 - **视觉 token 一律符合全局设计**：颜色/圆角/边框/阴影只能取自 `src/assets/index.css`（`:root`/`.dark` CSS 变量）与 `tailwind.config.cjs`（`theme.extend` 的语义色映射、radius 档位）的语义 token（如 `bg-muted`、`text-muted-foreground`、`bg-border`、`bg-accent`），禁止硬编码 hex/rgb/hsl 或任意值色。新增/扩展组件须沿用 `components/ui/<name>/index.ts` + cva 变体约定（参考 button/badge/icon-badge），并在既有变体基础上扩展；状态只通过带文字标签的 Badge 传达，不依赖颜色单通道。
+- **无 caption 小字**：禁止在标题/栏目标题之下附加小字号说明文字（页头 description、卡片副标题、对话框说明、空态 hint、表单说明行等）。出现 caption 即意味着标题不够明确——要么删掉冗余说明，要么把标题改写得足够准确、自明。数据内容（如个人简介）与功能元信息（字段标签、时间戳、空态主文案、`-`/`无` 占位）不受此限。

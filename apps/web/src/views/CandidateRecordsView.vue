@@ -12,8 +12,7 @@ import { ArrowLeft, ExternalLink, RefreshCw, SearchX, UsersRound, X } from 'luci
 import { candidateApi } from '@/api/http'
 import { formatDateTime } from '@/lib/format'
 import { STATUS_PRESENTATION } from '@/presenters/status'
-import { CANDIDATE_STATUSES, PERMISSIONS, type Candidate, type Message } from '@/models'
-import { useAuth } from '@/composables/useAuth'
+import { CANDIDATE_STATUSES, type Candidate, type Message } from '@/models'
 import { cn } from '@/lib/utils'
 
 import { Button } from '@/components/ui/button'
@@ -30,7 +29,6 @@ import SearchInput from '@/components/app/SearchInput.vue'
 
 const router = useRouter()
 const route = useRoute()
-const { hasPermission } = useAuth()
 
 // ---- 名册数据（一次拉取，客户端筛选） ----
 const candidates = ref<Candidate[]>([])
@@ -263,7 +261,6 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
           <!-- 空态 -->
           <EmptyState v-else-if="filtered.length === 0" bare :icon="hasFilter ? SearchX : UsersRound" class="py-10">
             {{ hasFilter ? '没有匹配的候选人' : '暂无候选人' }}
-            <template v-if="hasFilter" #hint>试试调整关键词或状态筛选</template>
             <template v-if="hasFilter" #action>
               <Button variant="outline" size="sm" @click="clearFilters">清除筛选</Button>
             </template>
@@ -319,7 +316,6 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
           <!-- 未选择 -->
           <EmptyState v-if="!selectedCandidate" bare :icon="UsersRound" class="py-20">
             从左侧选择一位候选人查看详情
-            <template #hint>含个人资料与完整面试过程记录</template>
           </EmptyState>
 
           <template v-else>
@@ -391,15 +387,10 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                 </div>
 
                 <p v-else-if="messages.length === 0" class="text-sm text-muted-foreground">
-                  暂无面试记录{{ selectedCandidate.status !== 'COMPLETED' ? '（面试进行中可在房间内实时记录）' : '' }}
+                  暂无面试记录
                 </p>
 
                 <MessageTranscript v-else :messages="messages" />
-
-                <!-- 权限提示：管理动作在候选人管理页 -->
-                <p v-if="hasPermission(PERMISSIONS.CANDIDATES_MANAGE)" class="pt-4 text-xs text-muted-foreground">
-                  需要{{ selectedCandidate.status === 'NOT_CHECKED_IN' ? '签到' : '编辑 / 重置' }}？前往「候选人管理」。
-                </p>
               </CardContent>
             </Card>
           </template>
