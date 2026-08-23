@@ -41,6 +41,8 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	// 候选人（浏览任意登录，操作按权限）
 	authed.GET("/candidates", h.listCandidates)
 	authed.GET("/candidates/:id", h.getCandidate)
+	// 候选人面试记录归档（按候选人维度，完成后仍可查；任意登录用户可读 —— 查看与管理分离）
+	authed.GET("/candidates/:id/messages", h.listCandidateMessages)
 	authed.POST("/candidates", h.require(dsmodel.PermCandidatesCreate), h.createCandidate)
 	authed.POST("/candidates/:id/checkin", h.require(dsmodel.PermCandidatesCheckin), h.checkin)
 	authed.PUT("/candidates/:id", h.require(dsmodel.PermCandidatesManage), h.updateCandidate)
@@ -146,6 +148,22 @@ func (h *HTTPServer) getCandidate(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// listCandidateMessages 返回候选人的历史面试记录（消息按候选人归档，
+// 与房间解绑无关：候选人完成/换房后仍可回看全过程）。
+func (h *HTTPServer) listCandidateMessages(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	if _, err := h.st.GetCandidate(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	out, err := h.st.ListMessagesAfter(c.Request.Context(), id, 0)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
 }
 
 type createCandidateReq struct {

@@ -445,6 +445,115 @@ func TestSignedInBroadcastsToAllRooms(t *testing.T) {
 	t.Fatalf("room B should receive candidate_signed_in global event")
 }
 
+// TestCandidateTranscriptArchivedAfterComplete 验证：候选人完成面试后房间虽已解绑，
+// 其面试过程消息仍按候选人归档，可经 GET /api/candidates/:id/messages 回看；
+// 查看与管理分离 —— 归档对任意登录用户可读（无权限的普通用户也可查看）。
+func TestCandidateTranscriptArchivedAfterComplete(t *testing.T) {
+	r := newTestApp(t)
+
+	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	// 准备：候选人签到 → 建房 → 拉取 → 加入成员
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"甲","profile":"后端"}`, token)
+	candID := int(out["id"].(float64))
+	doJSON(t, r, "POST", "/api/candidates/"+itoa(candID)+"/checkin", "", token)
+	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
+	roomID := int(out["id"].(float64))
+	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/pull_candidate", `{"candidate_id":`+itoa(candID)+`}`, token)
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	adminID := int(out["user"].(map[string]any)["id"].(float64))
+	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/members", `{"user_id":`+itoa(adminID)+`}`, token)
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/room/" + itoa(roomID)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	readReply := func(reqID string) map[string]any {
+		t.Helper()
+		for i := 0; i < 20; i++ {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			var env map[string]any
+			if err := conn.ReadJSON(&env); err != nil {
+				t.Fatalf("read ws: %v", err)
+			}
+			if env["type"] == "reply" && env["req_id"] == reqID {
+				return env
+			}
+		}
+		t.Fatalf("reply %s not received", reqID)
+		return nil
+	}
+	sendOp := func(reqID, op string, data map[string]any) map[string]any {
+		t.Helper()
+		if data == nil {
+			data = map[string]any{}
+		}
+		if err := conn.WriteJSON(map[string]any{"op": op, "req_id": reqID, "data": data}); err != nil {
+			t.Fatalf("write %s: %v", op, err)
+		}
+		return readReply(reqID)
+	}
+
+	// auth → 推进 IN_PROGRESS → 发两条记录 → 推进 COMPLETED
+	if d := sendOp("a1", "auth", map[string]any{"token": token}); d == nil {
+		t.Fatalf("unreachable")
+	} else if ok, _ := d["data"].(map[string]any)["ok"].(bool); !ok {
+		t.Fatalf("auth failed: %v", d)
+	}
+	sendOp("m1", "move_phase", map[string]any{"to": "IN_PROGRESS"})
+	sendOp("s1", "send_msg", map[string]any{"content": "自我介绍与项目经历"})
+	sendOp("s2", "send_msg", map[string]any{"content": "算法题通过"})
+	sendOp("m2", "move_phase", map[string]any{"to": "COMPLETED"})
+
+	// 完成后：归档接口返回全过程消息（按 id 升序，含发送者资料）
+	code, out := doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("get transcript: got %d %v", code, out)
+	}
+	items, _ := out["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("transcript should have 2 messages: %v", out)
+	}
+	first, _ := items[0].(map[string]any)
+	if first["content"] != "自我介绍与项目经历" {
+		t.Fatalf("transcript order/content mismatch: %v", items)
+	}
+	sender, _ := first["sender"].(map[string]any)
+	if sender == nil || sender["username"] != "admin" {
+		t.Fatalf("sender should be preloaded: %v", first)
+	}
+
+	// 只读角色（rooms.view）可查看归档
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"viewer","description":"","permissions":["rooms.view"]}`, token)
+	viewerRole := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"viewer1","name":"","password":"pass","role_ids":[`+itoa(viewerRole)+`]}`, token)
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"viewer1","password":"pass"}`, "")
+	vToken := out["token"].(string)
+	if code, _ := doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", vToken); code != http.StatusOK {
+		t.Fatalf("viewer transcript: got %d", code)
+	}
+
+	// 无任何权限的普通用户也可查看归档（查看与管理分离）
+	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"nobody","name":"","password":"pass","role_ids":[]}`, token)
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"nobody","password":"pass"}`, "")
+	nToken := out["token"].(string)
+	if code, _ := doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", nToken); code != http.StatusOK {
+		t.Fatalf("no-perm transcript: got %d", code)
+	}
+
+	// 不存在的候选人 → 404
+	if code, _ := doJSON(t, r, "GET", "/api/candidates/9999/messages", "", token); code != http.StatusNotFound {
+		t.Fatalf("missing candidate transcript: got %d", code)
+	}
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

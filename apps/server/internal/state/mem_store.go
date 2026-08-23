@@ -194,7 +194,9 @@ func (s *MemStateStore) ListCandidates(ctx context.Context, status dsmodel.Candi
 
 func (s *MemStateStore) ListMessagesAfter(ctx context.Context, candidateID uint64, afterID uint64) ([]*dsmodel.Message, error) {
 	var out []*dsmodel.Message
+	// 预加载 Sender：归档查看需展示面试官姓名；sender 已删时为 nil（前端显示「已删除用户」）。
 	err := s.db.WithContext(ctx).
+		Preload("Sender").
 		Where("candidate_id = ? AND id > ?", candidateID, afterID).
 		Order("id asc").
 		Find(&out).Error
