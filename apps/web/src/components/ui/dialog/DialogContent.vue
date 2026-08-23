@@ -11,12 +11,29 @@ import {
 } from 'reka-ui'
 import { cn } from '@/lib/utils'
 
-// 关键：显式声明 class prop 并合入 cn —— 否则视图传入的 class（如 sm:max-w-[425px]）
-// 会经 attrs 落到 DialogPortal 而非内容面板，导致所有弹窗宽度退化为默认 max-w-lg。
-const props = defineProps<DialogContentProps & { class?: HTMLAttributes['class'] }>()
+/**
+ * 弹窗内容尺寸档（统一原先视图里散落的 sm:max-w-[380~480px] 魔法数）：
+ * sm=384px（确认/单字段表单）、md=448px（常规表单）、lg=512px（宽表单）。
+ * 显式 class 仍可覆盖（twMerge 后写优先）。
+ */
+const sizeClass = {
+  sm: 'sm:max-w-sm',
+  md: 'sm:max-w-md',
+  lg: 'sm:max-w-lg',
+} as const
+
+// 关键：显式声明 class prop 并合入 cn —— 否则视图传入的 class
+// 会经 attrs 落到 DialogPortal 而非内容面板，导致弹窗宽度退化为默认。
+const props = defineProps<
+  DialogContentProps & {
+    class?: HTMLAttributes['class']
+    /** 内容面板最大宽度档位，默认 md。 */
+    size?: keyof typeof sizeClass
+  }
+>()
 const emits = defineEmits<DialogContentEmits>()
 
-const { class: _class, ...delegated } = props
+const { class: _class, size: _size, ...delegated } = props
 const forwarded = useForwardPropsEmits(delegated, emits)
 </script>
 
@@ -30,6 +47,7 @@ const forwarded = useForwardPropsEmits(delegated, emits)
       :class="
         cn(
           'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg',
+          sizeClass[props.size ?? 'md'],
           props.class,
         )
       "
