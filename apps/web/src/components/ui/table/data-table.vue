@@ -34,7 +34,11 @@ const table = useTable({
         </TableHeader>
         <TableBody>
           <template v-if="table.getRowModel().rows?.length">
-            <TableRow v-for="row in table.getRowModel().rows" :key="row.id">
+            <TableRow
+              v-for="row in table.getRowModel().rows"
+              :key="row.id"
+              class="h-12"
+            >
               <TableCell v-for="cell in row.getVisibleCells()" :key="cell.id">
                 <FlexRender :cell="cell" />
               </TableCell>
