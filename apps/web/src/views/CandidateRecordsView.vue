@@ -7,7 +7,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ExternalLink, RefreshCw, SearchX, UsersRound, X } from 'lucide-vue-next'
+import { ArrowLeft, ExternalLink, RefreshCw, SearchX, SlidersHorizontal, UsersRound, X } from 'lucide-vue-next'
 
 import { candidateApi } from '@/api/http'
 import { formatDateTime } from '@/lib/format'
@@ -17,10 +17,10 @@ import { cn } from '@/lib/utils'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Avatar, AvatarFallback, avatarVariants } from '@/components/ui/avatar'
 import EmptyState from '@/components/app/EmptyState.vue'
@@ -39,6 +39,8 @@ const error = ref('')
 const keyword = ref('')
 /** 状态筛选：'' = 全部。 */
 const statusFilter = ref<'' | (typeof CANDIDATE_STATUSES)[number]>('')
+/** 筛选浮层开关。 */
+const filterOpen = ref(false)
 /** 移动端：列表 / 详情两段式切换（桌面端恒为分栏，该值不影响 lg 以上布局）。 */
 const showDetail = ref(false)
 
@@ -194,59 +196,74 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-hidden lg:flex-row">
-    <!-- 左侧：候选人名册 -->
+  <!-- 整体居中并限制最大宽度（max-w-content 语义档位），左右分栏 -->
+  <div class="mx-auto flex h-full w-full max-w-content overflow-hidden">
+    <!-- 左侧：候选人名册（无边框、底色与右侧一致） -->
     <aside
-      :class="cn(asideClass, 'h-full min-w-0 shrink-0 flex-col border-b lg:w-80 lg:border-b-0 lg:border-r')"
+      :class="cn(asideClass, 'h-full min-w-0 shrink-0 flex-col lg:w-80')"
       aria-label="候选人名册"
     >
-      <div class="space-y-3 border-b p-4">
-        <div class="flex items-center justify-between gap-2">
-          <h1 class="flex items-center gap-2 text-base font-semibold tracking-tight">
-            <UsersRound class="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-            候选人
-          </h1>
-          <Button variant="ghost" size="icon" aria-label="刷新列表" :disabled="loading" @click="load">
+      <!-- 紧凑工具条：标题 + 结果数 + 筛选浮层 + 刷新 -->
+      <div class="flex items-center gap-2 p-3">
+        <h1 class="flex min-w-0 items-center gap-2 truncate text-base font-semibold tracking-tight">
+          <UsersRound class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          候选人
+        </h1>
+        <span class="shrink-0 text-xs text-muted-foreground" aria-live="polite">
+          {{ filtered.length }} / {{ candidates.length }}
+        </span>
+        <span class="ml-auto flex shrink-0 items-center gap-1">
+          <Popover :open="filterOpen" @update:open="filterOpen = $event">
+            <PopoverTrigger as-child>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-8 w-8"
+                :class="hasFilter ? 'text-primary' : ''"
+                aria-label="筛选候选人"
+              >
+                <SlidersHorizontal class="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent class="w-72">
+              <div class="space-y-3">
+                <SearchInput v-model="keyword" full placeholder="搜索姓名 / 简介…" />
+                <Select
+                  :model-value="statusFilter || 'ALL'"
+                  @update:model-value="statusFilter = $event === 'ALL' ? '' : ($event as any)"
+                >
+                  <SelectTrigger class="w-full" aria-label="按状态筛选">
+                    <SelectValue placeholder="全部状态" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">全部状态</SelectItem>
+                    <SelectItem v-for="s in CANDIDATE_STATUSES" :key="s" :value="s">
+                      {{ STATUS_PRESENTATION[s].label }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  v-if="hasFilter"
+                  variant="ghost"
+                  size="sm"
+                  class="w-full gap-1 text-muted-foreground"
+                  @click="clearFilters"
+                >
+                  <X class="h-3.5 w-3.5" aria-hidden="true" />
+                  清除筛选
+                </Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+          <Button variant="ghost" size="icon" class="h-8 w-8" aria-label="刷新列表" :disabled="loading" @click="load">
             <RefreshCw :class="loading ? 'animate-spin' : ''" aria-hidden="true" />
           </Button>
-        </div>
-        <SearchInput v-model="keyword" full placeholder="搜索姓名 / 简介…" />
-        <Select
-          :model-value="statusFilter || 'ALL'"
-          @update:model-value="statusFilter = $event === 'ALL' ? '' : ($event as any)"
-        >
-          <SelectTrigger class="w-full" aria-label="按状态筛选">
-            <SelectValue placeholder="全部状态" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="ALL">全部状态</SelectItem>
-            <SelectItem v-for="s in CANDIDATE_STATUSES" :key="s" :value="s">
-              {{ STATUS_PRESENTATION[s].label }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      <!-- 结果统计条 -->
-      <div class="flex items-center justify-between gap-2 border-b px-4 py-2 text-xs text-muted-foreground">
-        <span aria-live="polite">
-          {{ hasFilter ? `筛选出 ${filtered.length} / ${candidates.length} 位` : `共 ${candidates.length} 位候选人` }}
         </span>
-        <button
-          v-if="hasFilter"
-          type="button"
-          class="inline-flex items-center gap-1 rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label="清除筛选"
-          @click="clearFilters"
-        >
-          <X class="h-3.5 w-3.5" aria-hidden="true" />
-          清除筛选
-        </button>
       </div>
 
       <!-- 名册滚动区 -->
       <ScrollArea class="min-h-0 flex-1">
-        <div ref="rosterEl" role="listbox" aria-label="候选人列表" class="p-2" @keydown="onRosterKeydown">
+        <div ref="rosterEl" role="listbox" aria-label="候选人列表" class="space-y-1 p-2" @keydown="onRosterKeydown">
           <!-- 加载骨架屏 -->
           <div v-if="loading && candidates.length === 0" class="space-y-2 p-2" aria-busy="true">
             <Skeleton v-for="i in 5" :key="i" class="h-14 w-full rounded-md" />
@@ -298,13 +315,13 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
       </ScrollArea>
     </aside>
 
-    <!-- 右侧：详情 + 面试记录 -->
+    <!-- 右侧：详情 + 面试记录（无边框、留白给主功能） -->
     <section
       :class="cn(detailClass, 'h-full min-w-0 flex-1 flex-col')"
       aria-label="候选人详情"
     >
       <!-- 移动端返回栏 -->
-      <div class="flex items-center gap-2 border-b px-4 py-2 lg:hidden">
+      <div class="flex items-center gap-2 px-4 py-2 lg:hidden">
         <Button variant="ghost" size="sm" aria-label="返回候选人列表" @click="showDetail = false">
           <ArrowLeft aria-hidden="true" />
           返回列表
@@ -312,14 +329,14 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
       </div>
 
       <ScrollArea class="min-h-0 flex-1">
-        <div class="mx-auto max-w-3xl space-y-6 px-4 py-6">
+        <div class="mx-auto max-w-3xl space-y-8 px-4 py-6">
           <!-- 未选择 -->
           <EmptyState v-if="!selectedCandidate" bare :icon="UsersRound" class="py-20">
             从左侧选择一位候选人查看详情
           </EmptyState>
 
           <template v-else>
-            <!-- 资料卡 -->
+            <!-- 资料卡：头像 + 姓名 + 状态 + 直达房间 + 元信息 -->
             <Card>
               <CardHeader class="flex-row items-center gap-4 space-y-0">
                 <Avatar :class="avatarVariants({ size: 'lg' })" aria-hidden="true">
@@ -332,11 +349,10 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                       {{ STATUS_PRESENTATION[selectedCandidate.status].label }}
                     </Badge>
                   </div>
-                  <CardDescription class="line-clamp-2">
+                  <p class="line-clamp-2 text-sm text-muted-foreground">
                     {{ selectedCandidate.profile || '暂无个人简介' }}
-                  </CardDescription>
+                  </p>
                 </div>
-                <!-- 进行中的面试可直达房间 -->
                 <Button
                   v-if="selectedCandidate.room_id"
                   size="sm"
@@ -349,8 +365,7 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                 </Button>
               </CardHeader>
               <CardContent class="pt-0">
-                <Separator class="mb-4" />
-                <dl class="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                <dl class="flex flex-wrap gap-x-8 gap-y-2 pt-4 text-sm">
                   <div class="flex items-baseline gap-2">
                     <dt class="shrink-0 text-muted-foreground">房间</dt>
                     <dd v-if="selectedCandidate.room_id" class="font-mono">
@@ -368,7 +383,7 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
               </CardContent>
             </Card>
 
-            <!-- 面试过程记录 -->
+            <!-- 面试过程记录卡：主功能，留足空间 -->
             <Card>
               <CardHeader class="flex-row items-center justify-between space-y-0">
                 <CardTitle class="text-sm">面试记录</CardTitle>
@@ -376,7 +391,7 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                   {{ messages.length }} 条
                 </Badge>
               </CardHeader>
-              <CardContent>
+              <CardContent class="pt-0">
                 <div v-if="msgsLoading" class="space-y-2" aria-busy="true">
                   <Skeleton v-for="i in 3" :key="i" class="h-12 w-full rounded-xl" />
                 </div>
