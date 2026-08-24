@@ -76,7 +76,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 - **service**：`InterviewService` 业务编排；强制「先落库后广播」顺序。
 - **state**：`StateStore` 接口 + `MemStateStore` 实现。状态唯一性权威、原子写、转移动图、内存快照读；内部经 Gorm 落库。
 - **broadcast**：`Manager` 订阅事件流，按房间扇出到该房间所有 WS 写队列。
-- **model**：`User / Candidate / Room / RoomMember / Message` + 状态枚举/转移动图。
+- **model**：`User / Department / Candidate / Room / RoomMember / Message` + 状态枚举/转移动图。
 
 ---
 
@@ -84,7 +84,8 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 | 表 | 关键列 | 角色 |
 |---|---|---|
-| `users` | id, username(唯一), password_hash, name, token_version | 面试官（登录用户，登录名不可改） |
+| `users` | id, username(唯一), password_hash, name, department_id, token_version | 面试官（登录用户，登录名唯一，管理端可改） |
+| `departments` | id, name(唯一), description | 部门（面试官所属组织单元） |
 | `roles` | id, name(唯一), description | 角色（权限组，RBAC） |
 | `role_permissions` | role_id, permission（联合唯一） | 角色↔权限关联 |
 | `user_roles` | user_id, role_id（联合唯一） | 用户↔角色 M2M |

@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -386,9 +387,30 @@ func (s *MemStateStore) fillRoles(ctx context.Context, u *dsmodel.User) error {
 	return nil
 }
 
+// fillDepartment 单个用户补齐部门关联（department_id 为空则跳过）。
+func (s *MemStateStore) fillDepartment(ctx context.Context, u *dsmodel.User) error {
+	if u.DepartmentID == nil {
+		return nil
+	}
+	var d dsmodel.Department
+	if err := s.db.WithContext(ctx).First(&d, *u.DepartmentID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil // 部门已被删除，用户保持无部门展示
+		}
+		return err
+	}
+	u.Department = &d
+	return nil
+}
+
 func (s *MemStateStore) CreateUser(ctx context.Context, u *dsmodel.User, roleIDs []uint64) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if u.DepartmentID != nil {
+		if err := s.ensureDepartment(ctx, *u.DepartmentID); err != nil {
+			return 0, err
+		}
+	}
 	if err := s.db.WithContext(ctx).Create(u).Error; err != nil {
 		return 0, err
 	}
@@ -407,6 +429,9 @@ func (s *MemStateStore) GetUser(ctx context.Context, id uint64) (*dsmodel.User, 
 		return nil, err
 	}
 	if err := s.fillRoles(ctx, &u); err != nil {
+		return nil, err
+	}
+	if err := s.fillDepartment(ctx, &u); err != nil {
 		return nil, err
 	}
 	return &u, nil
@@ -429,14 +454,36 @@ func (s *MemStateStore) ListUsers(ctx context.Context, q string, limit, offset i
 		if err := s.fillRoles(ctx, out[i]); err != nil {
 			return nil, err
 		}
+		if err := s.fillDepartment(ctx, out[i]); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
 
-func (s *MemStateStore) UpdateUser(ctx context.Context, id uint64, name string, roleIDs []uint64) error {
+func (s *MemStateStore) UpdateUser(ctx context.Context, id uint64, username, name string, departmentID *uint64, roleIDs []uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.db.WithContext(ctx).Model(&dsmodel.User{}).Where("id = ?", id).Update("name", name).Error; err != nil {
+	if departmentID != nil {
+		if err := s.ensureDepartment(ctx, *departmentID); err != nil {
+			return err
+		}
+	}
+	// 用户名不可为空；且不可与其他用户冲突（登录凭证唯一）。
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return &Error{Code: "username_required", Msg: "用户名不能为空"}
+	}
+	var dup int64
+	if err := s.db.WithContext(ctx).Model(&dsmodel.User{}).
+		Where("username = ? AND id <> ?", username, id).Count(&dup).Error; err != nil {
+		return err
+	}
+	if dup > 0 {
+		return &Error{Code: "username_taken", Msg: "用户名已被使用"}
+	}
+	if err := s.db.WithContext(ctx).Model(&dsmodel.User{}).Where("id = ?", id).
+		Update("username", username).Update("name", name).Update("department_id", departmentID).Error; err != nil {
 		return err
 	}
 	return s.setRolesLocked(ctx, id, roleIDs)
@@ -530,6 +577,85 @@ func (s *MemStateStore) DeleteRole(ctx context.Context, id uint64) error {
 		return err
 	}
 	return s.db.WithContext(ctx).Delete(&dsmodel.Role{}, id).Error
+}
+
+//---- 部门管理 ----
+
+func (s *MemStateStore) ListDepartments(ctx context.Context) ([]*dsmodel.Department, error) {
+	var out []*dsmodel.Department
+	if err := s.db.WithContext(ctx).Order("id asc").Find(&out).Error; err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	// 部门下面试官数（按 department_id 分组统计）。
+	var counts []struct {
+		DepartmentID uint64
+		Cnt          int64
+	}
+	if err := s.db.WithContext(ctx).Model(&dsmodel.User{}).
+		Select("department_id, count(*) as cnt").
+		Where("department_id IS NOT NULL").
+		Group("department_id").Scan(&counts).Error; err != nil {
+		return nil, err
+	}
+	byDept := make(map[uint64]int64, len(counts))
+	for _, c := range counts {
+		byDept[c.DepartmentID] = c.Cnt
+	}
+	for _, d := range out {
+		d.MemberCount = byDept[d.ID]
+	}
+	return out, nil
+}
+
+func (s *MemStateStore) CreateDepartment(ctx context.Context, name, desc string) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d := &dsmodel.Department{Name: name, Description: desc}
+	if err := s.db.WithContext(ctx).Create(d).Error; err != nil {
+		return 0, err
+	}
+	return d.ID, nil
+}
+
+func (s *MemStateStore) UpdateDepartment(ctx context.Context, id uint64, name, desc string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.db.WithContext(ctx).Model(&dsmodel.Department{}).Where("id = ?", id).
+		Updates(map[string]any{"name": name, "description": desc}).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *MemStateStore) DeleteDepartment(ctx context.Context, id uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cnt int64
+	if err := s.db.WithContext(ctx).Model(&dsmodel.User{}).Where("department_id = ?", id).Count(&cnt).Error; err != nil {
+		return err
+	}
+	if cnt > 0 {
+		return &Error{Code: "department_in_use", Msg: "部门仍被面试官使用，无法删除"}
+	}
+	if err := s.db.WithContext(ctx).Delete(&dsmodel.Department{}, id).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureDepartment 校验部门存在（供用户创建/更新引用校验）。
+func (s *MemStateStore) ensureDepartment(ctx context.Context, id uint64) error {
+	var cnt int64
+	if err := s.db.WithContext(ctx).Model(&dsmodel.Department{}).Where("id = ?", id).Count(&cnt).Error; err != nil {
+		return err
+	}
+	if cnt == 0 {
+		return &Error{Code: "department_not_found", Msg: "部门不存在"}
+	}
+	return nil
 }
 
 //---- 候选人管理 ----

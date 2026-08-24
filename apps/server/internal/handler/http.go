@@ -68,6 +68,12 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	authed.POST("/roles", h.require(dsmodel.PermUsersManage), h.createRole)
 	authed.PUT("/roles/:id", h.require(dsmodel.PermUsersManage), h.updateRole)
 	authed.DELETE("/roles/:id", h.require(dsmodel.PermUsersManage), h.deleteRole)
+
+	// 部门（users.manage）
+	authed.GET("/departments", h.require(dsmodel.PermUsersManage), h.listDepartments)
+	authed.POST("/departments", h.require(dsmodel.PermUsersManage), h.createDepartment)
+	authed.PUT("/departments/:id", h.require(dsmodel.PermUsersManage), h.updateDepartment)
+	authed.DELETE("/departments/:id", h.require(dsmodel.PermUsersManage), h.deleteDepartment)
 }
 
 //---- 认证 ----
@@ -344,10 +350,11 @@ func (h *HTTPServer) listUsers(c *gin.Context) {
 }
 
 type createUserReq struct {
-	Username string   `json:"username"`
-	Name     string   `json:"name"`
-	Password string   `json:"password"`
-	RoleIDs  []uint64 `json:"role_ids"`
+	Username     string   `json:"username"`
+	Name         string   `json:"name"`
+	Password     string   `json:"password"`
+	RoleIDs      []uint64 `json:"role_ids"`
+	DepartmentID *uint64  `json:"department_id"`
 }
 
 func (h *HTTPServer) createUser(c *gin.Context) {
@@ -365,6 +372,7 @@ func (h *HTTPServer) createUser(c *gin.Context) {
 		Username:     req.Username,
 		Name:         req.Name,
 		PasswordHash: hash,
+		DepartmentID: req.DepartmentID,
 	}, req.RoleIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -378,8 +386,10 @@ func (h *HTTPServer) createUser(c *gin.Context) {
 }
 
 type updateUserReq struct {
-	Name    string   `json:"name"`
-	RoleIDs []uint64 `json:"role_ids"`
+	Username     string   `json:"username"`
+	Name         string   `json:"name"`
+	RoleIDs      []uint64 `json:"role_ids"`
+	DepartmentID *uint64  `json:"department_id"`
 }
 
 func (h *HTTPServer) updateUser(c *gin.Context) {
@@ -389,8 +399,9 @@ func (h *HTTPServer) updateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	if err := h.svc.UpdateUser(c.Request.Context(), id, req.Name, req.RoleIDs); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	if err := h.svc.UpdateUser(c.Request.Context(), id, req.Username, req.Name, req.DepartmentID, req.RoleIDs); err != nil {
+		status, code := stateErr(err)
+		c.JSON(status, gin.H{"error": code})
 		return
 	}
 	if err := h.auth.ReloadUser(id); err != nil {
@@ -513,6 +524,60 @@ func (h *HTTPServer) deleteRole(c *gin.Context) {
 	}
 	if err := h.auth.ReloadAll(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+//---- 部门管理 ----
+
+func (h *HTTPServer) listDepartments(c *gin.Context) {
+	out, err := h.svc.ListDepartments(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
+}
+
+type departmentReq struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+func (h *HTTPServer) createDepartment(c *gin.Context) {
+	var req departmentReq
+	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
+		return
+	}
+	id, err := h.svc.CreateDepartment(c.Request.Context(), req.Name, req.Description)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"id": id})
+}
+
+func (h *HTTPServer) updateDepartment(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	var req departmentReq
+	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
+		return
+	}
+	if err := h.svc.UpdateDepartment(c.Request.Context(), id, req.Name, req.Description); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *HTTPServer) deleteDepartment(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err := h.svc.DeleteDepartment(c.Request.Context(), id); err != nil {
+		status, code := stateErr(err)
+		c.JSON(status, gin.H{"error": code})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})

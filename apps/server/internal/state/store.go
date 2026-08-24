@@ -50,12 +50,12 @@ type StateStore interface {
 
 	// CreateUser 新建面试官（含角色分配），返回用户 id。
 	CreateUser(ctx context.Context, u *dsmodel.User, roleIDs []uint64) (uint64, error)
-	// GetUser 返回用户（含角色）。
+	// GetUser 返回用户（含角色、部门）。
 	GetUser(ctx context.Context, id uint64) (*dsmodel.User, error)
-	// ListUsers 分页列出用户（可按 username/name 关键词搜索），每项含角色。
+	// ListUsers 分页列出用户（可按 username/name 关键词搜索），每项含角色、部门。
 	ListUsers(ctx context.Context, q string, limit, offset int) ([]*dsmodel.User, error)
-	// UpdateUser 更新用户显示名与角色分配。
-	UpdateUser(ctx context.Context, id uint64, name string, roleIDs []uint64) error
+	// UpdateUser 更新用户名（登录凭证）、显示名、部门与角色分配。
+	UpdateUser(ctx context.Context, id uint64, username, name string, departmentID *uint64, roleIDs []uint64) error
 	// SetUserRoles 覆盖用户的角色分配。
 	SetUserRoles(ctx context.Context, userID uint64, roleIDs []uint64) error
 	// ResetUserPassword 重置用户密码（bump token_version，旧 token 即时失效）。
@@ -71,6 +71,17 @@ type StateStore interface {
 	UpdateRole(ctx context.Context, id uint64, name, desc string, perms []string) error
 	// DeleteRole 删除角色（被用户引用时拒绝）。
 	DeleteRole(ctx context.Context, id uint64) error
+
+	// ---- 部门管理 ----
+
+	// ListDepartments 列出全部部门（含面试官数）。
+	ListDepartments(ctx context.Context) ([]*dsmodel.Department, error)
+	// CreateDepartment 新建部门，返回 id。
+	CreateDepartment(ctx context.Context, name, desc string) (uint64, error)
+	// UpdateDepartment 更新部门名称与描述。
+	UpdateDepartment(ctx context.Context, id uint64, name, desc string) error
+	// DeleteDepartment 删除部门（仍有面试官归属时拒绝）。
+	DeleteDepartment(ctx context.Context, id uint64) error
 
 	// ---- 候选人管理 ----
 

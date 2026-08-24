@@ -38,6 +38,7 @@ func newTestApp(t *testing.T) *gin.Engine {
 		&dsmodel.User{}, &dsmodel.Candidate{}, &dsmodel.Room{},
 		&dsmodel.RoomMember{}, &dsmodel.Message{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
+		&dsmodel.Department{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -551,6 +552,84 @@ func TestCandidateTranscriptArchivedAfterComplete(t *testing.T) {
 	// 不存在的候选人 → 404
 	if code, _ := doJSON(t, r, "GET", "/api/candidates/9999/messages", "", token); code != http.StatusNotFound {
 		t.Fatalf("missing candidate transcript: got %d", code)
+	}
+}
+
+// TestDepartmentManageAndPermission 部门管理接口：admin 可 CRUD，无 users.manage 权限者被拒。
+func TestDepartmentManageAndPermission(t *testing.T) {
+	r := newTestApp(t)
+
+	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	// 默认部门已由种子创建，admin 归属其中
+	_, out = doJSON(t, r, "GET", "/api/me", "", token)
+	if user, _ := out["user"].(map[string]any); user["department"] == nil {
+		t.Fatalf("admin should have a department: %v", out)
+	}
+
+	// 创建部门
+	code, out := doJSON(t, r, "POST", "/api/departments", `{"name":"前端组","description":"负责前端岗位"}`, token)
+	if code != http.StatusCreated {
+		t.Fatalf("create department: got %d %v", code, out)
+	}
+	deptID := int(out["id"].(float64))
+
+	// 列出部门
+	code, out = doJSON(t, r, "GET", "/api/departments", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("list departments: got %d", code)
+	}
+	items, _ := out["items"].([]any)
+	found := false
+	for _, it := range items {
+		if d, _ := it.(map[string]any); int(d["id"].(float64)) == deptID && d["name"] == "前端组" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("created department not listed: %v", out)
+	}
+
+	// 创建用户并归属部门
+	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"fe1","name":"前端一","password":"pass","role_ids":[],"department_id":`+itoa(deptID)+`}`, token)
+	uid := int(out["id"].(float64))
+	code, out = doJSON(t, r, "GET", "/api/users", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("list users: got %d", code)
+	}
+	users, _ := out["items"].([]any)
+	userFound := false
+	for _, it := range users {
+		if u, _ := it.(map[string]any); int(u["id"].(float64)) == uid {
+			if d, _ := u["department"].(map[string]any); d == nil || int(d["id"].(float64)) != deptID {
+				t.Fatalf("user department not filled: %v", u)
+			}
+			userFound = true
+		}
+	}
+	if !userFound {
+		t.Fatalf("created user not listed: %v", out)
+	}
+
+	// 删除被引用部门 → 400
+	code, out = doJSON(t, r, "DELETE", "/api/departments/"+itoa(deptID), "", token)
+	if code != http.StatusBadRequest {
+		t.Fatalf("delete in-use department: got %d %v", code, out)
+	}
+
+	// 无 users.manage 权限用户（interviewer 角色）访问部门接口 → 403
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	code, itvRole := doJSON(t, r, "POST", "/api/roles", `{"name":"itv2","description":"","permissions":["rooms.view"]}`, token)
+	if code != http.StatusCreated {
+		t.Fatalf("create role: got %d %v", code, itvRole)
+	}
+	roleID := int(itvRole["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"itv2u","name":"","password":"pass","role_ids":[`+itoa(roleID)+`]}`, token)
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"itv2u","password":"pass"}`, "")
+	tokenB := out["token"].(string)
+	if code, _ := doJSON(t, r, "GET", "/api/departments", "", tokenB); code != http.StatusForbidden {
+		t.Fatalf("interviewer list departments: got %d", code)
 	}
 }
 

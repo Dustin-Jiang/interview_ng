@@ -94,7 +94,7 @@ func (m *Manager) Authenticate(token string) (uint64, error) {
 // Me 返回当前用户资料 + 角色 + 权限并集（供 /api/me 与前端权限驱动 UI）。
 func (m *Manager) Me(ctx context.Context, userID uint64) (*UserProfile, error) {
 	var u dsmodel.User
-	if e := m.db.WithContext(ctx).First(&u, userID).Error; e != nil {
+	if e := m.db.WithContext(ctx).Preload("Department").First(&u, userID).Error; e != nil {
 		if errors.Is(e, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFoundUser
 		}

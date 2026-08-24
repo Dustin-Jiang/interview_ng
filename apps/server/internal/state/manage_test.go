@@ -281,8 +281,7 @@ func TestEmptyRoomRejectsMessage(t *testing.T) {
 }
 
 // TestUserRoleLifecycle 用户创建/角色分配/改密版本号递增。
-func TestUserRoleLifecycle(t *testing.T) {
-	ctx := context.Background()
+func TestUserRoleLifecycle(t *testing.T) {	ctx := context.Background()
 	st := newTestStore(t)
 
 	roleID, err := st.CreateRole(ctx, "auditor", "审计", []string{dsmodel.PermRoomsView})
@@ -319,4 +318,87 @@ func TestUserRoleLifecycle(t *testing.T) {
 	if err := st.ResetUserPassword(ctx, uid, "h2"); err != nil {
 		t.Fatalf("reset password: %v", err)
 	}
+}
+
+// TestDepartmentLifecycle 部门创建/用户归属/删除限制。
+func TestDepartmentLifecycle(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	deptID, err := st.CreateDepartment(ctx, "后端组", "负责后端岗位")
+	if err != nil {
+		t.Fatalf("create department: %v", err)
+	}
+
+	// 用户创建时归属部门，GetUser/ListUsers 均带出部门
+	uid, err := st.CreateUser(ctx, &dsmodel.User{Username: "u1", Name: "张三", PasswordHash: "x", DepartmentID: &deptID}, nil)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	u, _ := st.GetUser(ctx, uid)
+	if u.Department == nil || u.Department.Name != "后端组" {
+		t.Fatalf("department not filled: %+v", u.Department)
+	}
+	users, _ := st.ListUsers(ctx, "", 50, 0)
+	if len(users) != 1 || users[0].Department == nil || users[0].Department.ID != deptID {
+		t.Fatalf("list users department: %+v", users)
+	}
+
+	// ListDepartments 返回面试官数
+	depts, _ := st.ListDepartments(ctx)
+	if len(depts) != 1 || depts[0].MemberCount != 1 {
+		t.Fatalf("department member count: %+v", depts)
+	}
+
+	// 删除被引用部门应拒绝
+	if err := st.DeleteDepartment(ctx, deptID); err == nil {
+		t.Fatalf("expected department_in_use error")
+	}
+
+	// 更换部门后原部门可删
+	if err := st.UpdateUser(ctx, uid, "u1", "张三", nil, nil); err != nil {
+		t.Fatalf("update user: %v", err)
+	}
+	if err := st.DeleteDepartment(ctx, deptID); err != nil {
+		t.Fatalf("delete department: %v", err)
+	}
+
+	// 引用不存在的部门创建用户应拒绝
+	nonexist := uint64(9999)
+	if _, err := st.CreateUser(ctx, &dsmodel.User{Username: "u2", Name: "李四", PasswordHash: "x", DepartmentID: &nonexist}, nil); err == nil {
+		t.Fatalf("expected department_not_found error")
+	}
+}
+
+// TestUpdateUserUsername 修改用户名（登录凭证）：可改、空名拒绝、与它人冲突拒绝。
+func TestUpdateUserUsername(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	uidA, _ := st.CreateUser(ctx, &dsmodel.User{Username: "alice", Name: "甲", PasswordHash: "x"}, nil)
+	uidB, _ := st.CreateUser(ctx, &dsmodel.User{Username: "bob", Name: "乙", PasswordHash: "x"}, nil)
+
+	// 改为新用户名成功，GetUser 可见
+	if err := st.UpdateUser(ctx, uidA, "alice_new", "甲", nil, nil); err != nil {
+		t.Fatalf("update username: %v", err)
+	}
+	u, _ := st.GetUser(ctx, uidA)
+	if u.Username != "alice_new" {
+		t.Fatalf("username not updated: %s", u.Username)
+	}
+
+	// 空名拒绝
+	if err := st.UpdateUser(ctx, uidA, "  ", "甲", nil, nil); err == nil {
+		t.Fatalf("expected username_required error")
+	}
+
+	// 与他人冲突拒绝，且原用户名不变
+	if err := st.UpdateUser(ctx, uidA, "bob", "甲", nil, nil); err == nil {
+		t.Fatalf("expected username_taken error")
+	}
+	u, _ = st.GetUser(ctx, uidA)
+	if u.Username != "alice_new" {
+		t.Fatalf("username should be unchanged on conflict: %s", u.Username)
+	}
+	_ = uidB
 }

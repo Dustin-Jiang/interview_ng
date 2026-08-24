@@ -80,8 +80,8 @@ func (s *InterviewService) ListUsers(ctx context.Context, q string, limit, offse
 	return s.store.ListUsers(ctx, q, limit, offset)
 }
 
-func (s *InterviewService) UpdateUser(ctx context.Context, id uint64, name string, roleIDs []uint64) error {
-	return s.store.UpdateUser(ctx, id, name, roleIDs)
+func (s *InterviewService) UpdateUser(ctx context.Context, id uint64, username, name string, departmentID *uint64, roleIDs []uint64) error {
+	return s.store.UpdateUser(ctx, id, username, name, departmentID, roleIDs)
 }
 
 func (s *InterviewService) SetUserRoles(ctx context.Context, userID uint64, roleIDs []uint64) error {
@@ -110,6 +110,24 @@ func (s *InterviewService) UpdateRole(ctx context.Context, id uint64, name, desc
 
 func (s *InterviewService) DeleteRole(ctx context.Context, id uint64) error {
 	return s.store.DeleteRole(ctx, id)
+}
+
+// ---- 部门管理 ----
+
+func (s *InterviewService) ListDepartments(ctx context.Context) ([]*dsmodel.Department, error) {
+	return s.store.ListDepartments(ctx)
+}
+
+func (s *InterviewService) CreateDepartment(ctx context.Context, name, desc string) (uint64, error) {
+	return s.store.CreateDepartment(ctx, name, desc)
+}
+
+func (s *InterviewService) UpdateDepartment(ctx context.Context, id uint64, name, desc string) error {
+	return s.store.UpdateDepartment(ctx, id, name, desc)
+}
+
+func (s *InterviewService) DeleteDepartment(ctx context.Context, id uint64) error {
+	return s.store.DeleteDepartment(ctx, id)
 }
 
 // ---- 候选人管理 ----

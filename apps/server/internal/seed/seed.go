@@ -12,13 +12,14 @@ import (
 	"interview_ng/internal/rbac"
 )
 
-// adminRoleName / interviewerRoleName 预置角色名。
+// adminRoleName / interviewerRoleName 预置角色名；defaultDeptName 预置部门名。
 const (
 	adminRoleName       = "admin"
 	interviewerRoleName = "interviewer"
+	defaultDeptName     = "默认部门"
 )
 
-// Init 启动种子：无角色时创建 admin/interviewer；无用户时创建默认 admin。
+// Init 启动种子：无角色时创建 admin/interviewer；无部门时创建默认部门；无用户时创建默认 admin。
 // 完成后重载 RBAC 缓存，保证权限即时可用。
 func Init(ctx context.Context, db *gorm.DB, cache *rbac.Cache) error {
 	var roleCount int64
@@ -27,6 +28,15 @@ func Init(ctx context.Context, db *gorm.DB, cache *rbac.Cache) error {
 	}
 	if roleCount == 0 {
 		if err := seedRoles(ctx, db); err != nil {
+			return err
+		}
+	}
+	var deptCount int64
+	if err := db.WithContext(ctx).Model(&dsmodel.Department{}).Count(&deptCount).Error; err != nil {
+		return err
+	}
+	if deptCount == 0 {
+		if _, err := seedDefaultDepartment(ctx, db); err != nil {
 			return err
 		}
 	}
@@ -74,6 +84,7 @@ func seedRoles(ctx context.Context, db *gorm.DB) error {
 }
 
 // seedAdmin 创建默认 admin 账号（username=admin，密码取 ADMIN_INIT_PASSWORD，缺省 admin）。
+// 归属预置「默认部门」，保证每位面试官都有部门。
 func seedAdmin(ctx context.Context, db *gorm.DB) error {
 	pass := os.Getenv("ADMIN_INIT_PASSWORD")
 	if pass == "" {
@@ -83,7 +94,11 @@ func seedAdmin(ctx context.Context, db *gorm.DB) error {
 	if err != nil {
 		return err
 	}
-	admin := &dsmodel.User{Username: "admin", PasswordHash: hash, Name: "管理员"}
+	dept, err := seedDefaultDepartment(ctx, db)
+	if err != nil {
+		return err
+	}
+	admin := &dsmodel.User{Username: "admin", PasswordHash: hash, Name: "管理员", DepartmentID: &dept.ID}
 	if err := db.WithContext(ctx).Create(admin).Error; err != nil {
 		return err
 	}
@@ -95,6 +110,21 @@ func seedAdmin(ctx context.Context, db *gorm.DB) error {
 		return err
 	}
 	return db.WithContext(ctx).Create(&dsmodel.UserRole{UserID: admin.ID, RoleID: role.ID}).Error
+}
+
+// seedDefaultDepartment 无部门时创建默认部门；已存在则返回现有记录（幂等）。
+func seedDefaultDepartment(ctx context.Context, db *gorm.DB) (*dsmodel.Department, error) {
+	var dept dsmodel.Department
+	if err := db.WithContext(ctx).Where("name = ?", defaultDeptName).First(&dept).Error; err == nil {
+		return &dept, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	dept = dsmodel.Department{Name: defaultDeptName, Description: "系统默认部门"}
+	if err := db.WithContext(ctx).Create(&dept).Error; err != nil {
+		return nil, err
+	}
+	return &dept, nil
 }
 
 // DefaultAdminPassword 返回默认 admin 密码（供日志提示）。
