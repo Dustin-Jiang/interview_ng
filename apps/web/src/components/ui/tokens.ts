@@ -50,11 +50,11 @@ export type NavItemVariants = VariantProps<typeof navItemVariants>
  * interactive 态统一提供 hover 反馈与 focus-within 焦点环。
  */
 export const tileVariants = cva(
-  'rounded-xl border bg-card shadow-sm transition-colors',
+  'rounded-xl border bg-card transition-colors',
   {
     variants: {
       interactive: {
-        true: 'hover:bg-accent/40 hover:shadow focus-within:ring-2 focus-within:ring-ring',
+        true: 'hover:bg-accent/40 focus-within:ring-2 focus-within:ring-ring',
         false: '',
       },
     },
