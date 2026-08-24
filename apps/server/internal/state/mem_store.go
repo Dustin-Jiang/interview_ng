@@ -293,13 +293,23 @@ func (s *MemStateStore) AppendMessage(ctx context.Context, roomID, senderID uint
 	if err := s.db.WithContext(ctx).Create(msg).Error; err != nil {
 		return nil, err
 	}
+	// 实时事件携带发送者展示名，前端不必依赖二次查询即可显示面试官姓名。
+	senderName := ""
+	var u dsmodel.User
+	if err := s.db.WithContext(ctx).First(&u, senderID).Error; err == nil {
+		senderName = u.Name
+		if senderName == "" {
+			senderName = u.Username
+		}
+	}
 	ev := &Event{Type: EventMessageAppended, RoomID: roomID, MsgID: msg.ID,
 		Data: struct {
 			RoomID      uint64
 			CandidateID uint64
 			SenderID    uint64
+			SenderName  string
 			Content     string
-		}{roomID, *room.CandidateID, senderID, content}}
+		}{roomID, *room.CandidateID, senderID, senderName, content}}
 	s.emit(roomID, ev)
 	return ev, nil
 }

@@ -10,6 +10,7 @@ export interface AppendedEventData {
   RoomID?: number
   CandidateID?: number
   SenderID?: number
+  SenderName?: string
   Content?: string
 }
 
@@ -18,10 +19,16 @@ export function messageFromEvent(ev: ChanEvent): Message | null {
   if (ev.type !== 'message_appended') return null
   if (ev.msg_id && ev.msg_id <= 0) return null
   const d = (ev.data as AppendedEventData) ?? {}
+  let sender: Message['sender'] = undefined
+  if (d.SenderID != null && d.SenderName) {
+    // 实时事件携带发送者展示名，构造最小 sender 对象供展示姓名。
+    sender = { id: d.SenderID, username: d.SenderName, name: d.SenderName, created_at: '', updated_at: '' }
+  }
   return {
     id: ev.msg_id ?? 0,
     candidate_id: d.CandidateID ?? 0,
     sender_id: d.SenderID ?? null,
+    sender,
     content: d.Content ?? '',
     created_at: new Date().toISOString(),
   }
