@@ -42,6 +42,11 @@ export const router = createRouter({
           name: 'settings-roles',
           component: () => import('@/views/SettingsRolesView.vue'),
         },
+        {
+          path: 'departments',
+          name: 'settings-departments',
+          component: () => import('@/views/SettingsDepartmentsView.vue'),
+        },
       ],
     },
     {

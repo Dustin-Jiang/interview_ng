@@ -4,7 +4,7 @@
  * 鉴权：请求拦截器自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
  */
 import axios, { type AxiosRequestConfig } from 'axios'
-import type { Candidate, CandidateStatus, Message, Permission, Role, Room, User, UserProfile } from '@/models'
+import type { Candidate, CandidateStatus, Department, Message, Permission, Role, Room, User, UserProfile } from '@/models'
 
 /** 401 处理器：由 useAuth 注册（登出 + 跳登录页），避免循环依赖。 */
 let onUnauthorized: (() => void) | null = null
@@ -145,10 +145,10 @@ export const userApi = {
   list(params?: { q?: string; limit?: number; offset?: number }): Promise<{ items: User[] }> {
     return request({ url: '/users', params })
   },
-  create(body: { username: string; name: string; password: string; role_ids: number[] }): Promise<{ id: number }> {
+  create(body: { username: string; name: string; password: string; role_ids: number[]; department_id?: number | null }): Promise<{ id: number }> {
     return post('/users', body)
   },
-  update(id: number, body: { name: string; role_ids: number[] }): Promise<{ ok: boolean }> {
+  update(id: number, body: { username: string; name: string; role_ids: number[]; department_id?: number | null }): Promise<{ ok: boolean }> {
     return put(`/users/${id}`, body)
   },
   remove(id: number): Promise<{ ok: boolean }> {
@@ -171,5 +171,22 @@ export const roleApi = {
   },
   remove(id: number): Promise<{ ok: boolean }> {
     return del(`/roles/${id}`)
+  },
+}
+
+// ---- 部门管理 ----
+
+export const departmentApi = {
+  list(): Promise<{ items: Department[] }> {
+    return request('/departments')
+  },
+  create(body: { name: string; description?: string }): Promise<{ id: number }> {
+    return post('/departments', body)
+  },
+  update(id: number, body: { name: string; description?: string }): Promise<{ ok: boolean }> {
+    return put(`/departments/${id}`, body)
+  },
+  remove(id: number): Promise<{ ok: boolean }> {
+    return del(`/departments/${id}`)
   },
 }

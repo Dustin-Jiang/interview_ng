@@ -66,6 +66,10 @@ const quickLinks = computed(() => {
             <span>{{ user?.name || '-' }}</span>
           </div>
           <div class="flex items-center justify-between gap-3">
+            <span class="text-muted-foreground">部门</span>
+            <span>{{ user?.department?.name || '-' }}</span>
+          </div>
+          <div class="flex items-center justify-between gap-3">
             <span class="text-muted-foreground">用户 ID</span>
             <span class="font-mono">#{{ user?.id ?? '-' }}</span>
           </div>

@@ -17,12 +17,13 @@ import type { DataTableFeatures } from '@/components/ui/table/features'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import EmptyState from '@/components/app/EmptyState.vue'
 import PageShell from '@/components/app/PageShell.vue'
 import SearchInput from '@/components/app/SearchInput.vue'
 
-const { users, roles, loading, keyword, load, setKeyword, createUser, updateUser, deleteUser, resetUserPassword } = useUsers()
+const { users, roles, departments, loading, keyword, load, setKeyword, createUser, updateUser, deleteUser, resetUserPassword } = useUsers()
 const { currentUserId } = useAuth()
 
 onMounted(() => void load())
@@ -31,11 +32,11 @@ onMounted(() => void load())
 const userDialogOpen = ref(false)
 const editingUser = ref<User | null>(null)
 const savingUser = ref(false)
-const userForm = ref({ username: '', name: '', password: '', role_ids: [] as number[] })
+const userForm = ref({ username: '', name: '', password: '', role_ids: [] as number[], department_id: null as number | null })
 
 function openCreateUser() {
   editingUser.value = null
-  userForm.value = { username: '', name: '', password: '', role_ids: [] }
+  userForm.value = { username: '', name: '', password: '', role_ids: [], department_id: departments.value[0]?.id ?? null }
   savingUser.value = false
   userDialogOpen.value = true
 }
@@ -47,6 +48,7 @@ function openEditUser(u: User) {
     name: u.name ?? '',
     password: '',
     role_ids: (u.roles ?? []).map((r) => r.id),
+    department_id: u.department_id ?? null,
   }
   savingUser.value = false
   userDialogOpen.value = true
@@ -61,7 +63,12 @@ async function submitUser() {
   try {
     if (editingUser.value) {
       savingUser.value = true
-      await updateUser(editingUser.value.id, { name: userForm.value.name, role_ids: userForm.value.role_ids })
+      await updateUser(editingUser.value.id, {
+        username: userForm.value.username.trim(),
+        name: userForm.value.name,
+        role_ids: userForm.value.role_ids,
+        department_id: userForm.value.department_id,
+      })
       toast.success('已保存')
     } else {
       if (!userForm.value.password) {
@@ -74,6 +81,7 @@ async function submitUser() {
         name: userForm.value.name,
         password: userForm.value.password,
         role_ids: userForm.value.role_ids,
+        department_id: userForm.value.department_id,
       })
       toast.success('面试官已创建')
     }
@@ -156,6 +164,15 @@ const userColumns: ColumnDef<DataTableFeatures, User>[] = userColumnHelper.colum
     header: '姓名',
     cell: ({ getValue }) => getValue() || '-',
   }),
+  userColumnHelper.accessor('department', {
+    header: '部门',
+    enableSorting: false,
+    cell: ({ row }) => {
+      const d = row.original.department
+      if (!d) return h('span', { class: 'text-muted-foreground' }, '-')
+      return h(Badge, { variant: 'secondary' }, () => d.name)
+    },
+  }),
   userColumnHelper.accessor('roles', {
     header: '角色',
     enableSorting: false,
@@ -230,8 +247,8 @@ function renderUserActions(u: User) {
         </DialogHeader>
         <div class="grid gap-4">
           <div class="grid gap-2">
-            <Label for="u-username">用户名（登录名，不可修改）</Label>
-            <Input id="u-username" v-model="userForm.username" :disabled="!!editingUser" placeholder="登录用户名" autocomplete="off" />
+            <Label for="u-username">用户名（登录名）</Label>
+            <Input id="u-username" v-model="userForm.username" placeholder="登录用户名" autocomplete="off" />
           </div>
           <div class="grid gap-2">
             <Label for="u-name">姓名</Label>
@@ -240,6 +257,19 @@ function renderUserActions(u: User) {
           <div v-if="!editingUser" class="grid gap-2">
             <Label for="u-password">初始密码</Label>
             <Input id="u-password" v-model="userForm.password" type="password" placeholder="初始密码" autocomplete="new-password" />
+          </div>
+          <div class="grid gap-2">
+            <Label for="u-department">部门</Label>
+            <Select :model-value="userForm.department_id ? String(userForm.department_id) : ''" @update:model-value="userForm.department_id = $event ? Number($event) : null">
+              <SelectTrigger id="u-department" class="w-full">
+                <SelectValue placeholder="选择部门" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="d in departments" :key="d.id" :value="String(d.id)">
+                  {{ d.name }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div class="grid gap-2">
             <Label>角色</Label>

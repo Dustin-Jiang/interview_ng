@@ -48,9 +48,20 @@ export interface User {
   id: number
   username: string
   name: string
+  department_id?: number
+  department?: Department
   created_at: string
   updated_at: string
   roles?: Role[]
+}
+
+export interface Department {
+  id: number
+  name: string
+  description: string
+  member_count: number
+  created_at: string
+  updated_at: string
 }
 
 export interface Role {
