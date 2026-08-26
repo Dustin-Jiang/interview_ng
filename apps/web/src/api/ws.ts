@@ -1,9 +1,12 @@
 /**
  * WebSocket 通道服务 —— MVVM 的 Service（Model 访问）层。
- * 职责：管理一条到后端的 WS 长连接，收发信封、断线重连。
+ * 职责：管理一条到后端的 WS 长连接（路径参数化：房间通道 /ws/room/:id、看板通道 /ws/board），
+ * 收发信封、断线重连、致命错误停连。
  * 连接建立后先发 auth 消息（JWT），鉴权成功后才进入业务阶段；
  * 鉴权前发出的命令（如 useRoomChat 在 connect() 后立即 sync(0)）暂存，
  * 待 auth 回执成功后再按序 flush —— 否则会被 socket 未 OPEN 的 rawSend 静默丢弃。
+ * 重连成功（非首连）时回调 onReopen：调用方据此补拉断线期间的增量数据。
+ * 服务端下发错误信封（鉴权被拒等）视为致命：不再自动重连。
  * 与框架解耦：不发 Vue 响应式状态，只通过回调把原始事件/回执上抛。
  */
 import type { ChanEvent, ReplyPayload, WsCommand } from './ws-model'
@@ -15,34 +18,41 @@ export interface WsHandlers {
   onReply?: (reqId: string, payload: ReplyPayload) => void
   /** 连接建立（含重连成功）。 */
   onOpen?: () => void
+  /** 断线后重连成功（区别于首次连接）：调用方应重新同步增量。 */
+  onReopen?: () => void
   /** 连接关闭（含断线）。 */
   onClose?: () => void
-  /** 连接层致命错误（如鉴权被拒）。 */
+  /** 连接层致命错误（如鉴权被拒）：此后不再自动重连。 */
   onFatal?: (message: string) => void
   onError?: (err: Event) => void
 }
 
-export class RoomChannel {
+export class WsChannel {
   private ws: WebSocket | null = null
   private closed = false
+  /** 收到过致命错误信封：停止自动重连。 */
+  private fatal = false
   private seqCounter = 0
   /** 鉴权成功前发出的命令暂存于此，auth 回执成功后按序发送。 */
   private pending: WsCommand[] = []
   private authReqId = ''
   private authed = false
+  /** 是否已完成过一次成功连接（区分首连与重连）。 */
+  private openedOnce = false
 
   constructor(
-    private roomId: number,
+    private path: string,
     private token: string,
     private handlers: WsHandlers = {},
   ) {}
 
   connect(): void {
     this.closed = false
+    this.fatal = false
     this.authed = false
     this.pending = []
-    // RESTful 路径承载 roomId；token 走连接后 auth 消息，不进 URL。
-    const ws = new WebSocket(`/ws/room/${this.roomId}`)
+    // RESTful 路径承载资源标识；token 走连接后 auth 消息，不进 URL。
+    const ws = new WebSocket(this.path)
     this.ws = ws
 
     ws.onopen = () => {
@@ -54,8 +64,8 @@ export class RoomChannel {
     ws.onmessage = (e) => this.handleMessage(String(e.data))
     ws.onclose = () => {
       this.handlers.onClose?.()
-      // 非主动关闭 → 定时重连
-      if (!this.closed) setTimeout(() => this.connect(), 1500)
+      // 非主动关闭且无致命错误 → 定时重连；重连成功后经 onReopen 补增量。
+      if (!this.closed && !this.fatal) setTimeout(() => this.connect(), 1500)
     }
     ws.onerror = (e) => this.handlers.onError?.(e)
   }
@@ -69,13 +79,17 @@ export class RoomChannel {
     this.ws.send(JSON.stringify(frame))
   }
 
-  /** auth 成功回执到达后，flush 暂存命令。 */
+  /** auth 成功回执到达后，flush 暂存命令；重连场景额外触发 onReopen。 */
   private flush(): void {
     const buf = this.pending
     this.pending = []
     for (const frame of buf) {
       this.rawSend(frame)
     }
+    if (this.openedOnce) {
+      this.handlers.onReopen?.()
+    }
+    this.openedOnce = true
   }
 
   private handleMessage(raw: string): void {
@@ -95,9 +109,10 @@ export class RoomChannel {
       this.handlers.onReply?.(env.req_id ?? '', payload)
       return
     }
-    // 后端在鉴权/入房失败时下发 {"type":"sync","data":{"error":...}}
+    // 后端在鉴权/入房失败时下发 {"type":"sync","data":{"error":...}} —— 致命，停止重连。
     const errMsg = (env.data as { error?: string } | undefined)?.error
     if (errMsg) {
+      this.fatal = true
       this.handlers.onFatal?.(errMsg)
       return
     }

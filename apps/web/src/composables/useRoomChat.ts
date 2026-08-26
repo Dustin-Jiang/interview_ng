@@ -1,6 +1,6 @@
 /**
  * useRoomChat —— 单房间实时聊天组合式函数（函数式 ViewModel）。
- * 封装 RoomChannel（WS Service）为响应式状态：房间 / 消息 / 连接 / 错误 / 阶段。
+ * 封装 WsChannel（WS Service）为响应式状态：房间 / 消息 / 连接 / 错误 / 阶段。
  *
  * 组合式职责（替代原 Pinia store）：
  *  - 接受一个 roomId（可响应式），watch 其变化自动切换连接；
@@ -10,7 +10,7 @@
  */
 import { computed, onScopeDispose, ref, toValue, watch, type ComputedRef, type MaybeRefOrGetter, type Ref } from 'vue'
 import { candidateApi, getAuthToken, roomApi } from '@/api/http'
-import { RoomChannel } from '@/api/ws'
+import { WsChannel } from '@/api/ws'
 import type { ChanEvent, ReplyPayload } from '@/api/ws-model'
 import { useAuth } from '@/composables/useAuth'
 import type { CandidateStatus, Message, Room } from '@/models'
@@ -56,7 +56,9 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     () => (room.value?.candidate?.status as CandidateStatus) ?? null,
   )
 
-  let channel: RoomChannel | null = null
+  let channel: WsChannel | null = null
+  /** 当前连接的房间 id（null 未连接）；用于过滤跨房间事件。 */
+  let activeId: number | null = null
   const pendingReplies = new Map<string, (p: ReplyPayload) => void>()
 
   // 待分配池实时刷新：签到/拉走等"池变化"事件合并触发（防抖，避免事件风暴时频繁 HTTP 拉取）。
@@ -72,11 +74,18 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
 
   // ---- 事件/回执处理（经 domain 纯函数，不可变更新） ----
   function applyEvent(ev: ChanEvent): void {
-    // candidate_signed_in / candidate_assigned → "待分配池"变化，刷新拉取列表
+    // candidate_signed_in（全局）/ candidate_assigned → "待分配池"变化，刷新拉取列表
     if (ev.type === 'candidate_signed_in' || ev.type === 'candidate_assigned') {
       schedulePoolRefresh()
+      // 他人把候选人拉进当前房间：本地补拉房间快照（自己拉的已在 REST 后刷新，此处幂等）
+      const toRoom = (ev.data as { RoomID?: number } | undefined)?.RoomID
+      if (ev.type === 'candidate_assigned' && toRoom != null && toRoom === activeId) {
+        void reloadRoom()
+      }
       return
     }
+    // 其余事件仅处理本房间的（room_id=0 的全局事件无房间语义，忽略）
+    if (ev.room_id !== 0 && ev.room_id !== activeId) return
     // message_appended → 追加消息（幂等去重）
     const msg = room.value ? messageFromEvent(ev) : null
     if (msg) {
@@ -114,18 +123,33 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
   // ---- 连接生命周期 ----
   function open(id: number): void {
     channel?.close()
+    activeId = id
     room.value = null
     messages.value = []
     error.value = null
     connecting.value = true
 
     const token = getAuthToken()
-    channel = new RoomChannel(id, token, {
+    channel = new WsChannel(`/ws/room/${id}`, token, {
       onEvent: applyEvent,
       onReply: applyReply,
       onOpen: () => {
         connected.value = true
         connecting.value = false
+      },
+      // 断线重连成功：按续传游标补拉断线期间的房间快照与消息增量。
+      onReopen: () => {
+        connected.value = true
+        connecting.value = false
+        const c = channel
+        if (!c) return
+        const reqId = c.sync(lastMessageId(messages.value))
+        expectReply(reqId, (p) => {
+          if (p.ok && p.room) room.value = p.room
+          if (p.messages && p.messages.length) {
+            messages.value = mergeMessages(messages.value, p.messages)
+          }
+        })
       },
       onClose: () => {
         connected.value = false
@@ -155,6 +179,7 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
   function close(): void {
     channel?.close()
     channel = null
+    activeId = null
     connected.value = false
     connecting.value = false
     room.value = null
