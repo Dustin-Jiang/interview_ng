@@ -226,14 +226,17 @@ func (s *MemStateStore) CheckIn(ctx context.Context, candidateID uint64) (*Event
 	return ev, nil
 }
 
-func (s *MemStateStore) CreateCandidate(ctx context.Context, name, profile string) (uint64, error) {
+func (s *MemStateStore) CreateCandidate(ctx context.Context, name, profile string) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := &dsmodel.Candidate{Name: name, Profile: profile, Status: dsmodel.StatusNotCheckedIn}
 	if err := s.db.WithContext(ctx).Create(c).Error; err != nil {
-		return 0, err
+		return nil, err
 	}
-	return c.ID, nil
+	// 全局事件（RoomID=0）：管理面新建候选人，供看板通道感知名单变化。
+	ev := &Event{Type: EventCandidateCreated, Data: CandidateRef{c.ID}}
+	s.emit(0, ev)
+	return ev, nil
 }
 
 func (s *MemStateStore) MovePhase(ctx context.Context, roomID, operatorID uint64, to dsmodel.CandidateStatus) (*Event, error) {
@@ -707,35 +710,48 @@ func (s *MemStateStore) SetSystemStatus(ctx context.Context, phase dsmodel.Syste
 
 //---- 候选人管理 ----
 
-func (s *MemStateStore) UpdateCandidate(ctx context.Context, id uint64, name, profile string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.db.WithContext(ctx).Model(&dsmodel.Candidate{}).Where("id = ?", id).
-		Updates(map[string]any{"name": name, "profile": profile}).Error
-}
-
-func (s *MemStateStore) DeleteCandidate(ctx context.Context, id uint64) error {
+func (s *MemStateStore) UpdateCandidate(ctx context.Context, id uint64, name, profile string) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := s.ensureCandidate(ctx, id); err != nil {
-		return err
+		return nil, err
+	}
+	if err := s.db.WithContext(ctx).Model(&dsmodel.Candidate{}).Where("id = ?", id).
+		Updates(map[string]any{"name": name, "profile": profile}).Error; err != nil {
+		return nil, err
+	}
+	ev := &Event{Type: EventCandidateUpdated, Data: CandidateRef{id}}
+	s.emit(0, ev)
+	return ev, nil
+}
+
+func (s *MemStateStore) DeleteCandidate(ctx context.Context, id uint64) (*Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.ensureCandidate(ctx, id); err != nil {
+		return nil, err
 	}
 	// 解绑房间（房间保留为空记录；绑定的唯一权威在 rooms.candidate_id）
 	if room, err := s.roomByCandidate(ctx, id); err == nil {
 		if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", room.ID).
 			UpdateColumn("candidate_id", nil).Error; err != nil {
-			return err
+			return nil, err
 		}
 	}
 	// 连带删消息档案（级联：删人即删其记录）
 	if err := s.db.WithContext(ctx).Where("candidate_id = ?", id).Delete(&dsmodel.Message{}).Error; err != nil {
-		return err
+		return nil, err
 	}
 	// 连带删各部门的录取决定
 	if err := s.db.WithContext(ctx).Where("candidate_id = ?", id).Delete(&dsmodel.CandidateAdmission{}).Error; err != nil {
-		return err
+		return nil, err
 	}
-	return s.db.WithContext(ctx).Delete(&dsmodel.Candidate{}, id).Error
+	if err := s.db.WithContext(ctx).Delete(&dsmodel.Candidate{}, id).Error; err != nil {
+		return nil, err
+	}
+	ev := &Event{Type: EventCandidateDeleted, Data: CandidateRef{id}}
+	s.emit(0, ev)
+	return ev, nil
 }
 
 func (s *MemStateStore) ResetCandidateStatus(ctx context.Context, id uint64, to dsmodel.CandidateStatus) (*Event, error) {
@@ -846,34 +862,41 @@ func validAdmissionStatus(s dsmodel.AdmissionStatus) bool {
 
 //---- 房间管理 ----
 
-func (s *MemStateStore) CreateRoom(ctx context.Context) (uint64, error) {
+func (s *MemStateStore) CreateRoom(ctx context.Context) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := &dsmodel.Room{}
 	if err := s.db.WithContext(ctx).Create(r).Error; err != nil {
-		return 0, err
+		return nil, err
 	}
-	return r.ID, nil
+	ev := &Event{Type: EventRoomCreated, Data: RoomRef{r.ID}}
+	s.emit(0, ev)
+	return ev, nil
 }
 
-func (s *MemStateStore) DeleteRoom(ctx context.Context, id uint64) error {
+func (s *MemStateStore) DeleteRoom(ctx context.Context, id uint64) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	room, err := s.ensureRoom(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if room.CandidateID != nil {
-		return &Error{Code: "room_not_empty", Msg: "房间仍绑定候选人"}
+		return nil, &Error{Code: "room_not_empty", Msg: "房间仍绑定候选人"}
 	}
 	var members int64
 	if err := s.db.WithContext(ctx).Model(&dsmodel.RoomMember{}).Where("room_id = ?", id).Count(&members).Error; err != nil {
-		return err
+		return nil, err
 	}
 	if members > 0 {
-		return &Error{Code: "room_not_empty", Msg: "房间仍有成员"}
+		return nil, &Error{Code: "room_not_empty", Msg: "房间仍有成员"}
 	}
-	return s.db.WithContext(ctx).Delete(&dsmodel.Room{}, id).Error
+	if err := s.db.WithContext(ctx).Delete(&dsmodel.Room{}, id).Error; err != nil {
+		return nil, err
+	}
+	ev := &Event{Type: EventRoomDeleted, Data: RoomRef{id}}
+	s.emit(0, ev)
+	return ev, nil
 }
 
 func (s *MemStateStore) PullCandidate(ctx context.Context, roomID, candidateID uint64) (*Event, error) {

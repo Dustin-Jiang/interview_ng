@@ -31,6 +31,24 @@ func newTestStore(t *testing.T) state.StateStore {
 	return state.NewMemStateStore(db)
 }
 
+// mustCreateCandidate 创建候选人并返回其 id（从创建事件载荷提取，测试辅助）。
+func mustCreateCandidate(ctx context.Context, st state.StateStore, name, profile string) uint64 {
+	ev, err := st.CreateCandidate(ctx, name, profile)
+	if err != nil {
+		panic(err)
+	}
+	return state.CandidateIDOf(ev)
+}
+
+// mustCreateRoom 创建空房并返回其 id（测试辅助）。
+func mustCreateRoom(ctx context.Context, st state.StateStore) uint64 {
+	ev, err := st.CreateRoom(ctx)
+	if err != nil {
+		panic(err)
+	}
+	return state.RoomIDOf(ev)
+}
+
 func TestStateMachineTransitions(t *testing.T) {
 	cases := []struct {
 		from, to dsmodel.CandidateStatus
@@ -58,10 +76,7 @@ func TestLifecycleThroughStore(t *testing.T) {
 	st := newTestStore(t)
 
 	// 新建候选人
-	id, err := st.CreateCandidate(ctx, "张三", "后端岗")
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
+	id := mustCreateCandidate(ctx, st, "张三", "后端岗")
 	c, _ := st.GetCandidate(ctx, id)
 	if c.Status != dsmodel.StatusNotCheckedIn {
 		t.Fatalf("initial status=%s", c.Status)
@@ -77,10 +92,7 @@ func TestLifecycleThroughStore(t *testing.T) {
 	}
 
 	// 建房 → 房间内拉取候选人（叫号式）
-	roomID, err := st.CreateRoom(ctx)
-	if err != nil {
-		t.Fatalf("create room: %v", err)
-	}
+	roomID := mustCreateRoom(ctx, st)
 	ev, err := st.PullCandidate(ctx, roomID, id)
 	if err != nil {
 		t.Fatalf("pull: %v", err)
@@ -127,9 +139,9 @@ func TestLifecycleThroughStore(t *testing.T) {
 func TestSubscribeDeliversEvents(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
-	id, _ := st.CreateCandidate(ctx, "李四", "前端")
+	id := mustCreateCandidate(ctx, st, "李四", "前端")
 	_, _ = st.CheckIn(ctx, id)
-	roomID, _ := st.CreateRoom(ctx)
+	roomID := mustCreateRoom(ctx, st)
 	_, _ = st.PullCandidate(ctx, roomID, id)
 
 	ch, cancel := st.Subscribe(roomID, 0)

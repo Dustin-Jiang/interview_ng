@@ -191,12 +191,12 @@ func (h *HTTPServer) createCandidate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
 	}
-	id, err := h.svc.CreateCandidate(c.Request.Context(), req.Name, req.Profile)
+	ev, err := h.svc.CreateCandidate(c.Request.Context(), req.Name, req.Profile)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"id": id})
+	c.JSON(http.StatusCreated, gin.H{"id": state.CandidateIDOf(ev)})
 }
 
 func (h *HTTPServer) checkin(c *gin.Context) {
@@ -279,12 +279,12 @@ func (h *HTTPServer) listRooms(c *gin.Context) {
 }
 
 func (h *HTTPServer) createRoom(c *gin.Context) {
-	id, err := h.svc.CreateRoom(c.Request.Context())
+	ev, err := h.svc.CreateRoom(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"id": id})
+	c.JSON(http.StatusCreated, gin.H{"id": state.RoomIDOf(ev)})
 }
 
 func (h *HTTPServer) deleteRoom(c *gin.Context) {

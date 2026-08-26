@@ -24,6 +24,10 @@ const (
 	pingPeriod  = (pongWait * 9) / 10
 	maxMsgSize  = 4096
 	authTimeout = 10 * time.Second // 连接后 10s 内必须完成 auth，否则断开（Q13=A）
+
+	// boardHubKey hub 内保留键：看板通道客户端集合（非真实房间）。
+	// 房间路径的 roomId 必须大于 0，键 0 不会与任何真实房间冲突。
+	boardHubKey = 0
 )
 
 // closeSafe 幂等地关闭一个 channel。
@@ -76,6 +80,8 @@ type WSServer struct {
 	st   state.StateStore
 	h    *hub
 	auth *auth.Manager
+
+	boardSinkOnce sync.Once // 全局事件扇出回调仅注册一次
 }
 
 // NewWSServer 构建 WS 服务器。
@@ -86,6 +92,7 @@ func NewWSServer(svc *service.InterviewService, b *broadcast.Manager, st state.S
 // RegisterRoutes 注册 WS 与相关路由。
 func (w *WSServer) RegisterRoutes(r *gin.Engine) {
 	r.GET("/ws/room/:roomId", w.serveWS)
+	r.GET("/ws/board", w.serveBoard)
 }
 
 // serveWS 处理 WS 升级与连接生命周期。
@@ -137,7 +144,8 @@ func (w *WSServer) ensureSink(roomID uint64) {
 		}
 		if ev.RoomID == 0 {
 			// 全局事件（签到/拉走等"待分配池"变化）：推给所有开放房间的连接。
-			for _, cl := range w.h.clientsAll() {
+			// 看板客户端（boardHubKey）由 BindGlobal 扇出，此处排除以免重复投递。
+			for _, cl := range w.h.clientsAllExcept(boardHubKey) {
 				cl.enqueue(frame)
 			}
 			return
@@ -146,6 +154,108 @@ func (w *WSServer) ensureSink(roomID uint64) {
 			cl.enqueue(frame)
 		}
 	})
+}
+
+// ensureBoardSink 注册全局事件扇出回调（幂等）：所有事件（房间级 + 全局级）
+// 推给所有已鉴权的看板连接，供列表页（候场大屏 / 房间列表 / 候选人记录）触发刷新。
+func (w *WSServer) ensureBoardSink() {
+	w.boardSinkOnce.Do(func() {
+		w.b.BindGlobal(func(ev *state.Event) {
+			frame := encodeEvent(ev)
+			if frame == nil {
+				return
+			}
+			for _, cl := range w.h.clientsIn(boardHubKey) {
+				cl.enqueue(frame)
+			}
+		})
+	})
+}
+
+// serveBoard 处理看板通道的 WS 升级与连接生命周期。
+// 与房间通道的区别：不 JoinRoom、无成员语义、只接受 auth 一条命令；
+// 鉴权要求 rooms.view（事件载荷可能含消息内容，与 REST 读记录的权限对齐）。
+func (w *WSServer) serveBoard(c *gin.Context) {
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		return
+	}
+
+	client := &wsClient{conn: conn, send: make(chan []byte, 256)}
+	quit := make(chan struct{})
+
+	go w.writePump(client, quit)
+	go w.readBoardPump(c.Request.Context(), client, quit)
+
+	<-quit
+	if client.userID != 0 {
+		w.h.remove(boardHubKey, client)
+	}
+}
+
+// readBoardPump 看板通道读循环：鉴权前仅接受 auth；成功后进入纯接收模式。
+func (w *WSServer) readBoardPump(ctx context.Context, client *wsClient, quit chan struct{}) {
+	client.conn.SetReadLimit(maxMsgSize)
+	_ = client.conn.SetReadDeadline(time.Now().Add(pongWait))
+	client.conn.SetPongHandler(func(string) error {
+		return client.conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
+	timer := w.authTimer(client, quit)
+	for {
+		_, message, err := client.conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		var env Envelope
+		if err := json.Unmarshal(message, &env); err != nil {
+			continue
+		}
+		if env.Op != "auth" {
+			w.reply(client, env.ReqID, map[string]any{"ok": false, "error": "unknown op"})
+			continue
+		}
+		var req reqAuth
+		_ = json.Unmarshal(env.Data, &req)
+		if !w.handleBoardAuth(client, &req, env.ReqID) {
+			break // 鉴权失败：由 authTimer/关闭收尾
+		}
+	}
+	timer.Stop()
+	_ = client.conn.Close()
+	closeSafe(quit)
+}
+
+// replySync 同步写一条回执（绕过写队列）。
+// 用于鉴权失败等"回执后立即断开"的场景：入队可能来不及被 writePump 消费。
+func (w *WSServer) replySync(client *wsClient, reqID string, data any) {
+	frame, err := json.Marshal(&Envelope{Type: "reply", ReqID: reqID, Data: mustRaw(data)})
+	if err != nil {
+		return
+	}
+	client.writeBatch(frame)
+}
+
+// handleBoardAuth 校验 JWT + rooms.view 权限，成功即加入看板客户端集合并注册全局扇出。
+// 返回 false 表示鉴权失败（调用方应结束读循环、断开连接）。
+func (w *WSServer) handleBoardAuth(client *wsClient, req *reqAuth, reqID string) bool {
+	if client.authed() {
+		w.reply(client, reqID, map[string]any{"ok": false, "error": "重复鉴权"})
+		return true
+	}
+	uid, err := w.auth.Authenticate(req.Token)
+	if err != nil {
+		w.replySync(client, reqID, map[string]any{"ok": false, "error": "鉴权失败"})
+		return false
+	}
+	if !w.auth.HasPermission(uid, dsmodel.PermRoomsView) {
+		w.replySync(client, reqID, map[string]any{"ok": false, "error": "无查看权限"})
+		return false
+	}
+	client.userID = uid
+	w.h.add(boardHubKey, client)
+	w.ensureBoardSink()
+	w.reply(client, reqID, map[string]any{"ok": true})
+	return true
 }
 
 // encodeEvent 将 state 事件序列化为客户端可读的 chanEvent。

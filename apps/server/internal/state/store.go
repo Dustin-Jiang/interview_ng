@@ -32,8 +32,8 @@ type StateStore interface {
 
 	// CheckIn 候选人签到：NOT_CHECKED_IN -> CHECKED_IN_PENDING_ASSIGN。
 	CheckIn(ctx context.Context, candidateID uint64) (*Event, error)
-	// CreateCandidate 新建候选人（初始状态 NOT_CHECKED_IN），返回其 id。
-	CreateCandidate(ctx context.Context, name, profile string) (uint64, error)
+	// CreateCandidate 新建候选人（初始状态 NOT_CHECKED_IN），返回创建事件（载荷 CandidateRef）。
+	CreateCandidate(ctx context.Context, name, profile string) (*Event, error)
 	// MovePhase 推进阶段：ASSIGNED -> IN_PROGRESS -> COMPLETED。
 	// 由当前房间成员调用（无主持人概念，成员即可推进）。
 	// 推进到 COMPLETED 自动解绑房间（rooms.candidate_id 置空，绑定唯一权威），
@@ -92,10 +92,11 @@ type StateStore interface {
 
 	// ---- 候选人管理 ----
 
-	// UpdateCandidate 编辑候选人姓名/简介。
-	UpdateCandidate(ctx context.Context, id uint64, name, profile string) error
-	// DeleteCandidate 删除候选人：连带删其消息档案并解绑房间（房间保留为空记录）。
-	DeleteCandidate(ctx context.Context, id uint64) error
+	// UpdateCandidate 编辑候选人姓名/简介，返回更新事件（载荷 CandidateRef）。
+	UpdateCandidate(ctx context.Context, id uint64, name, profile string) (*Event, error)
+	// DeleteCandidate 删除候选人：连带删其消息档案并解绑房间（房间保留为空记录），
+	// 返回删除事件（载荷 CandidateRef）。
+	DeleteCandidate(ctx context.Context, id uint64) (*Event, error)
 	// ResetCandidateStatus 重置候选人到状态机任意档：
 	// 向后档（未签到/已签到待分配）自动解绑房间；向前档须已有房间绑定。
 	// 向前档目标为 COMPLETED 时与推进路径一致：自动解绑房间（候选人与房间均解除关联）。
@@ -108,10 +109,10 @@ type StateStore interface {
 
 	// ---- 房间管理 ----
 
-	// CreateRoom 手动创建空房间（独立物理会议室记录），返回房间 id。
-	CreateRoom(ctx context.Context) (uint64, error)
-	// DeleteRoom 删除空房间（无候选人绑定、无成员时允许）。
-	DeleteRoom(ctx context.Context, id uint64) error
+	// CreateRoom 手动创建空房间（独立物理会议室记录），返回创建事件（载荷 RoomRef）。
+	CreateRoom(ctx context.Context) (*Event, error)
+	// DeleteRoom 删除空房间（无候选人绑定、无成员时允许），返回删除事件（载荷 RoomRef）。
+	DeleteRoom(ctx context.Context, id uint64) (*Event, error)
 	// PullCandidate 房间内面试官拉取候选人：CHECKED_IN_PENDING_ASSIGN -> ASSIGNED 并绑定房间。
 	PullCandidate(ctx context.Context, roomID, candidateID uint64) (*Event, error)
 

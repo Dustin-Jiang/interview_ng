@@ -770,3 +770,121 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
+
+// boardAuth 向看板连接发送 auth 并等待回执；返回回执是否 ok。
+func boardAuth(t *testing.T, conn *websocket.Conn, reqID, token string) bool {
+	t.Helper()
+	if err := conn.WriteJSON(map[string]any{"op": "auth", "req_id": reqID, "data": map[string]string{"token": token}}); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+	var env map[string]any
+	if err := conn.ReadJSON(&env); err != nil {
+		t.Fatalf("read auth reply: %v", err)
+	}
+	d, _ := env["data"].(map[string]any)
+	return env["type"] == "reply" && env["req_id"] == reqID && d["ok"] == true
+}
+
+// readEventsUntil 在看板连接上读取事件，直到看到全部期望的事件类型（跳过 reply），
+// 返回各事件类型的出现次数（供重复投递断言）。
+func readEventsUntil(t *testing.T, conn *websocket.Conn, want ...string) map[string]int {
+	t.Helper()
+	remaining := map[string]bool{}
+	for _, w := range want {
+		remaining[w] = true
+	}
+	counts := map[string]int{}
+	for len(remaining) > 0 {
+		var env map[string]any
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("read event (waiting %v): %v", remaining, err)
+		}
+		typ, _ := env["type"].(string)
+		if typ == "reply" {
+			continue
+		}
+		counts[typ]++
+		delete(remaining, typ)
+	}
+	return counts
+}
+
+// TestBoardChannelAuthAndEvents 验证看板通道：rooms.view 权限门槛，
+// 以及候选人/房间 CRUD 与签到等全局、房间级事件均扇出到看板订阅者。
+func TestBoardChannelAuthAndEvents(t *testing.T) {
+	r := newTestApp(t)
+
+	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	// 无 rooms.view 的用户：鉴权应被拒
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"noview","description":"无查看","permissions":["candidates.create"]}`, token)
+	roleID := int(out["id"].(float64))
+	doJSON(t, r, "POST", "/api/users", `{"username":"noview1","name":"无权","password":"pass","role_ids":[`+itoa(roleID)+`]}`, token)
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"noview1","password":"pass"}`, "")
+	noViewToken, _ := out["token"].(string)
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	boardURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/board"
+
+	// 无权限用户：auth 回执不 ok，随后连接被服务端关闭
+	denyConn, _, err := websocket.DefaultDialer.Dial(boardURL, nil)
+	if err != nil {
+		t.Fatalf("dial deny: %v", err)
+	}
+	if err := denyConn.WriteJSON(map[string]any{"op": "auth", "req_id": "d1", "data": map[string]string{"token": noViewToken}}); err != nil {
+		t.Fatalf("write deny auth: %v", err)
+	}
+	var env map[string]any
+	if err := denyConn.ReadJSON(&env); err != nil {
+		t.Fatalf("read deny reply: %v", err)
+	}
+	if d, _ := env["data"].(map[string]any); d["ok"] == true {
+		t.Fatalf("board auth should be denied for user without rooms.view")
+	}
+	denyConn.Close()
+
+	// admin：鉴权成功后接收业务事件
+	conn, _, err := websocket.DefaultDialer.Dial(boardURL, nil)
+	if err != nil {
+		t.Fatalf("dial board: %v", err)
+	}
+	defer conn.Close()
+	if !boardAuth(t, conn, "b1", token) {
+		t.Fatalf("board auth failed")
+	}
+
+	// 同时开一条房间通道连接：验证全局事件不会因"房间扇出 + 全局扇出"重复投递给看板
+	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
+	warmRoomID := int(out["id"].(float64))
+	roomURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/room/" + itoa(warmRoomID)
+	roomConn, _, err := websocket.DefaultDialer.Dial(roomURL, nil)
+	if err != nil {
+		t.Fatalf("dial warm room: %v", err)
+	}
+	defer roomConn.Close()
+	if !boardAuth(t, roomConn, "r1", token) {
+		t.Fatalf("room auth failed")
+	}
+
+	// 触发：建候选人 → 建房 → 签到 → 拉取（房间级事件也应扇出）
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"张三","profile":"后端"}`, token)
+	candID := int(out["id"].(float64))
+	doJSON(t, r, "POST", "/api/rooms", "", token)
+	roomID := int(out["id"].(float64))
+	doJSON(t, r, "POST", "/api/candidates/"+itoa(candID)+"/checkin", "", token)
+	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/pull_candidate", `{"candidate_id":`+itoa(candID)+`}`, token)
+
+	counts := readEventsUntil(t, conn,
+		"candidate_created", "room_created", "candidate_signed_in", "candidate_assigned")
+	if counts["candidate_signed_in"] != 1 || counts["candidate_assigned"] != 1 {
+		t.Fatalf("duplicate delivery to board: %v", counts)
+	}
+
+	// 删除空房 → room_deleted；编辑/删除候选人 → candidate_updated / candidate_deleted
+	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID), `{"name":"张三丰","profile":""}`, token)
+	doJSON(t, r, "DELETE", "/api/candidates/"+itoa(candID), "", token)
+	readEventsUntil(t, conn, "candidate_updated", "candidate_deleted")
+}

@@ -13,14 +13,11 @@ func TestPullCandidateAssigns(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 
-	candID, _ := st.CreateCandidate(ctx, "王五", "后端")
+	candID := mustCreateCandidate(ctx, st, "王五", "后端")
 	if _, err := st.CheckIn(ctx, candID); err != nil {
 		t.Fatalf("checkin: %v", err)
 	}
-	roomID, err := st.CreateRoom(ctx)
-	if err != nil {
-		t.Fatalf("create room: %v", err)
-	}
+	roomID := mustCreateRoom(ctx, st)
 	if _, err := st.PullCandidate(ctx, roomID, candID); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -39,12 +36,12 @@ func TestPullCandidateConcurrency(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 
-	candID, _ := st.CreateCandidate(ctx, "赵六", "前端")
+	candID := mustCreateCandidate(ctx, st, "赵六", "前端")
 	if _, err := st.CheckIn(ctx, candID); err != nil {
 		t.Fatalf("checkin: %v", err)
 	}
-	roomA, _ := st.CreateRoom(ctx)
-	roomB, _ := st.CreateRoom(ctx)
+	roomA := mustCreateRoom(ctx, st)
+	roomB := mustCreateRoom(ctx, st)
 
 	type res struct{ err error }
 	ch := make(chan res, 2)
@@ -83,11 +80,11 @@ func TestResetCandidateStatusLinkage(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 
-	candID, _ := st.CreateCandidate(ctx, "钱七", "算法")
+	candID := mustCreateCandidate(ctx, st, "钱七", "算法")
 	if _, err := st.CheckIn(ctx, candID); err != nil {
 		t.Fatalf("checkin: %v", err)
 	}
-	roomID, _ := st.CreateRoom(ctx)
+	roomID := mustCreateRoom(ctx, st)
 	if _, err := st.PullCandidate(ctx, roomID, candID); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -131,15 +128,15 @@ func TestCompleteCandidateClearsRoom(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 
-	candA, _ := st.CreateCandidate(ctx, "甲", "后端")
+	candA := mustCreateCandidate(ctx, st, "甲", "后端")
 	if _, err := st.CheckIn(ctx, candA); err != nil {
 		t.Fatalf("checkin A: %v", err)
 	}
-	candB, _ := st.CreateCandidate(ctx, "乙", "前端")
+	candB := mustCreateCandidate(ctx, st, "乙", "前端")
 	if _, err := st.CheckIn(ctx, candB); err != nil {
 		t.Fatalf("checkin B: %v", err)
 	}
-	roomID, _ := st.CreateRoom(ctx)
+	roomID := mustCreateRoom(ctx, st)
 	if _, err := st.PullCandidate(ctx, roomID, candA); err != nil {
 		t.Fatalf("pull A: %v", err)
 	}
@@ -200,11 +197,11 @@ func TestDeleteCandidateCascade(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 
-	candID, _ := st.CreateCandidate(ctx, "孙八", "运维")
+	candID := mustCreateCandidate(ctx, st, "孙八", "运维")
 	if _, err := st.CheckIn(ctx, candID); err != nil {
 		t.Fatalf("checkin: %v", err)
 	}
-	roomID, _ := st.CreateRoom(ctx)
+	roomID := mustCreateRoom(ctx, st)
 	if _, err := st.PullCandidate(ctx, roomID, candID); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -215,7 +212,7 @@ func TestDeleteCandidateCascade(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 
-	if err := st.DeleteCandidate(ctx, candID); err != nil {
+	if _, err := st.DeleteCandidate(ctx, candID); err != nil {
 		t.Fatalf("delete candidate: %v", err)
 	}
 	// 候选人与消息应已删除；房间保留为空记录。
@@ -240,28 +237,28 @@ func TestRoomDeleteRules(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 
-	empty, _ := st.CreateRoom(ctx)
-	if err := st.DeleteRoom(ctx, empty); err != nil {
+	empty := mustCreateRoom(ctx, st)
+	if _, err := st.DeleteRoom(ctx, empty); err != nil {
 		t.Fatalf("delete empty room: %v", err)
 	}
 
-	roomWithMember, _ := st.CreateRoom(ctx)
+	roomWithMember := mustCreateRoom(ctx, st)
 	if _, _, err := st.JoinRoom(ctx, roomWithMember, 5); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	if err := st.DeleteRoom(ctx, roomWithMember); err == nil {
+	if _, err := st.DeleteRoom(ctx, roomWithMember); err == nil {
 		t.Fatalf("expected error for room with members")
 	}
 
-	candID, _ := st.CreateCandidate(ctx, "周九", "测试")
+	candID := mustCreateCandidate(ctx, st, "周九", "测试")
 	if _, err := st.CheckIn(ctx, candID); err != nil {
 		t.Fatalf("checkin: %v", err)
 	}
-	roomWithCand, _ := st.CreateRoom(ctx)
+	roomWithCand := mustCreateRoom(ctx, st)
 	if _, err := st.PullCandidate(ctx, roomWithCand, candID); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
-	if err := st.DeleteRoom(ctx, roomWithCand); err == nil {
+	if _, err := st.DeleteRoom(ctx, roomWithCand); err == nil {
 		t.Fatalf("expected error for room with candidate")
 	}
 }
@@ -271,7 +268,7 @@ func TestEmptyRoomRejectsMessage(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 
-	roomID, _ := st.CreateRoom(ctx)
+	roomID := mustCreateRoom(ctx, st)
 	if _, _, err := st.JoinRoom(ctx, roomID, 1); err != nil {
 		t.Fatalf("join: %v", err)
 	}
@@ -450,7 +447,7 @@ func TestCandidateAdmissionByDepartment(t *testing.T) {
 
 	deptA, _ := st.CreateDepartment(ctx, "后端组", "")
 	deptB, _ := st.CreateDepartment(ctx, "前端组", "")
-	candID, _ := st.CreateCandidate(ctx, "张三", "后端")
+	candID := mustCreateCandidate(ctx, st, "张三", "后端")
 
 	// 各部门各自记录决定
 	if err := st.UpsertCandidateAdmission(ctx, candID, deptA, dsmodel.AdmissionAdmitted); err != nil {
@@ -490,7 +487,7 @@ func TestCandidateAdmissionByDepartment(t *testing.T) {
 	}
 
 	// 删候选人级联清除录取决定
-	if err := st.DeleteCandidate(ctx, candID); err != nil {
+	if _, err := st.DeleteCandidate(ctx, candID); err != nil {
 		t.Fatalf("delete candidate: %v", err)
 	}
 	afterDel, _ := st.ListCandidateAdmissions(ctx, nil)

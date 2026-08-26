@@ -36,9 +36,14 @@ func (s *InterviewService) CheckIn(ctx context.Context, candidateID uint64) erro
 	return nil
 }
 
-// CreateCandidate 新建候选人（未签到）。直接落库。
-func (s *InterviewService) CreateCandidate(ctx context.Context, name, profile string) (uint64, error) {
-	return s.store.CreateCandidate(ctx, name, profile)
+// CreateCandidate 新建候选人（未签到）。先落库，成功后广播。
+func (s *InterviewService) CreateCandidate(ctx context.Context, name, profile string) (*state.Event, error) {
+	ev, err := s.store.CreateCandidate(ctx, name, profile)
+	if err != nil {
+		return nil, err
+	}
+	s.broad.Publish(ev)
+	return ev, nil
 }
 
 // Publish 直接扇出一个事件（供 handler 在需要时手动广播已落库事件）。
@@ -142,12 +147,24 @@ func (s *InterviewService) SetSystemStatus(ctx context.Context, phase dsmodel.Sy
 
 // ---- 候选人管理 ----
 
+// UpdateCandidate 编辑候选人姓名/简介。先落库后广播。
 func (s *InterviewService) UpdateCandidate(ctx context.Context, id uint64, name, profile string) error {
-	return s.store.UpdateCandidate(ctx, id, name, profile)
+	ev, err := s.store.UpdateCandidate(ctx, id, name, profile)
+	if err != nil {
+		return err
+	}
+	s.broad.Publish(ev)
+	return nil
 }
 
+// DeleteCandidate 删除候选人（级联删消息、解绑房间）。先落库后广播。
 func (s *InterviewService) DeleteCandidate(ctx context.Context, id uint64) error {
-	return s.store.DeleteCandidate(ctx, id)
+	ev, err := s.store.DeleteCandidate(ctx, id)
+	if err != nil {
+		return err
+	}
+	s.broad.Publish(ev)
+	return nil
 }
 
 // ListCandidateAdmissions 返回部门对候选人的录取决定（departmentID 为 nil 时跨部门查看）。
@@ -172,12 +189,24 @@ func (s *InterviewService) ResetCandidateStatus(ctx context.Context, id uint64, 
 
 // ---- 房间管理 ----
 
-func (s *InterviewService) CreateRoom(ctx context.Context) (uint64, error) {
-	return s.store.CreateRoom(ctx)
+// CreateRoom 新建空房。先落库，成功后广播。
+func (s *InterviewService) CreateRoom(ctx context.Context) (*state.Event, error) {
+	ev, err := s.store.CreateRoom(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.broad.Publish(ev)
+	return ev, nil
 }
 
+// DeleteRoom 删除空房。先落库，成功后广播。
 func (s *InterviewService) DeleteRoom(ctx context.Context, id uint64) error {
-	return s.store.DeleteRoom(ctx, id)
+	ev, err := s.store.DeleteRoom(ctx, id)
+	if err != nil {
+		return err
+	}
+	s.broad.Publish(ev)
+	return nil
 }
 
 // PullCandidate 房间内拉取候选人。先落库后广播。

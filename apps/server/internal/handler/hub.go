@@ -45,13 +45,16 @@ func (h *hub) clientsIn(roomID uint64) []*wsClient {
 	return out
 }
 
-// clientsAll 返回所有房间的全部去重客户端（全局扇出用）。
-// 一个客户端至多属于一个房间，故跨房间遍历天然无重复。
-func (h *hub) clientsAll() []*wsClient {
+// clientsAllExcept 返回所有键（含 boardHubKey 看板集合）的客户端，
+// 但排除指定键 —— 全局事件扇出用：看板客户端由 BindGlobal 单独投递，不重复。
+func (h *hub) clientsAllExcept(exclude uint64) []*wsClient {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	var out []*wsClient
-	for _, m := range h.rooms {
+	for key, m := range h.rooms {
+		if key == exclude {
+			continue
+		}
 		for c := range m {
 			out = append(out, c)
 		}

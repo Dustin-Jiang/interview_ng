@@ -14,8 +14,9 @@ type Sink func(ev *state.Event)
 // 它只是事件流的"分发器"：不校验状态、不落库、不决定对错。
 // 任何房间在首次有成员连接时应当调用 Bind 注册扇出回调。
 type Manager struct {
-	mu    sync.RWMutex
-	sinks map[uint64]Sink // roomID -> 该房间的扇出回调
+	mu      sync.RWMutex
+	sinks   map[uint64]Sink // roomID -> 该房间的扇出回调
+	globals []Sink          // 全局订阅者：接收所有事件（房间级 + 全局级），如看板 WS 通道
 }
 
 // New 构建广播管理器。
@@ -42,6 +43,14 @@ func (m *Manager) Unregister(roomID uint64) {
 	delete(m.sinks, roomID)
 }
 
+// BindGlobal 注册一个接收全部事件的全局订阅者（无论事件是房间级还是全局级）。
+// 供看板类 WS 通道使用：列表页需要感知所有业务状态变化以触发刷新。
+func (m *Manager) BindGlobal(sink Sink) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.globals = append(m.globals, sink)
+}
+
 // Publish 将一个事件扇出到目标房间。
 // 由 service 层在 StateStore 返回 Event 后调用（先落库，后广播）。
 func (m *Manager) Publish(ev *state.Event) {
@@ -51,6 +60,7 @@ func (m *Manager) Publish(ev *state.Event) {
 		m.PublishGlobal(ev)
 		return
 	}
+	m.publishToGlobals(ev)
 	m.mu.RLock()
 	sink, ok := m.sinks[ev.RoomID]
 	m.mu.RUnlock()
@@ -63,11 +73,25 @@ func (m *Manager) Publish(ev *state.Event) {
 // 供 RoomID==0 的"池变化"事件使用，例如候选人签到（进入待分配池）。
 // 同一连接的去重由 handler 层负责（一个连接至多属于一个房间）。
 func (m *Manager) PublishGlobal(ev *state.Event) {
+	m.publishToGlobals(ev)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, sink := range m.sinks {
 		if sink != nil {
 			sink(ev)
+		}
+	}
+}
+
+// publishToGlobals 把事件投递给所有全局订阅者。
+func (m *Manager) publishToGlobals(ev *state.Event) {
+	m.mu.RLock()
+	gs := make([]Sink, len(m.globals))
+	copy(gs, m.globals)
+	m.mu.RUnlock()
+	for _, g := range gs {
+		if g != nil {
+			g(ev)
 		}
 	}
 }
