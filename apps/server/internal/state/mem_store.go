@@ -668,6 +668,43 @@ func (s *MemStateStore) ensureDepartment(ctx context.Context, id uint64) error {
 	return nil
 }
 
+//---- 系统状态 ----
+
+// systemStatusID 系统状态单行配置的固定主键（ID 恒为 1）。
+const systemStatusID = 1
+
+// ensureSystemStatus 读取系统状态行，不存在时按默认面试阶段落库（幂等初始化）。
+func (s *MemStateStore) ensureSystemStatus(ctx context.Context) (*dsmodel.SystemStatus, error) {
+	var st dsmodel.SystemStatus
+	err := s.db.WithContext(ctx).First(&st, systemStatusID).Error
+	if err == nil {
+		return &st, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	st = dsmodel.SystemStatus{ID: systemStatusID, Phase: dsmodel.SystemPhaseInterview}
+	if err := s.db.WithContext(ctx).Create(&st).Error; err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
+func (s *MemStateStore) GetSystemStatus(ctx context.Context) (*dsmodel.SystemStatus, error) {
+	return s.ensureSystemStatus(ctx)
+}
+
+func (s *MemStateStore) SetSystemStatus(ctx context.Context, phase dsmodel.SystemPhase) error {
+	if !phase.Valid() {
+		return &Error{Code: "invalid_phase", Msg: "非法系统阶段"}
+	}
+	if _, err := s.ensureSystemStatus(ctx); err != nil {
+		return err
+	}
+	return s.db.WithContext(ctx).Model(&dsmodel.SystemStatus{}).Where("id = ?", systemStatusID).
+		Update("phase", phase).Error
+}
+
 //---- 候选人管理 ----
 
 func (s *MemStateStore) UpdateCandidate(ctx context.Context, id uint64, name, profile string) error {
@@ -692,6 +729,10 @@ func (s *MemStateStore) DeleteCandidate(ctx context.Context, id uint64) error {
 	}
 	// 连带删消息档案（级联：删人即删其记录）
 	if err := s.db.WithContext(ctx).Where("candidate_id = ?", id).Delete(&dsmodel.Message{}).Error; err != nil {
+		return err
+	}
+	// 连带删各部门的录取决定
+	if err := s.db.WithContext(ctx).Where("candidate_id = ?", id).Delete(&dsmodel.CandidateAdmission{}).Error; err != nil {
 		return err
 	}
 	return s.db.WithContext(ctx).Delete(&dsmodel.Candidate{}, id).Error
@@ -747,6 +788,60 @@ func (s *MemStateStore) ResetCandidateStatus(ctx context.Context, id uint64, to 
 	}{roomID, id, to}}
 	s.emit(roomID, ev)
 	return ev, nil
+}
+
+// ListCandidateAdmissions 返回部门对候选人的录取决定。
+// departmentID 为 nil 时返回全部记录（跨部门查看）；否则仅返回指定部门的记录。
+func (s *MemStateStore) ListCandidateAdmissions(ctx context.Context, departmentID *uint64) ([]*dsmodel.CandidateAdmission, error) {
+	qb := s.db.WithContext(ctx).Model(&dsmodel.CandidateAdmission{})
+	if departmentID != nil {
+		qb = qb.Where("department_id = ?", *departmentID)
+	}
+	out := []*dsmodel.CandidateAdmission{}
+	if err := qb.Order("candidate_id asc, department_id asc").Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UpsertCandidateAdmission 记录/更新某部门对候选人的录取决定。
+func (s *MemStateStore) UpsertCandidateAdmission(ctx context.Context, candidateID, departmentID uint64, status dsmodel.AdmissionStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.ensureCandidate(ctx, candidateID); err != nil {
+		return err
+	}
+	if err := s.ensureDepartment(ctx, departmentID); err != nil {
+		return err
+	}
+	if !validAdmissionStatus(status) {
+		return &Error{Code: "invalid_admission_status", Msg: "非法录取状态"}
+	}
+	var rec dsmodel.CandidateAdmission
+	err := s.db.WithContext(ctx).
+		Where("candidate_id = ? AND department_id = ?", candidateID, departmentID).
+		First(&rec).Error
+	if err == nil {
+		if rec.Status == status {
+			return nil // 幂等：同状态不重复写
+		}
+		return s.db.WithContext(ctx).Model(&rec).Update("status", status).Error
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	rec = dsmodel.CandidateAdmission{CandidateID: candidateID, DepartmentID: departmentID, Status: status}
+	return s.db.WithContext(ctx).Create(&rec).Error
+}
+
+// validAdmissionStatus 判断录取决定状态是否合法。
+func validAdmissionStatus(s dsmodel.AdmissionStatus) bool {
+	for _, v := range dsmodel.ValidAdmissionStatus() {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 //---- 房间管理 ----

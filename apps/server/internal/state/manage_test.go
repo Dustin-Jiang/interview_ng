@@ -281,7 +281,8 @@ func TestEmptyRoomRejectsMessage(t *testing.T) {
 }
 
 // TestUserRoleLifecycle 用户创建/角色分配/改密版本号递增。
-func TestUserRoleLifecycle(t *testing.T) {	ctx := context.Background()
+func TestUserRoleLifecycle(t *testing.T) {
+	ctx := context.Background()
 	st := newTestStore(t)
 
 	roleID, err := st.CreateRole(ctx, "auditor", "审计", []string{dsmodel.PermRoomsView})
@@ -401,4 +402,99 @@ func TestUpdateUserUsername(t *testing.T) {
 		t.Fatalf("username should be unchanged on conflict: %s", u.Username)
 	}
 	_ = uidB
+}
+
+// TestSystemStatusPhaseSwitch 系统状态：默认面试阶段，可切换录取阶段，非法阶段拒绝。
+func TestSystemStatusPhaseSwitch(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	// 默认面试阶段
+	s, err := st.GetSystemStatus(ctx)
+	if err != nil {
+		t.Fatalf("get status: %v", err)
+	}
+	if s.Phase != dsmodel.SystemPhaseInterview {
+		t.Fatalf("default phase=%s", s.Phase)
+	}
+
+	// 切换到录取阶段并可读回
+	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseAdmission); err != nil {
+		t.Fatalf("set admission: %v", err)
+	}
+	s, _ = st.GetSystemStatus(ctx)
+	if s.Phase != dsmodel.SystemPhaseAdmission {
+		t.Fatalf("phase after set=%s", s.Phase)
+	}
+
+	// 切回面试阶段（双向切换）
+	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseInterview); err != nil {
+		t.Fatalf("set interview: %v", err)
+	}
+	s, _ = st.GetSystemStatus(ctx)
+	if s.Phase != dsmodel.SystemPhaseInterview {
+		t.Fatalf("phase after set back=%s", s.Phase)
+	}
+
+	// 非法阶段拒绝
+	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhase("bogus")); err == nil {
+		t.Fatalf("expected invalid_phase error")
+	}
+}
+
+// TestCandidateAdmissionByDepartment 录取决定按部门分别记录：
+// 同一候选人在不同部门可各自决定；按部门过滤正确；非法状态拒绝；删候选人级联清除。
+func TestCandidateAdmissionByDepartment(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	deptA, _ := st.CreateDepartment(ctx, "后端组", "")
+	deptB, _ := st.CreateDepartment(ctx, "前端组", "")
+	candID, _ := st.CreateCandidate(ctx, "张三", "后端")
+
+	// 各部门各自记录决定
+	if err := st.UpsertCandidateAdmission(ctx, candID, deptA, dsmodel.AdmissionAdmitted); err != nil {
+		t.Fatalf("upsert deptA: %v", err)
+	}
+	if err := st.UpsertCandidateAdmission(ctx, candID, deptB, dsmodel.AdmissionWithdrawn); err != nil {
+		t.Fatalf("upsert deptB: %v", err)
+	}
+
+	// 跨部门查看返回两条
+	all, err := st.ListCandidateAdmissions(ctx, nil)
+	if err != nil {
+		t.Fatalf("list all: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(all))
+	}
+
+	// 按部门过滤只回本部门
+	onlyA, _ := st.ListCandidateAdmissions(ctx, &deptA)
+	if len(onlyA) != 1 || onlyA[0].DepartmentID != deptA || onlyA[0].Status != dsmodel.AdmissionAdmitted {
+		t.Fatalf("deptA filter: %+v", onlyA)
+	}
+
+	// 同部门幂等更新（改为放弃）
+	if err := st.UpsertCandidateAdmission(ctx, candID, deptA, dsmodel.AdmissionWithdrawn); err != nil {
+		t.Fatalf("upsert overwrite: %v", err)
+	}
+	onlyA, _ = st.ListCandidateAdmissions(ctx, &deptA)
+	if len(onlyA) != 1 || onlyA[0].Status != dsmodel.AdmissionWithdrawn {
+		t.Fatalf("after overwrite: %+v", onlyA)
+	}
+
+	// 非法状态拒绝
+	if err := st.UpsertCandidateAdmission(ctx, candID, deptA, dsmodel.AdmissionStatus("bogus")); err == nil {
+		t.Fatalf("expected invalid_admission_status error")
+	}
+
+	// 删候选人级联清除录取决定
+	if err := st.DeleteCandidate(ctx, candID); err != nil {
+		t.Fatalf("delete candidate: %v", err)
+	}
+	afterDel, _ := st.ListCandidateAdmissions(ctx, nil)
+	if len(afterDel) != 0 {
+		t.Fatalf("admissions should be cascaded, got %+v", afterDel)
+	}
 }

@@ -76,7 +76,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 - **service**：`InterviewService` 业务编排；强制「先落库后广播」顺序。
 - **state**：`StateStore` 接口 + `MemStateStore` 实现。状态唯一性权威、原子写、转移动图、内存快照读；内部经 Gorm 落库。
 - **broadcast**：`Manager` 订阅事件流，按房间扇出到该房间所有 WS 写队列。
-- **model**：`User / Department / Candidate / Room / RoomMember / Message` + 状态枚举/转移动图。
+- **model**：`User / Department / Candidate / Room / RoomMember / Message / SystemStatus / CandidateAdmission` + 状态枚举/转移动图。
 
 ---
 
@@ -93,8 +93,10 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 | `rooms` | id, candidate_id(可空) | 房间 = 独立物理会议室记录，`candidate_id` 可空；无状态机、无主持人，"状态"= 候选人状态的查询投影 |
 | `room_members` | room_id, user_id（`idx_room_user` 唯一） | 房间成员，一次一活跃房间 |
 | `messages` | id, candidate_id, sender_id(可空), content | 群聊记录（长存），**按候选人归属**，`id` 即候选人维度续传游标 |
+| `system_status` | id=1(单行), phase(interview/admission) | 系统状态：当前面试阶段 / 录取阶段，管理端可切换 |
+| `candidate_admissions` | candidate_id + department_id（联合唯一）, status(pending/admitted/withdrawn) | 各部门对候选人的录取决定（候选人无固定部门，按部门分别记） |
 
-权限目录（9 枚）：`users.manage`、`candidates.manage`、`candidates.create`、`candidates.checkin`、`candidates.assign`、`rooms.view`、`rooms.chat`、`rooms.move_phase`、`rooms.manage`。预置角色：`admin`（全部）、`interviewer`（6 枚流程权限）。
+权限目录（10 枚）：`users.manage`、`candidates.manage`、`candidates.browse_all`（跨部门浏览录取状态）、`candidates.create`、`candidates.checkin`、`candidates.assign`、`rooms.view`、`rooms.chat`、`rooms.move_phase`、`rooms.manage`。预置角色：`admin`（全部）、`interviewer`（6 枚流程权限，不含录取状态浏览/记录）。
 
 ---
 

@@ -19,10 +19,11 @@ export const CANDIDATE_STATUSES: CandidateStatus[] = [
   'COMPLETED',
 ]
 
-/** 权限名（9 枚，RBAC 目录与后端一致）。 */
+/** 权限名（10 枚，RBAC 目录与后端一致）。 */
 export const PERMISSIONS = {
   USERS_MANAGE: 'users.manage',
   CANDIDATES_MANAGE: 'candidates.manage',
+  CANDIDATES_BROWSE_ALL: 'candidates.browse_all',
   CANDIDATES_CREATE: 'candidates.create',
   CANDIDATES_CHECKIN: 'candidates.checkin',
   CANDIDATES_ASSIGN: 'candidates.assign',
@@ -60,6 +61,32 @@ export interface Department {
   name: string
   description: string
   member_count: number
+  created_at: string
+  updated_at: string
+}
+
+/** 系统阶段：面试阶段 / 录取阶段（与后端 model.SystemPhase 一致）。 */
+export type SystemPhase = 'interview' | 'admission'
+
+export const SYSTEM_PHASES: SystemPhase[] = ['interview', 'admission']
+
+export interface SystemStatus {
+  id: number
+  phase: SystemPhase
+  updated_at: string
+}
+
+/** 录取决定状态（按部门分别记录）：待定 / 录取 / 放弃。 */
+export type AdmissionStatus = 'pending' | 'admitted' | 'withdrawn'
+
+export const ADMISSION_STATUSES: AdmissionStatus[] = ['pending', 'admitted', 'withdrawn']
+
+/** 某部门对某候选人的录取决定记录。 */
+export interface CandidateAdmission {
+  id: number
+  candidate_id: number
+  department_id: number
+  status: AdmissionStatus
   created_at: string
   updated_at: string
 }

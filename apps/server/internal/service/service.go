@@ -130,6 +130,16 @@ func (s *InterviewService) DeleteDepartment(ctx context.Context, id uint64) erro
 	return s.store.DeleteDepartment(ctx, id)
 }
 
+// ---- 系统状态 ----
+
+func (s *InterviewService) GetSystemStatus(ctx context.Context) (*dsmodel.SystemStatus, error) {
+	return s.store.GetSystemStatus(ctx)
+}
+
+func (s *InterviewService) SetSystemStatus(ctx context.Context, phase dsmodel.SystemPhase) error {
+	return s.store.SetSystemStatus(ctx, phase)
+}
+
 // ---- 候选人管理 ----
 
 func (s *InterviewService) UpdateCandidate(ctx context.Context, id uint64, name, profile string) error {
@@ -138,6 +148,16 @@ func (s *InterviewService) UpdateCandidate(ctx context.Context, id uint64, name,
 
 func (s *InterviewService) DeleteCandidate(ctx context.Context, id uint64) error {
 	return s.store.DeleteCandidate(ctx, id)
+}
+
+// ListCandidateAdmissions 返回部门对候选人的录取决定（departmentID 为 nil 时跨部门查看）。
+func (s *InterviewService) ListCandidateAdmissions(ctx context.Context, departmentID *uint64) ([]*dsmodel.CandidateAdmission, error) {
+	return s.store.ListCandidateAdmissions(ctx, departmentID)
+}
+
+// UpsertCandidateAdmission 记录/更新某部门对候选人的录取决定。
+func (s *InterviewService) UpsertCandidateAdmission(ctx context.Context, candidateID, departmentID uint64, status dsmodel.AdmissionStatus) error {
+	return s.store.UpsertCandidateAdmission(ctx, candidateID, departmentID, status)
 }
 
 // ResetCandidateStatus 重置候选人状态（含房间绑定联动）。先落库后广播。

@@ -10,6 +10,7 @@ export function permissionGroup(perm: string): PermissionGroup | null {
   switch (perm) {
     case PERMISSIONS.USERS_MANAGE:
     case PERMISSIONS.CANDIDATES_MANAGE:
+    case PERMISSIONS.CANDIDATES_BROWSE_ALL:
     case PERMISSIONS.ROOMS_MANAGE:
       return '管理'
     case PERMISSIONS.CANDIDATES_CREATE:
@@ -28,6 +29,7 @@ export function permissionGroup(perm: string): PermissionGroup | null {
 export const PERMISSION_ORDER = [
   PERMISSIONS.USERS_MANAGE,
   PERMISSIONS.CANDIDATES_MANAGE,
+  PERMISSIONS.CANDIDATES_BROWSE_ALL,
   PERMISSIONS.ROOMS_MANAGE,
   PERMISSIONS.CANDIDATES_CREATE,
   PERMISSIONS.CANDIDATES_CHECKIN,

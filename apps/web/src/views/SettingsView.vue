@@ -1,13 +1,13 @@
 <!--
   SettingsView —— 设置页外壳：左右分栏。
-  左侧：分区导航（候选人管理 / 面试官 / 角色，按权限显隐）；
+  左侧：分区导航（候选人管理 / 面试官 / 角色 / 部门 / 系统状态，按权限显隐）；
   右侧：嵌套路由渲染当前分区内容。
   无任一管理权限时重定向回首页；直接访问无权分区时跳到首个可见分区。
 -->
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { Building2, ShieldCheck, UserCog, UsersRound } from 'lucide-vue-next'
+import { Building2, Gauge, ShieldCheck, UserCog, UsersRound } from 'lucide-vue-next'
 
 import { useAuth } from '@/composables/useAuth'
 import { PERMISSIONS } from '@/models'
@@ -32,6 +32,7 @@ const sections = computed(() => {
     items.push({ name: 'settings-users', label: '面试官', icon: UserCog })
     items.push({ name: 'settings-roles', label: '角色', icon: ShieldCheck })
     items.push({ name: 'settings-departments', label: '部门', icon: Building2 })
+    items.push({ name: 'settings-system-status', label: '系统状态', icon: Gauge })
   }
   return items
 })

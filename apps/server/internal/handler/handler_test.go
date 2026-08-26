@@ -38,7 +38,7 @@ func newTestApp(t *testing.T) *gin.Engine {
 		&dsmodel.User{}, &dsmodel.Candidate{}, &dsmodel.Room{},
 		&dsmodel.RoomMember{}, &dsmodel.Message{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
-		&dsmodel.Department{},
+		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -562,10 +562,10 @@ func TestDepartmentManageAndPermission(t *testing.T) {
 	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
-	// 默认部门已由种子创建，admin 归属其中
+	// 管理员为全局系统角色，不隶属任何部门（默认部门已由种子创建，但不归属 admin）
 	_, out = doJSON(t, r, "GET", "/api/me", "", token)
-	if user, _ := out["user"].(map[string]any); user["department"] == nil {
-		t.Fatalf("admin should have a department: %v", out)
+	if user, _ := out["user"].(map[string]any); user["department"] != nil {
+		t.Fatalf("admin should not have a department: %v", out)
 	}
 
 	// 创建部门
@@ -630,6 +630,130 @@ func TestDepartmentManageAndPermission(t *testing.T) {
 	tokenB := out["token"].(string)
 	if code, _ := doJSON(t, r, "GET", "/api/departments", "", tokenB); code != http.StatusForbidden {
 		t.Fatalf("interviewer list departments: got %d", code)
+	}
+}
+
+// TestSystemStatusManageAndPermission 系统状态接口：admin 可读可切换，无权限者被拒。
+func TestSystemStatusManageAndPermission(t *testing.T) {
+	r := newTestApp(t)
+
+	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	// 默认面试阶段
+	code, out := doJSON(t, r, "GET", "/api/system/status", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("get status: got %d %v", code, out)
+	}
+	if out["phase"] != "interview" {
+		t.Fatalf("default phase: %v", out)
+	}
+
+	// 切换到录取阶段
+	code, out = doJSON(t, r, "PUT", "/api/system/status", `{"phase":"admission"}`, token)
+	if code != http.StatusOK {
+		t.Fatalf("set admission: got %d %v", code, out)
+	}
+	code, out = doJSON(t, r, "GET", "/api/system/status", "", token)
+	if out["phase"] != "admission" {
+		t.Fatalf("phase after set: %v", out)
+	}
+
+	// 非法阶段 → 400
+	if code, _ := doJSON(t, r, "PUT", "/api/system/status", `{"phase":"bogus"}`, token); code != http.StatusBadRequest {
+		t.Fatalf("invalid phase: got %d", code)
+	}
+
+	// 无 users.manage 权限用户：可读状态（UI 全员可见），但不可切换
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"itv3","description":"","permissions":["rooms.view"]}`, token)
+	roleID := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"itv3u","name":"","password":"pass","role_ids":[`+itoa(roleID)+`]}`, token)
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"itv3u","password":"pass"}`, "")
+	tokenB := out["token"].(string)
+	if code, _ := doJSON(t, r, "GET", "/api/system/status", "", tokenB); code != http.StatusOK {
+		t.Fatalf("interviewer get status: got %d", code)
+	}
+	if code, _ := doJSON(t, r, "PUT", "/api/system/status", `{"phase":"admission"}`, tokenB); code != http.StatusForbidden {
+		t.Fatalf("interviewer set status: got %d", code)
+	}
+}
+
+// TestCandidateAdmissionByDepartmentAndPermission 录取决定按部门隔离：
+// 默认只能看本部门记录；admin（browse_all）可跨部门；记录需 candidates.manage。
+func TestCandidateAdmissionByDepartmentAndPermission(t *testing.T) {
+	r := newTestApp(t)
+
+	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	// 建两个部门
+	_, out = doJSON(t, r, "POST", "/api/departments", `{"name":"后端组","description":""}`, token)
+	deptA := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/departments", `{"name":"前端组","description":""}`, token)
+	deptB := int(out["id"].(float64))
+
+	// 建两名面试官：后端组 admin 归属（现有 admin 归属默认部门）、前端组只读
+	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"feAdmin","name":"前端管理员","password":"pass","role_ids":[],"department_id":`+itoa(deptA)+`}`, token)
+	uidA := int(out["id"].(float64))
+	// 给 uidA 授 candidates.manage 与 rooms.view（可记录录取决定）
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"feMgr","description":"","permissions":["candidates.manage","rooms.view","candidates.create","candidates.checkin"]}`, token)
+	roleMgr := int(out["id"].(float64))
+	doJSON(t, r, "PUT", "/api/users/"+itoa(uidA), `{"username":"feAdmin","name":"前端管理员","role_ids":[`+itoa(roleMgr)+`],"department_id":`+itoa(deptA)+`}`, token)
+
+	// 只读面试官（无 candidates.manage）归前端组
+	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"feReader","name":"前端只读","password":"pass","role_ids":[],"department_id":`+itoa(deptB)+`}`, token)
+	uidB := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"reader2","description":"","permissions":["rooms.view"]}`, token)
+	roleReader := int(out["id"].(float64))
+	doJSON(t, r, "PUT", "/api/users/"+itoa(uidB), `{"username":"feReader","name":"前端只读","role_ids":[`+itoa(roleReader)+`],"department_id":`+itoa(deptB)+`}`, token)
+
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"feAdmin","password":"pass"}`, "")
+	tokenA := out["token"].(string)
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"feReader","password":"pass"}`, "")
+	tokenB := out["token"].(string)
+
+	// 建候选人
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"张三","profile":"后端"}`, token)
+	candID := int(out["id"].(float64))
+
+	// feAdmin（candidates.manage）记录本部门录取决定 → 200
+	code, out := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/admission", `{"status":"admitted"}`, tokenA)
+	if code != http.StatusOK {
+		t.Fatalf("upsert own dept: got %d %v", code, out)
+	}
+
+	// feReader 无 candidates.manage → 403
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/admission", `{"status":"withdrawn"}`, tokenB); code != http.StatusForbidden {
+		t.Fatalf("reader upsert: got %d", code)
+	}
+
+	// feReader（无 browse_all）看录取 → 只见本部门（空）
+	code, out = doJSON(t, r, "GET", "/api/admissions", "", tokenB)
+	if code != http.StatusOK {
+		t.Fatalf("reader list: got %d", code)
+	}
+	if items, _ := out["items"].([]any); len(items) != 0 {
+		t.Fatalf("reader should see own dept only (empty): %v", out)
+	}
+
+	// feAdmin（无 browse_all）看录取 → 只见本部门（一条）
+	code, out = doJSON(t, r, "GET", "/api/admissions", "", tokenA)
+	if code != http.StatusOK {
+		t.Fatalf("feAdmin list: got %d", code)
+	}
+	itemsA, _ := out["items"].([]any)
+	if len(itemsA) != 1 {
+		t.Fatalf("feAdmin should see 1 own-dept record: %v", out)
+	}
+
+	// admin（browse_all，admin 预置全部权限）看录取 → 跨部门（一条）
+	code, out = doJSON(t, r, "GET", "/api/admissions", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("admin list: got %d", code)
+	}
+	itemsAdmin, _ := out["items"].([]any)
+	if len(itemsAdmin) != 1 {
+		t.Fatalf("admin should see all dept records: %v", out)
 	}
 }
 

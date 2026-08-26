@@ -7,13 +7,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { toast } from 'vue-sonner'
 import { ArrowLeft, ExternalLink, RefreshCw, SearchX, SlidersHorizontal, UsersRound, X } from 'lucide-vue-next'
 
-import { candidateApi } from '@/api/http'
+import { admissionApi, candidateApi, departmentApi, systemStatusApi } from '@/api/http'
 import { formatDateTime } from '@/lib/format'
-import { STATUS_PRESENTATION } from '@/presenters/status'
-import { CANDIDATE_STATUSES, type Candidate, type Message } from '@/models'
+import { ADMISSION_PRESENTATION, STATUS_PRESENTATION } from '@/presenters/status'
+import { CANDIDATE_STATUSES, PERMISSIONS, ADMISSION_STATUSES, type AdmissionStatus, type Candidate, type CandidateAdmission, type Message, type SystemStatus } from '@/models'
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/composables/useAuth'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -23,6 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Avatar, AvatarFallback, avatarVariants } from '@/components/ui/avatar'
+import { segmentedItemVariants } from '@/components/ui/tokens'
 import EmptyState from '@/components/app/EmptyState.vue'
 import MessageTranscript from '@/components/app/MessageTranscript.vue'
 import SearchInput from '@/components/app/SearchInput.vue'
@@ -161,6 +164,113 @@ function select(c: Candidate) {
   selectedId.value = c.id
   showDetail.value = true
 }
+
+// ---- 录取决定（录取阶段展示；按部门分别记录） ----
+const { hasPermission, user } = useAuth()
+
+/** 系统是否处于录取阶段（录取阶段才展示录取状态控件）。 */
+const systemPhase = ref<SystemStatus['phase'] | null>(null)
+const phaseLoading = ref(false)
+
+/** 当前用户可见的录取决定（默认仅本部门，后端按权限过滤）。 */
+const admissions = ref<CandidateAdmission[]>([])
+const admissionsLoading = ref(false)
+/** 本部门对候选人的录取决定集（candidate_id -> status 展示用）。 */
+const admissionByCandidate = computed(() => {
+  const mine = user.value?.department_id
+  if (!mine) return new Map<number, AdmissionStatus>()
+  const map = new Map<number, AdmissionStatus>()
+  for (const a of admissions.value) {
+    if (a.department_id !== mine) continue
+    map.set(a.candidate_id, a.status)
+  }
+  return map
+})
+
+/** 是否持跨部门查看权限（决定录取决定是否全员可见）。 */
+const canBrowseAllAdmissions = computed(() => hasPermission(PERMISSIONS.CANDIDATES_BROWSE_ALL))
+/** 是否可记录录取决定（candidates.manage）。 */
+const canRecordAdmission = computed(() => hasPermission(PERMISSIONS.CANDIDATES_MANAGE))
+
+/** 部门名（跨部门查看时展示各部门决定归属）。 */
+const departmentNames = ref(new Map<number, string>())
+
+/** 当前选中候选人的所有可见录取决定（browse_all 跨部门时为多部门记录）。 */
+const selectedAdmissions = computed(() =>
+  admissions.value.filter((a) => a.candidate_id === selectedCandidate.value?.id),
+)
+
+/** 当前选中候选人本部门的录取决定（记录/切换按钮的激活态）。 */
+const ownAdmissionStatus = computed<AdmissionStatus | undefined>(() => {
+  const mine = user.value?.department_id
+  const c = selectedCandidate.value
+  if (!mine || !c) return undefined
+  return admissionByCandidate.value.get(c.id)
+})
+
+/** 其他部门录取决定（跨部门浏览时，排除本部门后的其余记录）。 */
+const otherDeptAdmissions = computed(() => {
+  const mine = user.value?.department_id
+  return selectedAdmissions.value.filter((a) => a.department_id !== mine)
+})
+
+/** 是否展示录取状态控件：录取阶段 + 有可看内容（本部门记录或跨部门权限）。 */
+const showAdmissionControls = computed(() => {
+  if (systemPhase.value !== 'admission') return false
+  if (canBrowseAllAdmissions.value) return true
+  return !!user.value?.department_id
+})
+
+async function loadSystemPhase() {
+  if (phaseLoading.value) return
+  phaseLoading.value = true
+  try {
+    const s = await systemStatusApi.get()
+    systemPhase.value = s.phase
+  } catch {
+    systemPhase.value = null
+  } finally {
+    phaseLoading.value = false
+  }
+}
+
+async function loadAdmissions() {
+  if (!showAdmissionControls.value) return
+  if (admissionsLoading.value) return
+  admissionsLoading.value = true
+  try {
+    const res = await admissionApi.list()
+    admissions.value = res.items ?? []
+    if (canBrowseAllAdmissions.value) {
+      const depts = await departmentApi.list()
+      departmentNames.value = new Map(depts.items.map((d) => [d.id, d.name]))
+    }
+  } catch {
+    admissions.value = []
+  } finally {
+    admissionsLoading.value = false
+  }
+}
+
+/** 切换候选人录取决定（写入本部门记录）。 */
+async function switchAdmission(c: Candidate, status: AdmissionStatus) {
+  if (admissionsLoading.value) return
+  try {
+    await admissionApi.set(c.id, status)
+    toast.success(`已将 ${c.name} 标记为「${ADMISSION_PRESENTATION[status].label}」`)
+    await loadAdmissions()
+  } catch (e) {
+    toast.error((e as Error).message)
+  }
+}
+
+watch(showAdmissionControls, (on) => {
+  if (on) void loadAdmissions()
+})
+
+onMounted(() => {
+  void loadSystemPhase()
+})
 
 // ---- 名册键盘导航：roving tabindex，仅选中项可 Tab，方向键在列表内移动 ----
 const rosterEl = ref<HTMLElement | null>(null)
@@ -301,9 +411,17 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
             <span class="min-w-0 flex-1">
               <span class="flex items-center justify-between gap-2">
                 <span class="min-w-0 truncate text-sm font-medium">{{ c.name }}</span>
-                <Badge :variant="STATUS_PRESENTATION[c.status].badge" class="shrink-0">
-                  {{ STATUS_PRESENTATION[c.status].label }}
-                </Badge>
+                <span class="flex shrink-0 items-center gap-1">
+                  <Badge :variant="STATUS_PRESENTATION[c.status].badge">
+                    {{ STATUS_PRESENTATION[c.status].label }}
+                  </Badge>
+                  <Badge
+                    v-if="showAdmissionControls && admissionByCandidate.get(c.id)"
+                    :variant="ADMISSION_PRESENTATION[admissionByCandidate.get(c.id)!].badge"
+                  >
+                    {{ ADMISSION_PRESENTATION[admissionByCandidate.get(c.id)!].label }}
+                  </Badge>
+                </span>
               </span>
               <span class="mt-0.5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span class="min-w-0 truncate">{{ c.profile || '无简介' }}</span>
@@ -380,6 +498,43 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                     <dd>{{ formatDateTime(selectedCandidate.created_at) }}</dd>
                   </div>
                 </dl>
+
+                <!-- 录取决定：录取阶段展示。本部门用段式控件切换；跨部门浏览时补充其他部门决定 -->
+                <div v-if="showAdmissionControls" class="border-t pt-4">
+                  <div class="space-y-3">
+                    <div v-if="canBrowseAllAdmissions && otherDeptAdmissions.length" class="flex flex-wrap items-center gap-1.5">
+                      <Badge
+                        v-for="a in otherDeptAdmissions"
+                        :key="a.department_id"
+                        :variant="ADMISSION_PRESENTATION[a.status].badge"
+                      >
+                        {{ departmentNames.get(a.department_id) ?? `#${a.department_id}` }}：
+                        {{ ADMISSION_PRESENTATION[a.status].label }}
+                      </Badge>
+                    </div>
+
+                    <div
+                      v-if="canRecordAdmission && user?.department_id"
+                      class="inline-flex items-center rounded-lg bg-muted p-1"
+                      role="group"
+                      aria-label="本部门录取决定"
+                    >
+                      <button
+                        v-for="s in ADMISSION_STATUSES"
+                        :key="s"
+                        type="button"
+                        :class="segmentedItemVariants({ active: ownAdmissionStatus === s })"
+                        :disabled="admissionsLoading"
+                        @click="switchAdmission(selectedCandidate, s)"
+                      >
+                        {{ ADMISSION_PRESENTATION[s].label }}
+                      </button>
+                    </div>
+                    <span v-else class="text-sm text-muted-foreground">
+                      {{ ownAdmissionStatus ? ADMISSION_PRESENTATION[ownAdmissionStatus].label : '未记录' }}
+                    </span>
+                  </div>
+                </div>
               </CardContent>
             </Card>
 

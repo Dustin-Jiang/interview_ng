@@ -83,6 +83,13 @@ type StateStore interface {
 	// DeleteDepartment 删除部门（仍有面试官归属时拒绝）。
 	DeleteDepartment(ctx context.Context, id uint64) error
 
+	// ---- 系统状态 ----
+
+	// GetSystemStatus 返回当前系统阶段（面试/录取）。
+	GetSystemStatus(ctx context.Context) (*dsmodel.SystemStatus, error)
+	// SetSystemStatus 切换系统阶段（仅面试/录取两档）。
+	SetSystemStatus(ctx context.Context, phase dsmodel.SystemPhase) error
+
 	// ---- 候选人管理 ----
 
 	// UpdateCandidate 编辑候选人姓名/简介。
@@ -93,6 +100,11 @@ type StateStore interface {
 	// 向后档（未签到/已签到待分配）自动解绑房间；向前档须已有房间绑定。
 	// 向前档目标为 COMPLETED 时与推进路径一致：自动解绑房间（候选人与房间均解除关联）。
 	ResetCandidateStatus(ctx context.Context, id uint64, to dsmodel.CandidateStatus) (*Event, error)
+	// ListCandidateAdmissions 返回部门对候选人的录取决定。
+	// departmentID 为 nil 时返回所有部门的记录（跨部门查看）；否则仅返回指定部门。
+	ListCandidateAdmissions(ctx context.Context, departmentID *uint64) ([]*dsmodel.CandidateAdmission, error)
+	// UpsertCandidateAdmission 记录/更新某部门对候选人的录取决定（按 candidate+department upsert）。
+	UpsertCandidateAdmission(ctx context.Context, candidateID, departmentID uint64, status dsmodel.AdmissionStatus) error
 
 	// ---- 房间管理 ----
 

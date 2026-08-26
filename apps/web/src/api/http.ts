@@ -4,7 +4,7 @@
  * 鉴权：请求拦截器自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
  */
 import axios, { type AxiosRequestConfig } from 'axios'
-import type { Candidate, CandidateStatus, Department, Message, Permission, Role, Room, User, UserProfile } from '@/models'
+import type { AdmissionStatus, Candidate, CandidateAdmission, CandidateStatus, Department, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
 
 /** 401 处理器：由 useAuth 注册（登出 + 跳登录页），避免循环依赖。 */
 let onUnauthorized: (() => void) | null = null
@@ -119,6 +119,19 @@ export const candidateApi = {
   },
 }
 
+// ---- 录取决定（按部门分别记录） ----
+
+export const admissionApi = {
+  /** 列出当前用户可见的录取决定（默认本部门；browse_all 跨部门）。 */
+  list(): Promise<{ items: CandidateAdmission[] }> {
+    return request('/admissions')
+  },
+  /** 记录本部门对候选人的录取决定（需 candidates.manage）。 */
+  set(candidateId: number, status: AdmissionStatus): Promise<{ ok: boolean }> {
+    return put(`/candidates/${candidateId}/admission`, { status })
+  },
+}
+
 // ---- 房间 ----
 
 export const roomApi = {
@@ -188,5 +201,16 @@ export const departmentApi = {
   },
   remove(id: number): Promise<{ ok: boolean }> {
     return del(`/departments/${id}`)
+  },
+}
+
+// ---- 系统状态 ----
+
+export const systemStatusApi = {
+  get(): Promise<SystemStatus> {
+    return request('/system/status')
+  },
+  set(phase: SystemPhase): Promise<{ ok: boolean }> {
+    return put('/system/status', { phase })
   },
 }

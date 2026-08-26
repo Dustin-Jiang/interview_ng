@@ -47,6 +47,11 @@ export const router = createRouter({
           name: 'settings-departments',
           component: () => import('@/views/SettingsDepartmentsView.vue'),
         },
+        {
+          path: 'system-status',
+          name: 'settings-system-status',
+          component: () => import('@/views/SettingsSystemStatusView.vue'),
+        },
       ],
     },
     {

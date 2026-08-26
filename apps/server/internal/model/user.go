@@ -8,7 +8,7 @@ type User struct {
 	Username     string      `gorm:"size:64;uniqueIndex" json:"username"` // 登录凭证（唯一；管理端可改）
 	PasswordHash string      `gorm:"size:255" json:"-"`
 	Name         string      `gorm:"size:128" json:"name"`
-	DepartmentID *uint64     `gorm:"index" json:"department_id"` // 所属部门（可空：初始 admin/历史数据可无部门）
+	DepartmentID *uint64     `gorm:"index" json:"department_id"` // 所属部门（可空：admin 全局角色无部门，面试官必有部门）
 	Department   *Department `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
 	TokenVersion uint64      `json:"-"` // 改密/重置时递增，使旧 token 即时失效
 	CreatedAt    time.Time   `json:"created_at"`

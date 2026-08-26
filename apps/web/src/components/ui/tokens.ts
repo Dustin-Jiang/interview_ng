@@ -46,6 +46,27 @@ export const navItemVariants = cva(
 export type NavItemVariants = VariantProps<typeof navItemVariants>
 
 /**
+ * 段式选择控件项（shadcn 风格）：置于 bg-muted 轨道内，激活项以 bg-background 脱离轨道。
+ * 无实底填充、无阴影，仅激活文字/底色区分（含文字标签，不依赖颜色单通道）。
+ */
+export const segmentedItemVariants = cva(
+  'shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+  {
+    variants: {
+      active: {
+        true: 'bg-background text-foreground',
+        false: 'text-muted-foreground hover:text-foreground',
+      },
+    },
+    defaultVariants: {
+      active: false,
+    },
+  },
+)
+
+export type SegmentedItemVariants = VariantProps<typeof segmentedItemVariants>
+
+/**
  * 可交互卡片表面：房间卡片、快捷入口等点击式 tile 的统一外观。
  * interactive 态统一提供 hover 反馈与 focus-within 焦点环。
  */

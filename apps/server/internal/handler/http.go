@@ -74,6 +74,14 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	authed.POST("/departments", h.require(dsmodel.PermUsersManage), h.createDepartment)
 	authed.PUT("/departments/:id", h.require(dsmodel.PermUsersManage), h.updateDepartment)
 	authed.DELETE("/departments/:id", h.require(dsmodel.PermUsersManage), h.deleteDepartment)
+
+	// 系统状态（读取任意登录：录取阶段 UI 需全员可见；切换仅 users.manage）
+	authed.GET("/system/status", h.getSystemStatus)
+	authed.PUT("/system/status", h.require(dsmodel.PermUsersManage), h.setSystemStatus)
+
+	// 录取状态（浏览任意登录：默认本部门，跨部门需 browse_all；记录需 candidates.manage）
+	authed.GET("/admissions", h.listAdmissions)
+	authed.PUT("/candidates/:id/admission", h.require(dsmodel.PermCandidatesManage), h.upsertCandidateAdmission)
 }
 
 //---- 认证 ----
@@ -576,6 +584,97 @@ func (h *HTTPServer) updateDepartment(c *gin.Context) {
 func (h *HTTPServer) deleteDepartment(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err := h.svc.DeleteDepartment(c.Request.Context(), id); err != nil {
+		status, code := stateErr(err)
+		c.JSON(status, gin.H{"error": code})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+//---- 系统状态 ----
+
+func (h *HTTPServer) getSystemStatus(c *gin.Context) {
+	st, err := h.svc.GetSystemStatus(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, st)
+}
+
+type updateSystemStatusReq struct {
+	Phase string `json:"phase"`
+}
+
+func (h *HTTPServer) setSystemStatus(c *gin.Context) {
+	var req updateSystemStatusReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	if err := h.svc.SetSystemStatus(c.Request.Context(), dsmodel.SystemPhase(req.Phase)); err != nil {
+		status, code := stateErr(err)
+		c.JSON(status, gin.H{"error": code})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+//---- 录取状态 ----
+
+// listAdmissions 返回当前用户可见的录取决定：
+// 默认仅本部门记录；持 candidates.browse_all 可跨部门查看全部部门的录取决定。
+func (h *HTTPServer) listAdmissions(c *gin.Context) {
+	uid := auth.UserID(c)
+	if h.auth.HasPermission(uid, dsmodel.PermCandidatesBrowseAll) {
+		out, err := h.svc.ListCandidateAdmissions(c.Request.Context(), nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": out})
+		return
+	}
+	// 无跨部门权限：仅返回本部门记录；未归属部门则无可视录取决定。
+	me, err := h.auth.Me(c.Request.Context(), uid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var out []*dsmodel.CandidateAdmission
+	if me.User.DepartmentID != nil {
+		records, err := h.svc.ListCandidateAdmissions(c.Request.Context(), me.User.DepartmentID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		out = records
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
+}
+
+type upsertAdmissionReq struct {
+	Status string `json:"status"`
+}
+
+func (h *HTTPServer) upsertCandidateAdmission(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	uid := auth.UserID(c)
+	var req upsertAdmissionReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	me, err := h.auth.Me(c.Request.Context(), uid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if me.User.DepartmentID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "当前用户未归属部门，无法记录录取决定"})
+		return
+	}
+	if err := h.svc.UpsertCandidateAdmission(c.Request.Context(), id, *me.User.DepartmentID, dsmodel.AdmissionStatus(req.Status)); err != nil {
 		status, code := stateErr(err)
 		c.JSON(status, gin.H{"error": code})
 		return
