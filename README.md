@@ -47,7 +47,7 @@ interview_ng/
 
 | 需求 | 落点 |
 |---|---|
-| 1. 多客户端 WS 长连接同步状态 | `internal/handler/ws.go` + `internal/broadcast`；WS 按房间连接，事件扇出到房间内所有连接 |
+| 1. 多客户端 WS 长连接同步状态 | `internal/handler/ws.go` + `internal/broadcast`；房间通道按房间扇出，看板通道（`/ws/board`）扇出全部业务事件，列表页（候场大屏/房间列表/候选人记录）据此防抖重拉实时刷新 |
 | 2. 系统内部状态唯一 | `internal/state`；单 director 进程内存为权威，所有写经 `StateStore` 原子操作 + 五档状态机，非法转移拒绝 |
 | 3. 良好的状态恢复 | 房间内消息 `id` 作续传游标；重连拉"房间快照 + 消息增量"；事件带稳定 `Seq` 幂等对齐；「先落库后广播」杜绝"客户端看到但库没有" |
 
@@ -75,7 +75,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 - **handler**：Gin 路由、HTTP + WS 收发、JSON 信封编解、命令分发、续传同步。不碰库。
 - **service**：`InterviewService` 业务编排；强制「先落库后广播」顺序。
 - **state**：`StateStore` 接口 + `MemStateStore` 实现。状态唯一性权威、原子写、转移动图、内存快照读；内部经 Gorm 落库。
-- **broadcast**：`Manager` 订阅事件流，按房间扇出到该房间所有 WS 写队列。
+- **broadcast**：`Manager` 订阅事件流，按房间扇出到该房间所有 WS 写队列；`BindGlobal` 注册的全局订阅者（看板通道）接收所有事件。
 - **model**：`User / Department / Candidate / Room / RoomMember / Message / SystemStatus / CandidateAdmission` + 状态枚举/转移动图。
 
 ---
@@ -102,7 +102,11 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 ## WS 协议（JSON 信封）
 
-连接：`GET /ws/room/:roomId`（RESTful 路径，**不带任何 query 参数**）。连接建立后首条消息必须为 `auth`（携带 JWT），鉴权成功后才可收发业务命令；10 秒内未鉴权将断开。
+两条 WS 通道，连接建立后首条消息必须为 `auth`（携带 JWT），鉴权成功后才可收发；10 秒内未鉴权将断开。
+
+**房间通道** `GET /ws/room/:roomId`（RESTful 路径，**不带任何 query 参数**）：要求 `rooms.chat` 权限，成功后自动 JoinRoom（一用户至多一活跃房间），收发房间业务命令。
+
+**看板通道** `GET /ws/board`：要求 `rooms.view` 权限，不 JoinRoom、无成员语义、仅接受 `auth` 一条命令。扇出所有业务事件（房间级 + 全局级，各一份不重复），供候场大屏 / 房间列表 / 候选人记录等列表页感知变化后防抖重拉。
 
 请求（客户端 → 服务端）：
 ```json
@@ -117,10 +121,13 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 服务端推送（事件 / 回复）：
 ```json
 {"type":"message_appended","room_id":3,"seq":12,"msg_id":101,"data":{"RoomID":3,"CandidateID":5,"SenderID":1,"Content":"hello"}}
+{"type":"candidate_signed_in","room_id":0,"seq":11,"data":{"CandidateID":5}}
 {"type":"reply","req_id":"r2","data":{"ok":true,...}}
 ```
 
 > `seq` 全局单调事件序；`msg_id` 为**候选人维度**续传游标——消息按候选人归属，候选人换房后历史随人走。空房间（无候选人）可入房但 `send_msg` 会被拒。
+>
+> 事件类型：`candidate_signed_in`（全局）、`candidate_assigned`、`room_phase_changed`、`message_appended`、`member_joined/left`（以上带 room_id）、`candidate_created/updated/deleted` 与 `room_created/deleted`（全局，载荷 `{CandidateID}` / `{RoomID}`）。
 
 ## 认证与鉴权
 
@@ -170,7 +177,8 @@ pnpm dev                      # http://localhost:8000 （vite 已把 /api 与 /w
 - `POST /api/rooms/:id/pull_candidate` `{candidate_id}`（**拉取式分配**：候选人从待分配池被拉入房间，取代旧的 `POST /api/candidates/:id/assign`）
 - `GET/POST /api/users`、`PUT/DELETE /api/users/:id`、`POST /api/users/:id/reset_password`（`users.manage`）
 - `GET/POST /api/roles`、`PUT/DELETE /api/roles/:id`（`users.manage`，角色管理）
-- `GET  /ws/room/:roomId`（连接后首条 `auth` 消息）
+- `GET  /ws/room/:roomId`（房间通道，连接后首条 `auth` 消息）
+- `GET  /ws/board`（看板通道，扇出全部业务事件供列表页实时刷新）
 
 ---
 

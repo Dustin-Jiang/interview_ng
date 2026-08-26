@@ -25,7 +25,7 @@ pnpm monorepo：`apps/web`（Vue 3 + Vite + TS + shadcn-vue，包名 `@interview
 - 房间是**独立于候选人的物理会议室记录**：`candidate_id` 可空，无房间状态机，房间“状态”= 候选人状态的查询投影；仅空房可删。消息**按候选人归属**（`messages.candidate_id`），候选人维度续传游标，删候选人级联删其消息。候选人完成（推进或重置到 `COMPLETED`）**自动清房**（`rooms.candidate_id` 置空，绑定唯一权威在房间侧，候选人 `room_id` 为只读投影），房间转空闲、成员留守，可立即拉取下一位；消息仍按候选人归档保留。
 - **分配 = 房间内拉取**（`POST /api/rooms/:id/pull_candidate`），取代旧的 `POST /api/candidates/:id/assign`。
 - 一个房间 = 一个候选人 + 多个面试官；`room_members` 对 `(room_id, user_id)` 唯一，因此一个用户至多同时处于一个活跃房间。
-- 事件带全局单调 `Seq`；消息带候选人维度 `id` 作续传游标。WS 走 RESTful 路径 `GET /ws/room/:roomId`（无 query 参数），连接后首条消息必须为 `auth`（携带 JWT，10 秒超时），成功后自动 JoinRoom；JSON 信封 `{op, req_id, data}`。
+- 事件带全局单调 `Seq`；消息带候选人维度 `id` 作续传游标。WS 两条通道，JSON 信封 `{op, req_id, data}`，连接后首条消息必须为 `auth`（携带 JWT，10 秒超时）：房间通道 `GET /ws/room/:roomId`（无 query 参数，要求 `rooms.chat`，成功后自动 JoinRoom）；看板通道 `GET /ws/board`（要求 `rooms.view`，不 JoinRoom、仅接受 auth，扇出**所有**业务事件——含 `candidate_created/updated/deleted`、`room_created/deleted` 等全局事件与房间级事件各一份、不重复）。事件类型新增须同时更新看板扇出语义与前端订阅列表。
 
 ## 测试
 
@@ -33,6 +33,6 @@ pnpm monorepo：`apps/web`（Vue 3 + Vite + TS + shadcn-vue，包名 `@interview
 
 ## 前端约定
 
-- 无 Pinia/全局 store。MVVM 通过组合式函数（`src/composables/useXxx`，状态在调用方作用域内自管理，`onScopeDispose` 清理）+ 纯函数 `src/domain/` + `src/api/` 服务层实现。视图只绑定 VM；`src/models/` 与后端 JSON 契约一一对应。
+- 无 Pinia/全局 store。MVVM 通过组合式函数（`src/composables/useXxx`，状态在调用方作用域内自管理，`onScopeDispose` 清理）+ 纯函数 `src/domain/` + `src/api/` 服务层实现。视图只绑定 VM；`src/models/` 与后端 JSON 契约一一对应。唯一例外：`useBoardChannel`（看板 WS 通道）为模块级单例 + 引用计数；列表页实时刷新统一走 `useBoardRefresh(events, cb)`（事件 → 防抖 300ms 重拉），房间内数据由 `useRoomChat` 的房间通道负责（重连自动补拉增量）。
 - **视觉 token 一律符合全局设计**：颜色/圆角/边框/阴影只能取自 `src/assets/index.css`（`:root`/`.dark` CSS 变量）与 `tailwind.config.cjs`（`theme.extend` 的语义色映射、radius 档位）的语义 token（如 `bg-muted`、`text-muted-foreground`、`bg-border`、`bg-accent`），禁止硬编码 hex/rgb/hsl 或任意值色。新增/扩展组件须沿用 `components/ui/<name>/index.ts` + cva 变体约定（参考 button/badge/icon-badge），并在既有变体基础上扩展；状态只通过带文字标签的 Badge 传达，不依赖颜色单通道。
 - **无 caption 小字**：禁止在标题/栏目标题之下附加小字号说明文字（页头 description、卡片副标题、对话框说明、空态 hint、表单说明行等）。出现 caption 即意味着标题不够明确——要么删掉冗余说明，要么把标题改写得足够准确、自明。数据内容（如个人简介）与功能元信息（字段标签、时间戳、空态主文案、`-`/`无` 占位）不受此限。
