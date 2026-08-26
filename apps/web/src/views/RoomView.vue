@@ -6,6 +6,7 @@ import { DoorOpen, Plus, RefreshCw, Trash2 } from 'lucide-vue-next'
 
 import { useRoomList } from '@/composables/useRoomList'
 import { useAuth } from '@/composables/useAuth'
+import { useBoardRefresh } from '@/composables/useBoardChannel'
 import { roomApi } from '@/api/http'
 import { PERMISSIONS, type CandidateStatus } from '@/models'
 import { roomPhaseOf } from '@/domain/status'
@@ -44,6 +45,21 @@ onMounted(() => {
 watch(parsedRoomId, (id) => {
   if (!id) load()
 })
+
+// ---- 实时刷新：房间/候选人状态变化（建删房、拉取、阶段、清房）→ 防抖重拉列表 ----
+// 仅列表态生效；进入具体房间后由 RoomChat 的房间通道负责实时。
+useBoardRefresh(
+  [
+    'room_created',
+    'room_deleted',
+    'candidate_assigned',
+    'candidate_deleted',
+    'room_phase_changed',
+  ],
+  () => {
+    if (!parsedRoomId.value) void load()
+  },
+)
 
 function openRoom(id: number) {
   router.push({ name: 'room', params: { roomId: String(id) } })

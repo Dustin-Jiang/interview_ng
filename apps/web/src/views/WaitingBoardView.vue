@@ -12,6 +12,7 @@ import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useCandidates } from '@/composables/useCandidates'
 import { useAuth } from '@/composables/useAuth'
+import { useBoardRefresh } from '@/composables/useBoardChannel'
 import { sortWaitingBoard } from '@/domain/status'
 import { PERMISSIONS, type Candidate } from '@/models'
 
@@ -70,6 +71,19 @@ const columns: ColumnDef<DataTableFeatures, Candidate>[] = columnHelper.columns(
     },
   }),
 ])
+
+// ---- 实时刷新：看板通道事件（签到/拉取/阶段变化/CRUD）→ 防抖重拉名单 ----
+useBoardRefresh(
+  [
+    'candidate_signed_in',
+    'candidate_assigned',
+    'candidate_created',
+    'candidate_updated',
+    'candidate_deleted',
+    'room_phase_changed',
+  ],
+  () => void load(),
+)
 
 onMounted(() => void load())
 </script>

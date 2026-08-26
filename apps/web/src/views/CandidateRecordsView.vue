@@ -11,6 +11,7 @@ import { toast } from 'vue-sonner'
 import { ArrowLeft, ExternalLink, RefreshCw, SearchX, SlidersHorizontal, UsersRound, X } from 'lucide-vue-next'
 
 import { admissionApi, candidateApi, departmentApi, systemStatusApi } from '@/api/http'
+import { useBoardChannel } from '@/composables/useBoardChannel'
 import { formatDateTime } from '@/lib/format'
 import { ADMISSION_PRESENTATION, STATUS_PRESENTATION } from '@/presenters/status'
 import { CANDIDATE_STATUSES, PERMISSIONS, ADMISSION_STATUSES, type AdmissionStatus, type Candidate, type CandidateAdmission, type Message, type SystemStatus } from '@/models'
@@ -100,6 +101,28 @@ async function load() {
   }
 }
 
+// ---- 实时刷新（看板通道）：名册状态/CRUD → 防抖重拉；选中候选人有新消息 → 增量补拉 ----
+const BOARD_ROSTER_EVENTS = [
+  'candidate_signed_in',
+  'candidate_assigned',
+  'candidate_created',
+  'candidate_updated',
+  'candidate_deleted',
+  'room_phase_changed',
+]
+let rosterTimer: ReturnType<typeof setTimeout> | undefined
+useBoardChannel().subscribe((ev) => {
+  if (BOARD_ROSTER_EVENTS.includes(ev.type)) {
+    clearTimeout(rosterTimer)
+    rosterTimer = setTimeout(() => void load(), 300)
+    return
+  }
+  if (ev.type === 'message_appended') {
+    const cid = (ev.data as { CandidateID?: number } | undefined)?.CandidateID
+    if (cid != null && cid === selectedId.value) void loadMessages(cid)
+  }
+})
+
 onMounted(() => {
   // 从 URL query 恢复筛选与选中态（深链）。
   const q = route.query.q
@@ -133,7 +156,10 @@ function syncUrl() {
 
 watch([keyword, statusFilter, selectedId], syncUrl)
 
-onBeforeUnmount(() => clearTimeout(syncTimer))
+onBeforeUnmount(() => {
+  clearTimeout(syncTimer)
+  clearTimeout(rosterTimer)
+})
 
 // ---- 右侧详情 ----
 const selectedCandidate = computed(() => candidates.value.find((c) => c.id === selectedId.value) ?? null)
@@ -212,6 +238,23 @@ const ownAdmissionStatus = computed<AdmissionStatus | undefined>(() => {
 const otherDeptAdmissions = computed(() => {
   const mine = user.value?.department_id
   return selectedAdmissions.value.filter((a) => a.department_id !== mine)
+})
+
+/** 所有部门录取决定（跨部门浏览时含本部门；未记录默认待定）。 */
+const allDeptAdmissions = computed(() => {
+  if (!canBrowseAllAdmissions.value) return []
+  const mine = user.value?.department_id
+  const result: { departmentId: number; departmentName: string; status: AdmissionStatus }[] = []
+  for (const [deptId, deptName] of departmentNames.value) {
+    if (deptId === mine) continue
+    const admission = selectedAdmissions.value.find((a) => a.department_id === deptId)
+    result.push({
+      departmentId: deptId,
+      departmentName: deptName,
+      status: admission?.status ?? 'pending',
+    })
+  }
+  return result
 })
 
 /** 是否展示录取状态控件：录取阶段 + 有可看内容（本部门记录或跨部门权限）。 */
@@ -447,7 +490,7 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
       </div>
 
       <ScrollArea class="min-h-0 flex-1">
-        <div class="mx-auto max-w-3xl space-y-8 px-4 py-6">
+        <div class="mx-auto max-w-3xl space-y-6 px-4 py-6">
           <!-- 未选择 -->
           <EmptyState v-if="!selectedCandidate" bare :icon="UsersRound" class="py-20">
             从左侧选择一位候选人查看详情
@@ -456,18 +499,18 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
           <template v-else>
             <!-- 资料卡：头像 + 姓名 + 状态 + 直达房间 + 元信息 -->
             <Card>
-              <CardHeader class="flex-row items-center gap-4 space-y-0">
+              <CardHeader class="flex-row items-start gap-4 space-y-0">
                 <Avatar :class="avatarVariants({ size: 'lg' })" aria-hidden="true">
                   <AvatarFallback>{{ initialsOf(selectedCandidate.name) }}</AvatarFallback>
                 </Avatar>
-                <div class="min-w-0 flex-1 space-y-1">
+                <div class="min-w-0 flex-1 space-y-1.5">
                   <div class="flex flex-wrap items-center gap-2">
                     <CardTitle class="truncate text-xl">{{ selectedCandidate.name }}</CardTitle>
                     <Badge :variant="STATUS_PRESENTATION[selectedCandidate.status].badge">
                       {{ STATUS_PRESENTATION[selectedCandidate.status].label }}
                     </Badge>
                   </div>
-                  <p class="line-clamp-2 text-sm text-muted-foreground">
+                  <p class="text-sm text-muted-foreground">
                     {{ selectedCandidate.profile || '暂无个人简介' }}
                   </p>
                 </div>
@@ -483,33 +526,32 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                 </Button>
               </CardHeader>
               <CardContent class="pt-0">
-                <dl class="flex flex-wrap gap-x-8 gap-y-2 pt-4 text-sm">
-                  <div class="flex items-baseline gap-2">
-                    <dt class="shrink-0 text-muted-foreground">房间</dt>
-                    <dd v-if="selectedCandidate.room_id" class="font-mono">
+                <div class="space-y-2 pt-4 text-sm">
+                  <div class="flex items-center justify-between gap-3">
+                    <span class="text-muted-foreground">房间</span>
+                    <span v-if="selectedCandidate.room_id" class="font-mono">
                       <Button variant="link" class="h-auto p-0" @click="goRoom(selectedCandidate)">
                         {{ roomLabel(selectedCandidate) }}
                       </Button>
-                    </dd>
-                    <dd v-else class="text-muted-foreground">{{ roomLabel(selectedCandidate) }}</dd>
+                    </span>
+                    <span v-else class="text-muted-foreground">{{ roomLabel(selectedCandidate) }}</span>
                   </div>
-                  <div class="flex items-baseline gap-2">
-                    <dt class="shrink-0 text-muted-foreground">创建时间</dt>
-                    <dd>{{ formatDateTime(selectedCandidate.created_at) }}</dd>
+                  <div class="flex items-center justify-between gap-3">
+                    <span class="text-muted-foreground">创建时间</span>
+                    <time>{{ formatDateTime(selectedCandidate.created_at) }}</time>
                   </div>
-                </dl>
+                </div>
 
                 <!-- 录取决定：录取阶段展示。本部门用段式控件切换；跨部门浏览时补充其他部门决定 -->
-                <div v-if="showAdmissionControls" class="border-t pt-4">
-                  <div class="space-y-3">
-                    <div v-if="canBrowseAllAdmissions && otherDeptAdmissions.length" class="flex flex-wrap items-center gap-1.5">
+                <template v-if="showAdmissionControls">
+                  <div class="mt-4 space-y-3">
+                    <div v-if="canBrowseAllAdmissions && allDeptAdmissions.length" class="flex flex-wrap items-center gap-2">
                       <Badge
-                        v-for="a in otherDeptAdmissions"
-                        :key="a.department_id"
-                        :variant="ADMISSION_PRESENTATION[a.status].badge"
+                        v-for="d in allDeptAdmissions"
+                        :key="d.departmentId"
+                        :variant="ADMISSION_PRESENTATION[d.status].badge"
                       >
-                        {{ departmentNames.get(a.department_id) ?? `#${a.department_id}` }}：
-                        {{ ADMISSION_PRESENTATION[a.status].label }}
+                        {{ d.departmentName }}：{{ ADMISSION_PRESENTATION[d.status].label }}
                       </Badge>
                     </div>
 
@@ -530,11 +572,11 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                         {{ ADMISSION_PRESENTATION[s].label }}
                       </button>
                     </div>
-                    <span v-else class="text-sm text-muted-foreground">
-                      {{ ownAdmissionStatus ? ADMISSION_PRESENTATION[ownAdmissionStatus].label : '未记录' }}
+                    <span v-else-if="ownAdmissionStatus" class="text-sm text-muted-foreground">
+                      {{ ADMISSION_PRESENTATION[ownAdmissionStatus].label }}
                     </span>
                   </div>
-                </div>
+                </template>
               </CardContent>
             </Card>
 
