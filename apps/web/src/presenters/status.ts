@@ -1,4 +1,5 @@
 import type { BadgeVariants } from '@/components/ui/badge'
+import type { AdmissionOutcome } from '@/domain/admission'
 import type { AdmissionStatus, CandidateStatus } from '@/models'
 
 /** 房间派生状态的"空闲"哨兵键（无候选人的空房间）。 */
@@ -27,4 +28,20 @@ export const ADMISSION_PRESENTATION: Record<
   pending: { label: '待定', badge: 'outline' },
   admitted: { label: '录取', badge: 'default' },
   withdrawn: { label: '放弃', badge: 'secondary' },
+}
+
+/** 录取汇总结论的展示元数据：admitted 档文案拼接部门名（录取到 X）。 */
+export function admissionOutcomePresentation(
+  o: AdmissionOutcome,
+): { label: string; badge: NonNullable<BadgeVariants['variant']> } {
+  switch (o.kind) {
+    case 'admitted':
+      return { label: `录取到 ${o.departmentName}`, badge: 'default' }
+    case 'none':
+      return { label: '未录取', badge: 'outline' }
+    case 'conflict':
+      return { label: '多家录取', badge: 'destructive' }
+    case 'pending':
+      return { label: '待定', badge: 'outline' }
+  }
 }

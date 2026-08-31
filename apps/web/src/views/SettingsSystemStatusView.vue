@@ -1,19 +1,30 @@
 <!--
   SettingsSystemStatusView —— 系统状态设置：在「面试阶段 / 录取阶段 / 捡漏阶段」之间切换。
   阶段呈 Stepper 进度条：已越过的档带勾选、当前档高亮、后续档待激活，点击任意档即切换。
+  录取/捡漏阶段时下方展示录取情况预览：全体候选人 × 各部门决定的矩阵与汇总结论
+  （唯一部门录取且其余全部放弃 → 「录取到该部门」）。跨部门数据需 candidates.browse_all。
 -->
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { Check, RefreshCw, UserCheck, UserSearch, UsersRound } from 'lucide-vue-next'
+import { createColumnHelper } from '@tanstack/vue-table'
 
+import { admissionApi, candidateApi, departmentApi } from '@/api/http'
+import { useBoardChannel } from '@/composables/useBoardChannel'
 import { useSystemStatus } from '@/composables/useSystemStatus'
-import type { SystemPhase } from '@/models'
-import { SYSTEM_PHASES } from '@/models'
+import { buildAdmissionPreview, type AdmissionPreviewRow } from '@/domain/admission'
+import { ADMISSION_PRESENTATION, admissionOutcomePresentation } from '@/presenters/status'
+import type { SystemPhase, Candidate, CandidateAdmission, Department } from '@/models'
+import { PERMISSIONS, SYSTEM_PHASES } from '@/models'
+import { useAuth } from '@/composables/useAuth'
 
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import DataTable from '@/components/ui/table/data-table.vue'
+import type { DataTableFeatures } from '@/components/ui/table/features'
 import {
   Stepper,
   StepperIndicator,
@@ -22,6 +33,7 @@ import {
   StepperTitle,
   StepperTrigger,
 } from '@/components/ui/stepper'
+import EmptyState from '@/components/app/EmptyState.vue'
 import PageShell from '@/components/app/PageShell.vue'
 
 const { status, loading, load, setPhase } = useSystemStatus()
@@ -70,6 +82,90 @@ async function switchTo(phase: SystemPhase) {
     switching.value = false
   }
 }
+
+// ---- 录取情况预览（录取/捡漏阶段展示；预览为全局矩阵，需 candidates.browse_all） ----
+const { hasPermission } = useAuth()
+const canBrowseAll = computed(() => hasPermission(PERMISSIONS.CANDIDATES_BROWSE_ALL))
+
+const previewCandidates = ref<Candidate[]>([])
+const previewDepartments = ref<Department[]>([])
+const previewAdmissions = ref<CandidateAdmission[]>([])
+const previewLoading = ref(false)
+const previewError = ref('')
+
+const showPreview = computed(
+  () =>
+    canBrowseAll.value &&
+    (status.value?.phase === 'admission' || status.value?.phase === 'leftover'),
+)
+
+const previewRows = computed<AdmissionPreviewRow[]>(() =>
+  buildAdmissionPreview(previewCandidates.value, previewDepartments.value, previewAdmissions.value),
+)
+
+// ---- DataTable 列定义：候选人 + 各部门决定（动态列）+ 汇总结论 ----
+const previewColumnHelper = createColumnHelper<DataTableFeatures, AdmissionPreviewRow>()
+
+const previewColumns = computed(() =>
+  previewColumnHelper.columns([
+    previewColumnHelper.accessor('candidateName', {
+      header: '候选人',
+      cell: ({ getValue }) => h('div', { class: 'font-medium' }, getValue()),
+    }),
+    ...previewDepartments.value.map((d, i) =>
+      previewColumnHelper.display({
+        id: `dept-${d.id}`,
+        header: d.name,
+        cell: ({ row }) => {
+          const p = ADMISSION_PRESENTATION[row.original.statuses[i]]
+          return h(Badge, { variant: p.badge }, () => p.label)
+        },
+      }),
+    ),
+    previewColumnHelper.display({
+      id: 'outcome',
+      header: '录取情况',
+      cell: ({ row }) => {
+        const p = admissionOutcomePresentation(row.original.outcome)
+        return h(Badge, { variant: p.badge }, () => p.label)
+      },
+    }),
+  ]),
+)
+
+async function loadPreview() {
+  if (!showPreview.value || previewLoading.value) return
+  previewLoading.value = true
+  previewError.value = ''
+  try {
+    const [cand, dept, adm] = await Promise.all([
+      candidateApi.list({ limit: 200 }),
+      departmentApi.list(),
+      admissionApi.list(),
+    ])
+    previewCandidates.value = cand.items
+    previewDepartments.value = dept.items
+    previewAdmissions.value = adm.items
+  } catch (e) {
+    previewError.value = (e as Error).message
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+// 进入录取/捡漏阶段即拉取预览；录取决定无看板事件，仅候选人增删触发重拉（其余靠手动刷新）。
+watch(showPreview, (show) => {
+  if (show) void loadPreview()
+})
+
+const PREVIEW_RELOAD_EVENTS = ['candidate_created', 'candidate_updated', 'candidate_deleted']
+let previewTimer: ReturnType<typeof setTimeout> | undefined
+useBoardChannel().subscribe((ev) => {
+  if (showPreview.value && PREVIEW_RELOAD_EVENTS.includes(ev.type)) {
+    clearTimeout(previewTimer)
+    previewTimer = setTimeout(() => void loadPreview(), 300)
+  }
+})
 
 onMounted(() => void load())
 </script>
@@ -125,6 +221,35 @@ onMounted(() => void load())
             </StepperTitle>
           </StepperItem>
         </Stepper>
+      </Card>
+
+      <!-- 录取情况预览：全体候选人 × 各部门决定 + 汇总结论 -->
+      <Card v-if="showPreview" class="p-5">
+        <div class="mb-4 flex items-center justify-between gap-2">
+          <h2 class="text-base font-semibold">录取情况预览</h2>
+          <Button
+            variant="outline"
+            size="icon"
+            aria-label="刷新录取情况"
+            @click="loadPreview"
+          >
+            <RefreshCw :class="previewLoading ? 'animate-spin' : ''" aria-hidden="true" />
+          </Button>
+        </div>
+
+        <div v-if="previewLoading && previewRows.length === 0" class="space-y-2" aria-busy="true">
+          <Skeleton v-for="i in 3" :key="i" class="h-12 w-full rounded-md" />
+        </div>
+
+        <EmptyState v-else-if="previewError" :icon="UsersRound">
+          录取情况加载失败：{{ previewError }}
+        </EmptyState>
+
+        <EmptyState v-else-if="previewRows.length === 0" :icon="UsersRound">
+          暂无候选人
+        </EmptyState>
+
+        <DataTable v-else :columns="previewColumns" :data="previewRows" />
       </Card>
     </template>
   </PageShell>
