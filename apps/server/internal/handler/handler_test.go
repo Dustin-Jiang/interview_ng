@@ -568,8 +568,8 @@ func TestDepartmentManageAndPermission(t *testing.T) {
 		t.Fatalf("admin should not have a department: %v", out)
 	}
 
-	// 创建部门
-	code, out := doJSON(t, r, "POST", "/api/departments", `{"name":"前端组","description":"负责前端岗位"}`, token)
+	// 创建部门（含预期人数）
+	code, out := doJSON(t, r, "POST", "/api/departments", `{"name":"前端组","description":"负责前端岗位","expected_count":15}`, token)
 	if code != http.StatusCreated {
 		t.Fatalf("create department: got %d %v", code, out)
 	}
@@ -585,10 +585,31 @@ func TestDepartmentManageAndPermission(t *testing.T) {
 	for _, it := range items {
 		if d, _ := it.(map[string]any); int(d["id"].(float64)) == deptID && d["name"] == "前端组" {
 			found = true
+			if int(d["expected_count"].(float64)) != 15 {
+				t.Fatalf("expected_count: got %v, want 15", d["expected_count"])
+			}
 		}
 	}
 	if !found {
 		t.Fatalf("created department not listed: %v", out)
+	}
+
+	// 更新部门（含预期人数）
+	code, out = doJSON(t, r, "PUT", "/api/departments/"+itoa(deptID), `{"name":"前端组","description":"负责前端岗位","expected_count":25}`, token)
+	if code != http.StatusOK {
+		t.Fatalf("update department: got %d %v", code, out)
+	}
+	code, out = doJSON(t, r, "GET", "/api/departments", "", token)
+	items, _ = out["items"].([]any)
+	for _, it := range items {
+		if d, _ := it.(map[string]any); int(d["id"].(float64)) == deptID && int(d["expected_count"].(float64)) != 25 {
+			t.Fatalf("expected_count after update: got %v, want 25", d["expected_count"])
+		}
+	}
+
+	// 负数预期人数 → 400
+	if code, _ := doJSON(t, r, "PUT", "/api/departments/"+itoa(deptID), `{"name":"前端组","description":"","expected_count":-1}`, token); code != http.StatusBadRequest {
+		t.Fatalf("negative expected_count: got %d", code)
 	}
 
 	// 创建用户并归属部门
@@ -657,6 +678,16 @@ func TestSystemStatusManageAndPermission(t *testing.T) {
 	code, out = doJSON(t, r, "GET", "/api/system/status", "", token)
 	if out["phase"] != "admission" {
 		t.Fatalf("phase after set: %v", out)
+	}
+
+	// 切换到捡漏阶段
+	code, out = doJSON(t, r, "PUT", "/api/system/status", `{"phase":"leftover"}`, token)
+	if code != http.StatusOK {
+		t.Fatalf("set leftover: got %d %v", code, out)
+	}
+	code, out = doJSON(t, r, "GET", "/api/system/status", "", token)
+	if out["phase"] != "leftover" {
+		t.Fatalf("phase after set leftover: %v", out)
 	}
 
 	// 非法阶段 → 400

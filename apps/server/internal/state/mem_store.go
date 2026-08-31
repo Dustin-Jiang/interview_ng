@@ -623,21 +623,21 @@ func (s *MemStateStore) ListDepartments(ctx context.Context) ([]*dsmodel.Departm
 	return out, nil
 }
 
-func (s *MemStateStore) CreateDepartment(ctx context.Context, name, desc string) (uint64, error) {
+func (s *MemStateStore) CreateDepartment(ctx context.Context, name, desc string, expectedCount int) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d := &dsmodel.Department{Name: name, Description: desc}
+	d := &dsmodel.Department{Name: name, Description: desc, ExpectedCount: expectedCount}
 	if err := s.db.WithContext(ctx).Create(d).Error; err != nil {
 		return 0, err
 	}
 	return d.ID, nil
 }
 
-func (s *MemStateStore) UpdateDepartment(ctx context.Context, id uint64, name, desc string) error {
+func (s *MemStateStore) UpdateDepartment(ctx context.Context, id uint64, name, desc string, expectedCount int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.db.WithContext(ctx).Model(&dsmodel.Department{}).Where("id = ?", id).
-		Updates(map[string]any{"name": name, "description": desc}).Error; err != nil {
+		Updates(map[string]any{"name": name, "description": desc, "expected_count": expectedCount}).Error; err != nil {
 		return err
 	}
 	return nil

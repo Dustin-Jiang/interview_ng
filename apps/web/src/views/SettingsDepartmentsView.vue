@@ -27,28 +27,39 @@ onMounted(() => void load())
 const deptDialogOpen = ref(false)
 const editingDept = ref<Department | null>(null)
 const savingDept = ref(false)
-const deptForm = ref({ name: '', description: '' })
+const deptForm = ref({ name: '', description: '', expected_count: 0 })
 
 const deleteDeptTarget = ref<Department | null>(null)
 const deletingDept = ref(false)
 
 function openCreateDept() {
   editingDept.value = null
-  deptForm.value = { name: '', description: '' }
+  deptForm.value = { name: '', description: '', expected_count: 0 }
   savingDept.value = false
   deptDialogOpen.value = true
 }
 
 function openEditDept(d: Department) {
   editingDept.value = d
-  deptForm.value = { name: d.name, description: d.description ?? '' }
+  deptForm.value = { name: d.name, description: d.description ?? '', expected_count: d.expected_count ?? 0 }
   savingDept.value = false
   deptDialogOpen.value = true
+}
+
+function normalizeExpectedCount(): number | null {
+  const n = Math.floor(Number(deptForm.value.expected_count))
+  if (!Number.isFinite(n) || n < 0) return null
+  return n
 }
 
 async function submitDept() {
   if (!deptForm.value.name.trim()) {
     toast.error('请输入部门名称')
+    return
+  }
+  const expectedCount = normalizeExpectedCount()
+  if (expectedCount === null) {
+    toast.error('预期人数须为非负整数')
     return
   }
   if (savingDept.value) return
@@ -58,12 +69,14 @@ async function submitDept() {
       await updateDepartment(editingDept.value.id, {
         name: deptForm.value.name.trim(),
         description: deptForm.value.description,
+        expected_count: expectedCount,
       })
       toast.success('部门已更新')
     } else {
       await createDepartment({
         name: deptForm.value.name.trim(),
         description: deptForm.value.description,
+        expected_count: expectedCount,
       })
       toast.success('部门已创建')
     }
@@ -99,6 +112,10 @@ const deptColumns: ColumnDef<DataTableFeatures, Department>[] = deptColumnHelper
   deptColumnHelper.accessor('description', {
     header: '描述',
     cell: ({ getValue }) => h('div', { class: 'text-muted-foreground' }, getValue() || '-'),
+  }),
+  deptColumnHelper.accessor('expected_count', {
+    header: '预期人数',
+    cell: ({ getValue }) => h('span', { class: 'text-muted-foreground' }, String(getValue())),
   }),
   deptColumnHelper.accessor('member_count', {
     header: '面试官数',
@@ -159,6 +176,17 @@ const deptColumns: ColumnDef<DataTableFeatures, Department>[] = deptColumnHelper
           <div class="grid gap-2">
             <Label for="d-desc">描述</Label>
             <Input id="d-desc" v-model="deptForm.description" placeholder="部门说明（可选）" />
+          </div>
+          <div class="grid gap-2">
+            <Label for="d-expected">预期人数</Label>
+            <Input
+              id="d-expected"
+              v-model.number="deptForm.expected_count"
+              type="number"
+              min="0"
+              step="1"
+              placeholder="0"
+            />
           </div>
         </div>
         <DialogFooter>

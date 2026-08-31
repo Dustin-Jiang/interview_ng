@@ -22,8 +22,8 @@ export interface UseUsers {
   createRole: (body: { name: string; description: string; permissions: string[] }) => Promise<void>
   updateRole: (id: number, body: { name: string; description: string; permissions: string[] }) => Promise<void>
   deleteRole: (id: number) => Promise<void>
-  createDepartment: (body: { name: string; description?: string }) => Promise<void>
-  updateDepartment: (id: number, body: { name: string; description?: string }) => Promise<void>
+  createDepartment: (body: { name: string; description?: string; expected_count?: number }) => Promise<void>
+  updateDepartment: (id: number, body: { name: string; description?: string; expected_count?: number }) => Promise<void>
   deleteDepartment: (id: number) => Promise<void>
 }
 

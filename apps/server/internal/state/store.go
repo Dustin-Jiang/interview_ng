@@ -74,20 +74,20 @@ type StateStore interface {
 
 	// ---- 部门管理 ----
 
-	// ListDepartments 列出全部部门（含面试官数）。
+	// ListDepartments 列出全部部门（含预期人数与面试官数）。
 	ListDepartments(ctx context.Context) ([]*dsmodel.Department, error)
-	// CreateDepartment 新建部门，返回 id。
-	CreateDepartment(ctx context.Context, name, desc string) (uint64, error)
-	// UpdateDepartment 更新部门名称与描述。
-	UpdateDepartment(ctx context.Context, id uint64, name, desc string) error
+	// CreateDepartment 新建部门（name 必填，expectedCount 为预期人数），返回 id。
+	CreateDepartment(ctx context.Context, name, desc string, expectedCount int) (uint64, error)
+	// UpdateDepartment 更新部门名称、描述与预期人数。
+	UpdateDepartment(ctx context.Context, id uint64, name, desc string, expectedCount int) error
 	// DeleteDepartment 删除部门（仍有面试官归属时拒绝）。
 	DeleteDepartment(ctx context.Context, id uint64) error
 
 	// ---- 系统状态 ----
 
-	// GetSystemStatus 返回当前系统阶段（面试/录取）。
+	// GetSystemStatus 返回当前系统阶段（面试/录取/捡漏）。
 	GetSystemStatus(ctx context.Context) (*dsmodel.SystemStatus, error)
-	// SetSystemStatus 切换系统阶段（仅面试/录取两档）。
+	// SetSystemStatus 切换系统阶段（仅面试/录取/捡漏三档）。
 	SetSystemStatus(ctx context.Context, phase dsmodel.SystemPhase) error
 
 	// ---- 候选人管理 ----

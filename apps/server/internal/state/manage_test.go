@@ -323,7 +323,7 @@ func TestDepartmentLifecycle(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 
-	deptID, err := st.CreateDepartment(ctx, "后端组", "负责后端岗位")
+	deptID, err := st.CreateDepartment(ctx, "后端组", "负责后端岗位", 12)
 	if err != nil {
 		t.Fatalf("create department: %v", err)
 	}
@@ -342,10 +342,22 @@ func TestDepartmentLifecycle(t *testing.T) {
 		t.Fatalf("list users department: %+v", users)
 	}
 
-	// ListDepartments 返回面试官数
+	// ListDepartments 返回预期人数与面试官数
 	depts, _ := st.ListDepartments(ctx)
 	if len(depts) != 1 || depts[0].MemberCount != 1 {
 		t.Fatalf("department member count: %+v", depts)
+	}
+	if depts[0].ExpectedCount != 12 {
+		t.Fatalf("expected count: got %d, want 12", depts[0].ExpectedCount)
+	}
+
+	// 更新预期人数与描述
+	if err := st.UpdateDepartment(ctx, deptID, "后端组", "负责后端岗位", 20); err != nil {
+		t.Fatalf("update department: %v", err)
+	}
+	depts, _ = st.ListDepartments(ctx)
+	if depts[0].ExpectedCount != 20 {
+		t.Fatalf("expected count after update: got %d, want 20", depts[0].ExpectedCount)
 	}
 
 	// 删除被引用部门应拒绝
@@ -401,7 +413,7 @@ func TestUpdateUserUsername(t *testing.T) {
 	_ = uidB
 }
 
-// TestSystemStatusPhaseSwitch 系统状态：默认面试阶段，可切换录取阶段，非法阶段拒绝。
+// TestSystemStatusPhaseSwitch 系统状态：默认面试阶段，可在面试/录取/捡漏三档间切换，非法阶段拒绝。
 func TestSystemStatusPhaseSwitch(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
@@ -422,6 +434,15 @@ func TestSystemStatusPhaseSwitch(t *testing.T) {
 	s, _ = st.GetSystemStatus(ctx)
 	if s.Phase != dsmodel.SystemPhaseAdmission {
 		t.Fatalf("phase after set=%s", s.Phase)
+	}
+
+	// 切换到捡漏阶段并可读回
+	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseLeftover); err != nil {
+		t.Fatalf("set leftover: %v", err)
+	}
+	s, _ = st.GetSystemStatus(ctx)
+	if s.Phase != dsmodel.SystemPhaseLeftover {
+		t.Fatalf("phase after set leftover=%s", s.Phase)
 	}
 
 	// 切回面试阶段（双向切换）
@@ -445,8 +466,8 @@ func TestCandidateAdmissionByDepartment(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 
-	deptA, _ := st.CreateDepartment(ctx, "后端组", "")
-	deptB, _ := st.CreateDepartment(ctx, "前端组", "")
+	deptA, _ := st.CreateDepartment(ctx, "后端组", "", 0)
+	deptB, _ := st.CreateDepartment(ctx, "前端组", "", 0)
 	candID := mustCreateCandidate(ctx, st, "张三", "后端")
 
 	// 各部门各自记录决定

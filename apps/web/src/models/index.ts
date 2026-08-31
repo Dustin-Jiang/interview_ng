@@ -60,15 +60,17 @@ export interface Department {
   id: number
   name: string
   description: string
+  /** 预期人数（计划招聘规模）。 */
+  expected_count: number
   member_count: number
   created_at: string
   updated_at: string
 }
 
-/** 系统阶段：面试阶段 / 录取阶段（与后端 model.SystemPhase 一致）。 */
-export type SystemPhase = 'interview' | 'admission'
+/** 系统阶段：面试阶段 / 录取阶段 / 捡漏阶段（与后端 model.SystemPhase 一致）。 */
+export type SystemPhase = 'interview' | 'admission' | 'leftover'
 
-export const SYSTEM_PHASES: SystemPhase[] = ['interview', 'admission']
+export const SYSTEM_PHASES: SystemPhase[] = ['interview', 'admission', 'leftover']
 
 export interface SystemStatus {
   id: number

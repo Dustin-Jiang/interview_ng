@@ -1,6 +1,6 @@
 /**
- * useSystemStatus —— 系统状态（面试阶段 / 录取阶段）组合式函数。
- * 读取状态并在两档之间切换；切换后重新拉取刷新当前阶段。
+ * useSystemStatus —— 系统状态（面试阶段 / 录取阶段 / 捡漏阶段）组合式函数。
+ * 读取状态并在各档之间切换；切换后重新拉取刷新当前阶段。
  */
 import { computed, type Ref } from 'vue'
 import { systemStatusApi } from '@/api/http'

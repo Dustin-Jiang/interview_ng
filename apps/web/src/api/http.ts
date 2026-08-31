@@ -189,14 +189,20 @@ export const roleApi = {
 
 // ---- 部门管理 ----
 
+export interface DepartmentPayload {
+  name: string
+  description?: string
+  expected_count?: number
+}
+
 export const departmentApi = {
   list(): Promise<{ items: Department[] }> {
     return request('/departments')
   },
-  create(body: { name: string; description?: string }): Promise<{ id: number }> {
+  create(body: DepartmentPayload): Promise<{ id: number }> {
     return post('/departments', body)
   },
-  update(id: number, body: { name: string; description?: string }): Promise<{ ok: boolean }> {
+  update(id: number, body: DepartmentPayload): Promise<{ ok: boolean }> {
     return put(`/departments/${id}`, body)
   },
   remove(id: number): Promise<{ ok: boolean }> {

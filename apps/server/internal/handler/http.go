@@ -549,8 +549,9 @@ func (h *HTTPServer) listDepartments(c *gin.Context) {
 }
 
 type departmentReq struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	ExpectedCount *int   `json:"expected_count"` // 预期人数（缺省 0，非负校验）
 }
 
 func (h *HTTPServer) createDepartment(c *gin.Context) {
@@ -559,7 +560,15 @@ func (h *HTTPServer) createDepartment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
 	}
-	id, err := h.svc.CreateDepartment(c.Request.Context(), req.Name, req.Description)
+	expected := 0
+	if req.ExpectedCount != nil {
+		if *req.ExpectedCount < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "expected_count must be non-negative"})
+			return
+		}
+		expected = *req.ExpectedCount
+	}
+	id, err := h.svc.CreateDepartment(c.Request.Context(), req.Name, req.Description, expected)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -574,7 +583,15 @@ func (h *HTTPServer) updateDepartment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
 	}
-	if err := h.svc.UpdateDepartment(c.Request.Context(), id, req.Name, req.Description); err != nil {
+	expected := 0
+	if req.ExpectedCount != nil {
+		if *req.ExpectedCount < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "expected_count must be non-negative"})
+			return
+		}
+		expected = *req.ExpectedCount
+	}
+	if err := h.svc.UpdateDepartment(c.Request.Context(), id, req.Name, req.Description, expected); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

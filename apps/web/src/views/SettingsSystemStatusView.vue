@@ -1,11 +1,11 @@
 <!--
-  SettingsSystemStatusView —— 系统状态设置：在「面试阶段 / 录取阶段」之间切换。
+  SettingsSystemStatusView —— 系统状态设置：在「面试阶段 / 录取阶段 / 捡漏阶段」之间切换。
   段式选择控件的实底高亮即当前阶段；点击另一档即切换。
 -->
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
-import { RefreshCw, UserCheck, UsersRound } from 'lucide-vue-next'
+import { RefreshCw, UserCheck, UserSearch, UsersRound } from 'lucide-vue-next'
 
 import { useSystemStatus } from '@/composables/useSystemStatus'
 import type { SystemPhase } from '@/models'
@@ -25,6 +25,7 @@ onMounted(() => void load())
 const phaseMeta: Record<SystemPhase, { label: string; icon: typeof UsersRound }> = {
   interview: { label: '面试阶段', icon: UsersRound },
   admission: { label: '录取阶段', icon: UserCheck },
+  leftover: { label: '捡漏阶段', icon: UserSearch },
 }
 
 async function switchTo(phase: SystemPhase) {

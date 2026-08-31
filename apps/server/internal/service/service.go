@@ -123,12 +123,12 @@ func (s *InterviewService) ListDepartments(ctx context.Context) ([]*dsmodel.Depa
 	return s.store.ListDepartments(ctx)
 }
 
-func (s *InterviewService) CreateDepartment(ctx context.Context, name, desc string) (uint64, error) {
-	return s.store.CreateDepartment(ctx, name, desc)
+func (s *InterviewService) CreateDepartment(ctx context.Context, name, desc string, expectedCount int) (uint64, error) {
+	return s.store.CreateDepartment(ctx, name, desc, expectedCount)
 }
 
-func (s *InterviewService) UpdateDepartment(ctx context.Context, id uint64, name, desc string) error {
-	return s.store.UpdateDepartment(ctx, id, name, desc)
+func (s *InterviewService) UpdateDepartment(ctx context.Context, id uint64, name, desc string, expectedCount int) error {
+	return s.store.UpdateDepartment(ctx, id, name, desc, expectedCount)
 }
 
 func (s *InterviewService) DeleteDepartment(ctx context.Context, id uint64) error {

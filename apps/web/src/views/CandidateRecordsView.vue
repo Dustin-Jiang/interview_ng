@@ -257,9 +257,9 @@ const allDeptAdmissions = computed(() => {
   return result
 })
 
-/** 是否展示录取状态控件：录取阶段 + 有可看内容（本部门记录或跨部门权限）。 */
+/** 是否展示录取状态控件：录取/捡漏阶段 + 有可看内容（本部门记录或跨部门权限）。 */
 const showAdmissionControls = computed(() => {
-  if (systemPhase.value !== 'admission') return false
+  if (systemPhase.value !== 'admission' && systemPhase.value !== 'leftover') return false
   if (canBrowseAllAdmissions.value) return true
   return !!user.value?.department_id
 })
