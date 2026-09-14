@@ -79,9 +79,9 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	authed.GET("/system/status", h.getSystemStatus)
 	authed.PUT("/system/status", h.require(dsmodel.PermUsersManage), h.setSystemStatus)
 
-	// 录取状态（浏览任意登录：默认本部门，跨部门需 browse_all；记录需 candidates.manage）
+	// 录取状态（浏览任意登录：默认本部门，跨部门需 browse_all；记录需 admissions.record）
 	authed.GET("/admissions", h.listAdmissions)
-	authed.PUT("/candidates/:id/admission", h.require(dsmodel.PermCandidatesManage), h.upsertCandidateAdmission)
+	authed.PUT("/candidates/:id/admission", h.require(dsmodel.PermAdmissionRecord), h.upsertCandidateAdmission)
 }
 
 //---- 认证 ----

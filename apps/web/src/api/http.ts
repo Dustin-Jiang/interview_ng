@@ -126,7 +126,7 @@ export const admissionApi = {
   list(): Promise<{ items: CandidateAdmission[] }> {
     return request('/admissions')
   },
-  /** 记录本部门对候选人的录取决定（需 candidates.manage）。 */
+  /** 记录本部门对候选人的录取决定（需 admissions.record）。 */
   set(candidateId: number, status: AdmissionStatus): Promise<{ ok: boolean }> {
     return put(`/candidates/${candidateId}/admission`, { status })
   },

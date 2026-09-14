@@ -49,15 +49,48 @@ func Init(ctx context.Context, db *gorm.DB, cache *rbac.Cache) error {
 			return err
 		}
 	}
-	// 幂等收尾：给 admin 角色补齐目录新增的权限（已有库升级路径），
-	// 并保证每位面试官都有部门（无部门用户归入默认部门）。
+	// 幂等收尾：给 admin 角色补齐目录新增的权限、给 interviewer 角色补齐预置权限
+	// （已有库升级路径），并保证每位面试官都有部门（无部门用户归入默认部门）。
 	if err := reconcileAdminRole(ctx, db); err != nil {
+		return err
+	}
+	if err := reconcileInterviewerRole(ctx, db); err != nil {
 		return err
 	}
 	if err := reconcileUsersDepartment(ctx, db); err != nil {
 		return err
 	}
 	return cache.ReloadAll(db)
+}
+
+// reconcileInterviewerRole 给 interviewer 角色补齐预置权限中缺失的项
+// （预置权限目录扩展后，已有库无需重建即可生效）。
+func reconcileInterviewerRole(ctx context.Context, db *gorm.DB) error {
+	var role dsmodel.Role
+	if err := db.WithContext(ctx).Where("name = ?", interviewerRoleName).First(&role).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	var have []string
+	if err := db.WithContext(ctx).Model(&dsmodel.RolePermission{}).
+		Where("role_id = ?", role.ID).Pluck("permission", &have).Error; err != nil {
+		return err
+	}
+	haveSet := make(map[string]bool, len(have))
+	for _, p := range have {
+		haveSet[p] = true
+	}
+	for _, p := range interviewerPerms() {
+		if haveSet[p] {
+			continue
+		}
+		if err := db.WithContext(ctx).Create(&dsmodel.RolePermission{RoleID: role.ID, Permission: p}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // reconcileAdminRole 给 admin 角色补齐 AllPermissions 中缺失的权限
@@ -133,7 +166,7 @@ func reconcileUsersDepartment(ctx context.Context, db *gorm.DB) error {
 	return nil
 }
 
-// seedRoles 创建两个预置角色：admin（全权限）、interviewer（6 枚流程权限）。
+// seedRoles 创建两个预置角色：admin（全权限）、interviewer（7 枚流程权限）。
 func seedRoles(ctx context.Context, db *gorm.DB) error {
 	admin := &dsmodel.Role{Name: adminRoleName, Description: "管理员：全部权限"}
 	interviewer := &dsmodel.Role{Name: interviewerRoleName, Description: "面试官：候选人流程与房间操作"}
@@ -148,20 +181,25 @@ func seedRoles(ctx context.Context, db *gorm.DB) error {
 			return err
 		}
 	}
-	interviewerPerms := []string{
+	for _, p := range interviewerPerms() {
+		if err := db.WithContext(ctx).Create(&dsmodel.RolePermission{RoleID: interviewer.ID, Permission: p}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// interviewerPerms 面试官预置权限（候选人流程 + 房间操作 + 本部门录取记录）。
+func interviewerPerms() []string {
+	return []string{
 		dsmodel.PermCandidatesCreate,
 		dsmodel.PermCandidatesCheckin,
 		dsmodel.PermCandidatesAssign,
 		dsmodel.PermRoomsView,
 		dsmodel.PermRoomsChat,
 		dsmodel.PermRoomsMovePhase,
+		dsmodel.PermAdmissionRecord,
 	}
-	for _, p := range interviewerPerms {
-		if err := db.WithContext(ctx).Create(&dsmodel.RolePermission{RoleID: interviewer.ID, Permission: p}).Error; err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // seedAdmin 创建默认 admin 账号（username=admin，密码取 ADMIN_INIT_PASSWORD，缺省 admin）。

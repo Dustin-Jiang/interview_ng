@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// Permission 权限名常量 —— RBAC 目录定稿（9 枚）。
+// Permission 权限名常量 —— RBAC 目录定稿（11 枚）。
 const (
 	PermUsersManage         = "users.manage"          // 面试官/角色管理
 	PermCandidatesManage    = "candidates.manage"     // 编辑/删除候选人、重置状态
@@ -14,6 +14,7 @@ const (
 	PermRoomsChat           = "rooms.chat"            // 进房/发消息
 	PermRoomsMovePhase      = "rooms.move_phase"      // 推进阶段
 	PermRoomsManage         = "rooms.manage"          // 房间成员管理、建空房、删空房
+	PermAdmissionRecord     = "admissions.record"     // 记录本部门录取决定
 )
 
 // AllPermissions 全部权限名（用于校验角色权限组输入）。
@@ -28,6 +29,7 @@ var AllPermissions = []string{
 	PermRoomsChat,
 	PermRoomsMovePhase,
 	PermRoomsManage,
+	PermAdmissionRecord,
 }
 
 // Role 角色 = 权限组（RBAC）。

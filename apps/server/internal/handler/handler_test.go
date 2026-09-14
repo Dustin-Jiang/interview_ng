@@ -710,7 +710,7 @@ func TestSystemStatusManageAndPermission(t *testing.T) {
 }
 
 // TestCandidateAdmissionByDepartmentAndPermission 录取决定按部门隔离：
-// 默认只能看本部门记录；admin（browse_all）可跨部门；记录需 candidates.manage。
+// 默认只能看本部门记录；admin（browse_all）可跨部门；记录需 admissions.record。
 func TestCandidateAdmissionByDepartmentAndPermission(t *testing.T) {
 	r := newTestApp(t)
 
@@ -726,12 +726,12 @@ func TestCandidateAdmissionByDepartmentAndPermission(t *testing.T) {
 	// 建两名面试官：后端组 admin 归属（现有 admin 归属默认部门）、前端组只读
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"feAdmin","name":"前端管理员","password":"pass","role_ids":[],"department_id":`+itoa(deptA)+`}`, token)
 	uidA := int(out["id"].(float64))
-	// 给 uidA 授 candidates.manage 与 rooms.view（可记录录取决定）
-	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"feMgr","description":"","permissions":["candidates.manage","rooms.view","candidates.create","candidates.checkin"]}`, token)
+	// 给 uidA 授 admissions.record 与 rooms.view（可记录录取决定）
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"feMgr","description":"","permissions":["admissions.record","rooms.view","candidates.create","candidates.checkin"]}`, token)
 	roleMgr := int(out["id"].(float64))
 	doJSON(t, r, "PUT", "/api/users/"+itoa(uidA), `{"username":"feAdmin","name":"前端管理员","role_ids":[`+itoa(roleMgr)+`],"department_id":`+itoa(deptA)+`}`, token)
 
-	// 只读面试官（无 candidates.manage）归前端组
+	// 只读面试官（无 admissions.record）归前端组
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"feReader","name":"前端只读","password":"pass","role_ids":[],"department_id":`+itoa(deptB)+`}`, token)
 	uidB := int(out["id"].(float64))
 	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"reader2","description":"","permissions":["rooms.view"]}`, token)
@@ -747,13 +747,13 @@ func TestCandidateAdmissionByDepartmentAndPermission(t *testing.T) {
 	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"张三","profile":"后端"}`, token)
 	candID := int(out["id"].(float64))
 
-	// feAdmin（candidates.manage）记录本部门录取决定 → 200
+	// feAdmin（admissions.record）记录本部门录取决定 → 200
 	code, out := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/admission", `{"status":"admitted"}`, tokenA)
 	if code != http.StatusOK {
 		t.Fatalf("upsert own dept: got %d %v", code, out)
 	}
 
-	// feReader 无 candidates.manage → 403
+	// feReader 无 admissions.record → 403
 	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/admission", `{"status":"withdrawn"}`, tokenB); code != http.StatusForbidden {
 		t.Fatalf("reader upsert: got %d", code)
 	}

@@ -215,8 +215,8 @@ const admissionByCandidate = computed(() => {
 
 /** 是否持跨部门查看权限（决定录取决定是否全员可见）。 */
 const canBrowseAllAdmissions = computed(() => hasPermission(PERMISSIONS.CANDIDATES_BROWSE_ALL))
-/** 是否可记录录取决定（candidates.manage）。 */
-const canRecordAdmission = computed(() => hasPermission(PERMISSIONS.CANDIDATES_MANAGE))
+/** 是否可记录录取决定（admissions.record）。 */
+const canRecordAdmission = computed(() => hasPermission(PERMISSIONS.ADMISSIONS_RECORD))
 
 /** 部门名（跨部门查看时展示各部门决定归属）。 */
 const departmentNames = ref(new Map<number, string>())

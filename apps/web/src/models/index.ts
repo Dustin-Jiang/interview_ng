@@ -24,6 +24,7 @@ export const PERMISSIONS = {
   USERS_MANAGE: 'users.manage',
   CANDIDATES_MANAGE: 'candidates.manage',
   CANDIDATES_BROWSE_ALL: 'candidates.browse_all',
+  ADMISSIONS_RECORD: 'admissions.record',
   CANDIDATES_CREATE: 'candidates.create',
   CANDIDATES_CHECKIN: 'candidates.checkin',
   CANDIDATES_ASSIGN: 'candidates.assign',
