@@ -8,7 +8,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import { ArrowLeft, ExternalLink, RefreshCw, SearchX, SlidersHorizontal, UsersRound, X } from 'lucide-vue-next'
+import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, RefreshCw, SearchX, SlidersHorizontal, UsersRound, X } from 'lucide-vue-next'
 
 import { admissionApi, candidateApi, departmentApi, systemStatusApi } from '@/api/http'
 import { useBoardChannel } from '@/composables/useBoardChannel'
@@ -190,6 +190,33 @@ function select(c: Candidate) {
   selectedId.value = c.id
   showDetail.value = true
 }
+
+// ---- 上一个 / 下一个候选人切换（基于当前筛选后的名册顺序） ----
+const selectedIndex = computed(() => filtered.value.findIndex((c) => c.id === selectedId.value))
+const canPrev = computed(() => selectedIndex.value > 0)
+const canNext = computed(() => selectedIndex.value !== -1 && selectedIndex.value < filtered.value.length - 1)
+const prevCandidate = computed(() => (canPrev.value ? filtered.value[selectedIndex.value - 1] : null))
+const nextCandidate = computed(() => (canNext.value ? filtered.value[selectedIndex.value + 1] : null))
+
+function goPrev() {
+  if (prevCandidate.value) select(prevCandidate.value)
+}
+
+function goNext() {
+  if (nextCandidate.value) select(nextCandidate.value)
+}
+
+// 键盘 ←/→ 切换：忽略输入控件聚焦时（搜索框、名单输入等）。
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+  const el = e.target as HTMLElement | null
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return
+  if (e.key === 'ArrowLeft') goPrev()
+  else goNext()
+}
+
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
 
 // ---- 录取决定（录取阶段展示；按部门分别记录） ----
 const { hasPermission, user } = useAuth()
@@ -608,6 +635,37 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
           </template>
         </div>
       </ScrollArea>
+    <!-- 底部：上一个 / 下一个候选人切换（←/→ 键盘可达） -->
+    <nav
+      v-if="filtered.length > 0"
+      class="flex shrink-0 items-center justify-between gap-3 border-t px-4 py-2"
+      aria-label="候选人切换"
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        class="min-w-0 max-w-[45%] gap-1"
+        :disabled="!canPrev"
+        @click="goPrev"
+      >
+        <ChevronLeft class="shrink-0" aria-hidden="true" />
+        <span class="min-w-0 truncate">{{ prevCandidate ? prevCandidate.name : '已是第一位' }}</span>
+      </Button>
+      <span class="shrink-0 text-xs tabular-nums text-muted-foreground" aria-live="polite">
+        {{ selectedIndex + 1 }} / {{ filtered.length }}
+      </span>
+      <Button
+        variant="outline"
+        size="sm"
+        class="min-w-0 max-w-[45%] gap-1"
+        :disabled="!canNext"
+        @click="goNext"
+      >
+        <span class="min-w-0 truncate">{{ nextCandidate ? nextCandidate.name : '已是最后一位' }}</span>
+        <ChevronRight class="shrink-0" aria-hidden="true" />
+      </Button>
+    </nav>
     </section>
+
   </div>
 </template>
