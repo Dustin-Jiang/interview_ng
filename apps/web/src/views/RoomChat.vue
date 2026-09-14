@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
-import { ArrowLeft, MessageSquare, Send, UserPlus, UserRound } from 'lucide-vue-next'
+import { computed, nextTick, onScopeDispose, ref, watch } from 'vue'
+import { ArrowLeft, MessageSquare, Send, Timer, UserPlus, UserRound } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 
 import { useRoomChat } from '@/composables/useRoomChat'
@@ -47,6 +47,50 @@ const draft = ref('')
 const nextPhase = computed<CandidateStatus | null>(() => nextPhaseOf(phase.value))
 
 const hasCandidate = computed(() => !!room.value?.candidate)
+
+// ---- 阶段计时器：待面试 / 面试中 显示已耗时（起点 = 候选人状态变更时间） ----
+const TIMER_PHASES: readonly CandidateStatus[] = ['ASSIGNED', 'IN_PROGRESS']
+const showTimer = computed(() => phase.value != null && TIMER_PHASES.includes(phase.value))
+/** 计时起点（候选人 updated_at，状态机每次迁移都会刷新）。 */
+const phaseStartedAt = computed(() => {
+  const u = room.value?.candidate?.updated_at
+  const t = u ? new Date(u).getTime() : NaN
+  return Number.isFinite(t) ? t : null
+})
+
+const elapsedSeconds = ref(0)
+let elapsedTimer: ReturnType<typeof setInterval> | null = null
+
+watch(
+  [showTimer, phaseStartedAt],
+  ([on, start]) => {
+    if (elapsedTimer) {
+      clearInterval(elapsedTimer)
+      elapsedTimer = null
+    }
+    if (on && start != null) {
+      const tick = () => {
+        elapsedSeconds.value = Math.max(0, Math.floor((Date.now() - start) / 1000))
+      }
+      tick()
+      elapsedTimer = setInterval(tick, 1000)
+    } else {
+      elapsedSeconds.value = 0
+    }
+  },
+  { immediate: true },
+)
+onScopeDispose(() => {
+  if (elapsedTimer) clearInterval(elapsedTimer)
+})
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
+const elapsedLabel = computed(() => {
+  const s = elapsedSeconds.value
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return h > 0 ? `${h}:${pad2(m)}:${pad2(s % 60)}` : `${pad2(m)}:${pad2(s % 60)}`
+})
 
 function send() {
   const text = draft.value.trim()
@@ -106,29 +150,44 @@ const phaseIndex = computed(() =>
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-hidden">
-    <!-- 房间头部：返回键 + 房间名 + 连接状态 -->
-    <header class="flex h-14 shrink-0 items-center gap-3 border-b px-4">
-      <Button variant="ghost" size="icon" aria-label="返回房间列表" @click="emit('back')">
-        <ArrowLeft />
+  <div class="relative mx-auto flex h-full w-full max-w-content flex-col overflow-hidden">
+    <!-- 悬浮胶囊：返回键 + 房间号 + 连接状态 + 阶段计时器（顶栏下方左侧） -->
+    <div
+      class="absolute left-4 top-4 z-30 flex h-9 w-72 items-center gap-2 rounded-md border bg-background/95 py-1 pl-1 pr-3 text-xs text-muted-foreground shadow-sm backdrop-blur"
+    >
+      <Button
+        class="h-7 w-7 shrink-0"
+        size="icon"
+        variant="ghost"
+        aria-label="返回房间列表"
+        @click="emit('back')"
+      >
+        <ArrowLeft class="h-4 w-4" />
       </Button>
-      <h1 class="truncate text-base font-semibold tracking-tight">房间 #{{ props.roomId }}</h1>
-      <Badge v-if="phase" :variant="STATUS_PRESENTATION[phase].badge" class="hidden sm:inline-flex">
-        {{ STATUS_PRESENTATION[phase].label }}
-      </Badge>
-      <span class="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-        <Spinner v-if="connecting" class="h-3.5 w-3.5" />
-        <!-- 连接状态点：语义色 token（success/destructive）。 -->
+      <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true" />
+      <span class="min-w-0 flex-1 truncate font-semibold text-foreground">房间 #{{ props.roomId }}</span>
+      <Spinner v-if="connecting" class="h-3.5 w-3.5 shrink-0" />
+      <!-- 连接状态点：语义色 token（success/destructive）。 -->
+      <span
+        v-else
+        class="inline-block h-2 w-2 shrink-0 rounded-full"
+        :class="connected ? 'bg-success' : 'bg-destructive'"
+        aria-hidden="true"
+      ></span>
+      <span role="status" class="shrink-0">{{ connecting ? '连接中…' : connected ? '已连接' : '未连接' }}</span>
+      <!-- 阶段计时器：待面试 / 面试中 显示已耗时 -->
+      <template v-if="showTimer">
+        <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true" />
         <span
-          v-else
-          class="inline-block h-2 w-2 rounded-full"
-          :class="connected ? 'bg-success' : 'bg-destructive'"
-          aria-hidden="true"
-        />
-        <span role="status">{{ connecting ? '连接中…' : connected ? '已连接' : '未连接' }}</span>
-      </span>
-    </header>
-
+          class="flex shrink-0 items-center gap-1.5 font-medium tabular-nums text-foreground"
+          role="timer"
+          :aria-label="`本阶段已进行 ${elapsedLabel}`"
+        >
+          <Timer class="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+          {{ elapsedLabel }}
+        </span>
+      </template>
+    </div>
     <!-- 连接错误提示 -->
     <div
       v-if="error"
@@ -139,73 +198,23 @@ const phaseIndex = computed(() =>
     </div>
 
     <!-- 主区域：聊天 + 侧栏（小屏上下堆叠） -->
-    <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
-      <!-- 聊天区 -->
-      <div class="flex min-w-0 flex-1 flex-col">
-        <!-- 消息滚动区：role=log + aria-live 便于读屏播报新消息 -->
-        <div
-          ref="scrollBox"
-          class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
-          role="log"
-          aria-live="polite"
-          @scroll.passive="onScroll"
-        >
-          <!-- 空房/无消息空态（bare：直接置于聊天滚动区，无卡片包裹） -->
-          <EmptyState v-if="!hasCandidate && !connecting" bare :icon="UserRound" class="py-12">
-            房间空闲，从右侧「拉取候选人」开始面试
-          </EmptyState>
-          <EmptyState v-else-if="!messages.length && !connecting" bare :icon="MessageSquare" class="py-12">
-            暂无消息，发送第一条面试记录吧
-          </EmptyState>
-
-          <div
-            v-for="m in messages"
-            :key="m.id"
-            class="flex max-w-full flex-col gap-1"
-            :class="m.sender_id === currentUserId ? 'items-end' : 'items-start'"
-          >
-            <div class="flex items-baseline gap-2 px-1 text-xs text-muted-foreground">
-              <span class="font-medium">{{ senderLabel(m.sender_id, currentUserId, m.sender?.name || m.sender?.username) }}</span>
-              <time>{{ formatDateTime(m.created_at) }}</time>
-            </div>
-            <div :class="cn(chatBubbleVariants({ side: m.sender_id === currentUserId ? 'own' : 'other' }))">
-              {{ m.content }}
-            </div>
-          </div>
-        </div>
-
-        <!-- 输入区 -->
-        <div class="flex shrink-0 items-center gap-2 border-t p-3">
-          <Input
-            v-model="draft"
-            :disabled="!hasCandidate"
-            :placeholder="hasCandidate ? '输入面试记录，Enter 发送…' : '等待候选人进房后可发送消息'"
-            aria-label="消息内容"
-            @keydown.enter.prevent="send"
-          />
-          <Button size="icon" aria-label="发送消息" :disabled="!draft.trim() || !hasCandidate" @click="send">
-            <Send aria-hidden="true" />
-          </Button>
-        </div>
-      </div>
-
-      <!-- 侧栏：候选人 / 拉取 / 状态 -->
+    <div class="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
       <aside
-        class="flex w-full shrink-0 flex-col border-t lg:h-full lg:w-80 lg:border-l lg:border-t-0 lg:bg-muted/20"
+        class="order-last flex w-full shrink-0 flex-col border-t lg:order-first lg:h-full lg:w-80 lg:border-t-0"
       >
-        <div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+        <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-4 pt-16">
           <!-- 候选人信息 -->
           <Card>
             <CardContent class="space-y-3 p-4">
               <div class="flex items-center gap-3">
-                <IconBadge size="md" tone="primary">
+                <IconBadge size="md" tone="primary" :class="hasCandidate ? '' : 'bg-muted text-muted-foreground'">
                   <UserRound aria-hidden="true" />
                 </IconBadge>
                 <div class="min-w-0">
-                  <p class="truncate font-medium">
-                    {{ room?.candidate?.name ?? '（空房）' }}
+                  <p class="truncate font-medium" :class="hasCandidate ? '' : 'text-muted-foreground'">
+                    {{ room?.candidate?.name ?? '空房' }}
                   </p>
-                  <p class="text-xs text-muted-foreground">候选人</p>
+                  <p class="text-xs text-muted-foreground">{{ hasCandidate ? '候选人' : '等待拉取候选人' }}</p>
                 </div>
               </div>
               <div class="space-y-1 text-sm">
@@ -228,7 +237,15 @@ const phaseIndex = computed(() =>
                 <UserPlus class="h-4 w-4" aria-hidden="true" />
                 拉取候选人
               </p>
-              <ul class="space-y-2">
+              <EmptyState
+                v-if="pullPool.length === 0"
+                bare
+                :icon="UserRound"
+                class="py-6"
+              >
+                暂无已签到的候选人
+              </EmptyState>
+              <ul v-else class="space-y-2">
                 <li
                   v-for="c in pullPool"
                   :key="c.id"
@@ -311,6 +328,57 @@ const phaseIndex = computed(() =>
           </Card>
         </div>
       </aside>
+      <!-- 聊天面板：定高（撑满剩余空间，内部滚动），有边框浮动卡片 -->
+      <div class="flex min-w-0 flex-1 flex-col p-4">
+        <div class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-background">
+        <!-- 消息滚动区：role=log + aria-live 便于读屏播报新消息 -->
+        <div
+          ref="scrollBox"
+          class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
+          role="log"
+          aria-live="polite"
+          @scroll.passive="onScroll"
+        >
+          <!-- 空房/无消息空态（bare：直接置于聊天滚动区，无卡片包裹） -->
+          <EmptyState v-if="!hasCandidate && !connecting" bare :icon="UserRound" class="py-12">
+            房间空闲，从左侧「拉取候选人」开始面试
+          </EmptyState>
+          <EmptyState v-else-if="!messages.length && !connecting" bare :icon="MessageSquare" class="py-12">
+            暂无消息，发送第一条面试记录吧
+          </EmptyState>
+
+          <div
+            v-for="m in messages"
+            :key="m.id"
+            class="flex max-w-full flex-col gap-1"
+            :class="m.sender_id === currentUserId ? 'items-end' : 'items-start'"
+          >
+            <div class="flex items-baseline gap-2 px-1 text-xs text-muted-foreground">
+              <span class="font-medium">{{ senderLabel(m.sender_id, currentUserId, m.sender?.name || m.sender?.username) }}</span>
+              <time>{{ formatDateTime(m.created_at) }}</time>
+            </div>
+            <div :class="cn(chatBubbleVariants({ side: m.sender_id === currentUserId ? 'own' : 'other' }))">
+              {{ m.content }}
+            </div>
+          </div>
+        </div>
+
+        <!-- 输入区 -->
+        <div class="flex shrink-0 items-center gap-2 border-t p-3">
+          <Input
+            v-model="draft"
+            :disabled="!hasCandidate"
+            :placeholder="hasCandidate ? '输入面试记录，Enter 发送…' : '等待候选人进房后可发送消息'"
+            aria-label="消息内容"
+            @keydown.enter.prevent="send"
+          />
+          <Button size="icon" aria-label="发送消息" :disabled="!draft.trim() || !hasCandidate" @click="send">
+            <Send aria-hidden="true" />
+          </Button>
+        </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </template>

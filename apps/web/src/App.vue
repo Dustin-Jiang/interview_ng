@@ -35,10 +35,8 @@ const navItems = computed(() => {
 const displayName = computed(() => user.value?.name || user.value?.username || '')
 const avatarChar = computed(() => displayName.value.slice(0, 1).toUpperCase())
 
-/** 是否处于房间内部（全屏专注界面，header 由房间视图自绘，无全局导航）。 */
-const isInRoom = computed(() => route.name === 'room' && !!route.params.roomId)
-/** 登录页隐藏全局导航。 */
-const showNav = computed(() => !isInRoom.value && isLoggedIn.value)
+/** 登录页隐藏全局导航（房间内也显示全局顶栏）。 */
+const showNav = computed(() => isLoggedIn.value)
 
 onMounted(() => {
   void ensureAuthReady()
