@@ -206,13 +206,21 @@ function goNext() {
   if (nextCandidate.value) select(nextCandidate.value)
 }
 
-// 键盘 ←/→ 切换：忽略输入控件聚焦时（搜索框、名单输入等）。
+// 键盘 ←/→ 切换候选人；1/2/3 设置本部门录取决定（待定/录取/放弃）。
+// 忽略输入控件聚焦时（搜索框、名单输入等）。
 function onGlobalKeydown(e: KeyboardEvent) {
-  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
   const el = e.target as HTMLElement | null
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return
-  if (e.key === 'ArrowLeft') goPrev()
-  else goNext()
+  if (e.key === 'ArrowLeft') return goPrev()
+  if (e.key === 'ArrowRight') return goNext()
+  // 录取决定快捷键：仅录取/捡漏阶段 + 有记录权限 + 已选中候选人时生效。
+  const key = Number(e.key)
+  if (key >= 1 && key <= ADMISSION_STATUSES.length) {
+    if (!showAdmissionControls.value || !canRecordAdmission.value || admissionsLoading.value) return
+    const c = selectedCandidate.value
+    if (!c || !user.value?.department_id) return
+    switchAdmission(c, ADMISSION_STATUSES[key - 1])
+  }
 }
 
 onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
@@ -586,7 +594,8 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                       v-if="canRecordAdmission && user?.department_id"
                       class="inline-flex items-center rounded-lg bg-muted p-1"
                       role="group"
-                      aria-label="本部门录取决定"
+                      aria-label="本部门录取决定（快捷键 1/2/3）"
+                      title="快捷键：1 待定 / 2 录取 / 3 放弃"
                     >
                       <button
                         v-for="s in ADMISSION_STATUSES"
@@ -641,7 +650,7 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                 @click="goPrev"
               >
                 <ChevronLeft class="shrink-0" aria-hidden="true" />
-                <span class="min-w-0 truncate">上一个{{ prevCandidate ? `：${prevCandidate.name}` : '' }}</span>
+                <span class="min-w-0 truncate">上一个</span>
               </Button>
               <Button
                 variant="outline"
@@ -649,7 +658,7 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                 :disabled="!canNext"
                 @click="goNext"
               >
-                <span class="min-w-0 truncate">下一个{{ nextCandidate ? `：${nextCandidate.name}` : '' }}</span>
+                <span class="min-w-0 truncate">下一个</span>
                 <ChevronRight class="shrink-0" aria-hidden="true" />
               </Button>
             </nav>
