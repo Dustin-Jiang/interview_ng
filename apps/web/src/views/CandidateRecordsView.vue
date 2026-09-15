@@ -632,39 +632,30 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                 <MessageTranscript v-else :messages="messages" />
               </CardContent>
             </Card>
+            <!-- 记录末尾：上一个 / 下一个候选人（PaginationPrevious/Next 样式，←/→ 键盘可达） -->
+            <nav v-if="filtered.length > 0" class="flex items-center justify-between gap-3" aria-label="候选人切换">
+              <Button
+                variant="outline"
+                class="min-w-0 max-w-[45%] gap-1.5"
+                :disabled="!canPrev"
+                @click="goPrev"
+              >
+                <ChevronLeft class="shrink-0" aria-hidden="true" />
+                <span class="min-w-0 truncate">上一个{{ prevCandidate ? `：${prevCandidate.name}` : '' }}</span>
+              </Button>
+              <Button
+                variant="outline"
+                class="min-w-0 max-w-[45%] gap-1.5"
+                :disabled="!canNext"
+                @click="goNext"
+              >
+                <span class="min-w-0 truncate">下一个{{ nextCandidate ? `：${nextCandidate.name}` : '' }}</span>
+                <ChevronRight class="shrink-0" aria-hidden="true" />
+              </Button>
+            </nav>
           </template>
         </div>
       </ScrollArea>
-    <!-- 底部：上一个 / 下一个候选人切换（←/→ 键盘可达） -->
-    <nav
-      v-if="filtered.length > 0"
-      class="flex shrink-0 items-center justify-between gap-3 border-t px-4 py-2"
-      aria-label="候选人切换"
-    >
-      <Button
-        variant="outline"
-        size="sm"
-        class="min-w-0 max-w-[45%] gap-1"
-        :disabled="!canPrev"
-        @click="goPrev"
-      >
-        <ChevronLeft class="shrink-0" aria-hidden="true" />
-        <span class="min-w-0 truncate">{{ prevCandidate ? prevCandidate.name : '已是第一位' }}</span>
-      </Button>
-      <span class="shrink-0 text-xs tabular-nums text-muted-foreground" aria-live="polite">
-        {{ selectedIndex + 1 }} / {{ filtered.length }}
-      </span>
-      <Button
-        variant="outline"
-        size="sm"
-        class="min-w-0 max-w-[45%] gap-1"
-        :disabled="!canNext"
-        @click="goNext"
-      >
-        <span class="min-w-0 truncate">{{ nextCandidate ? nextCandidate.name : '已是最后一位' }}</span>
-        <ChevronRight class="shrink-0" aria-hidden="true" />
-      </Button>
-    </nav>
     </section>
 
   </div>
