@@ -1,7 +1,7 @@
 /**
  * useCandidates —— 候选人列表组合式函数（函数式 ViewModel）。
  * 组合 useAsync 完成"加载候选人"；增/签/编辑/删除/重置等 action 以 promise 形式向下游组合。
- * 分配已改为"房间内拉取"（POST /api/rooms/:id/pull_candidate），本组合式不再提供 assign。
+ * 分配已改为"房间内拉取"（PUT /api/rooms/:id/candidate），本组合式不再提供 assign。
  */
 import { computed, ref, type Ref } from 'vue'
 import { candidateApi } from '@/api/http'

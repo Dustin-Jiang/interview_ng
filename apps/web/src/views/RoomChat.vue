@@ -10,6 +10,7 @@ import { senderLabel } from '@/domain/messages'
 import { CANDIDATE_STATUSES, PERMISSIONS, type CandidateStatus } from '@/models'
 import { STATUS_PRESENTATION } from '@/presenters/status'
 import { formatDateTime } from '@/lib/format'
+import { toastError } from '@/lib/toast'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -109,7 +110,7 @@ async function handlePull(candidateId: number) {
     await pullCandidate(candidateId)
     toast.success('候选人已拉入房间')
   } catch (e) {
-    toast.error((e as Error).message)
+    toastError(e)
   }
 }
 

@@ -19,11 +19,11 @@ const navItems = computed(() => {
     { name: '首页', to: { name: 'home' } },
     // 查看与管理分离：名册对所有人可见，管理入口仅对持权限者渲染。
     { name: '候选人', to: { name: 'candidates' } },
-    { name: '候场大屏', to: { name: 'waiting' } },
+    { name: '候场大屏', to: { name: 'candidates-waiting' } },
     { name: '捡漏竞拍', to: { name: 'leftover' } },
   ]
   if (hasPermission(PERMISSIONS.ROOMS_VIEW)) {
-    items.push({ name: '面试房间', to: { name: 'room' } })
+    items.push({ name: '面试房间', to: { name: 'rooms' } })
   }
   // 管理功能整合进设置页（左右分栏）。
   if (hasAnyManagePermission(permissions.value)) {

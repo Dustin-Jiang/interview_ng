@@ -25,7 +25,7 @@ export function useSystemStatus(): UseSystemStatus {
   }
 
   async function setPhase(phase: SystemPhase): Promise<void> {
-    await systemStatusApi.set(phase)
+    await systemStatusApi.patch({ phase })
     await load()
   }
 

@@ -7,7 +7,7 @@
 <script setup lang="ts">
 import { computed, h, onMounted } from 'vue'
 import { toast } from 'vue-sonner'
-import { RefreshCw, UsersRound } from 'lucide-vue-next'
+import { UsersRound } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useCandidates } from '@/composables/useCandidates'
@@ -15,13 +15,13 @@ import { useAuth } from '@/composables/useAuth'
 import { useBoardRefresh } from '@/composables/useBoardChannel'
 import { sortWaitingBoard } from '@/domain/status'
 import { PERMISSIONS, type Candidate } from '@/models'
+import { toastError } from '@/lib/toast'
 
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import DataTable from '@/components/ui/table/data-table.vue'
 import type { DataTableFeatures } from '@/components/ui/table/features'
-import EmptyState from '@/components/app/EmptyState.vue'
+import DataTableSection from '@/components/app/DataTableSection.vue'
 import PageShell from '@/components/app/PageShell.vue'
+import RefreshButton from '@/components/app/RefreshButton.vue'
 import SearchInput from '@/components/app/SearchInput.vue'
 
 const { hasPermission } = useAuth()
@@ -33,12 +33,14 @@ const canCheckin = computed(() => hasPermission(PERMISSIONS.CANDIDATES_CHECKIN))
 /** 候场名单：COMPLETED 不上屏，按状态优先级升序，组内按创建时间升序。 */
 const boardCandidates = computed<readonly Candidate[]>(() => sortWaitingBoard(candidates.value))
 
+const emptyText = computed(() => (keyword.value ? '没有匹配的候选人' : '暂无候选人'))
+
 async function handleCheckin(c: Candidate) {
   try {
     await checkin(c.id)
     toast.success(`「${c.name}」已签到`)
   } catch (e) {
-    toast.error((e as Error).message)
+    toastError(e)
   }
 }
 
@@ -91,30 +93,22 @@ onMounted(() => void load())
 <template>
   <PageShell title="候场大屏">
     <template #actions>
-      <Button variant="outline" size="icon" aria-label="刷新候选人列表" @click="load">
-        <RefreshCw :class="loading ? 'animate-spin' : ''" aria-hidden="true" />
-      </Button>
+      <RefreshButton label="刷新候选人列表" :loading="loading" @click="load" />
     </template>
 
-    <div class="space-y-3">
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <h2 class="text-sm font-semibold">候场名单</h2>
-        <!-- 搜索框：图标 + 可清空（Enter / 清空均触发检索）。 -->
+    <DataTableSection
+      title="候场名单"
+      :loading="loading"
+      :items="candidates"
+      :columns="columns"
+      :data="boardCandidates"
+      :empty-text="emptyText"
+      :empty-icon="UsersRound"
+    >
+      <!-- 搜索框：图标 + 可清空（Enter / 清空均触发检索）。 -->
+      <template #toolbar>
         <SearchInput v-model="keyword" placeholder="搜索姓名…" @search="setKeyword" />
-      </div>
-
-      <!-- 加载骨架屏（首屏无数据时） -->
-      <div v-if="loading && candidates.length === 0" class="space-y-2" aria-busy="true">
-        <Skeleton v-for="i in 5" :key="i" class="h-12 w-full rounded-md" />
-      </div>
-
-      <!-- 空态：说明 + 引导动作 -->
-      <EmptyState v-else-if="candidates.length === 0" :icon="UsersRound">
-        {{ keyword ? '没有匹配的候选人' : '暂无候选人' }}
-      </EmptyState>
-
-      <!-- 数据表格 -->
-      <DataTable v-else :columns="columns" :data="boardCandidates" />
-    </div>
+      </template>
+    </DataTableSection>
   </PageShell>
 </template>

@@ -30,7 +30,7 @@ const quickLinks = computed(() => {
     },
     {
       name: '候场大屏',
-      to: { name: 'waiting' },
+      to: { name: 'candidates-waiting' },
       visible: true,
     },
     {
@@ -40,7 +40,7 @@ const quickLinks = computed(() => {
     },
     {
       name: '面试房间',
-      to: { name: 'room' },
+      to: { name: 'rooms' },
       visible: hasPermission(PERMISSIONS.ROOMS_VIEW),
     },
     {

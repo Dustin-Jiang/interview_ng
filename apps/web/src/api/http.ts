@@ -4,7 +4,7 @@
  * 鉴权：请求拦截器自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
  */
 import axios, { type AxiosRequestConfig } from 'axios'
-import type { AdmissionStatus, Bid, Candidate, CandidateAdmission, CandidateStatus, Department, LeftoverFinalResult, LeftoverOverview, LeftoverResolveResult, LeftoverResult, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
+import type { AdmissionStatus, Bid, Candidate, CandidateAdmission, CandidateStatus, Department, LeftoverOverview, LeftoverResolveResult, LeftoverResult, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
 
 /** 401 处理器：由 useAuth 注册（登出 + 跳登录页），避免循环依赖。 */
 let onUnauthorized: (() => void) | null = null
@@ -62,15 +62,20 @@ function put<T>(path: string, body?: unknown): Promise<T> {
   return request<T>({ method: 'PUT', url: path, data: body })
 }
 
+function patch<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>({ method: 'PATCH', url: path, data: body })
+}
+
 function del<T>(path: string): Promise<T> {
   return request<T>({ method: 'DELETE', url: path })
 }
 
-// ---- 认证 ----
+// ---- 会话与当前用户 ----
 
 export const authApi = {
+  /** 登录 = 创建会话（POST /sessions）。 */
   login(username: string, password: string): Promise<UserProfile & { token: string }> {
-    return post('/auth/login', { username, password })
+    return post('/sessions', { username, password })
   },
   me(): Promise<UserProfile> {
     return request('/me')
@@ -98,7 +103,7 @@ export const candidateApi = {
   },
 
   checkin(id: number): Promise<{ ok: boolean }> {
-    return post(`/candidates/${id}/checkin`)
+    return put(`/candidates/${id}/check-in`)
   },
 
   update(id: number, body: { name: string; profile?: string }): Promise<{ ok: boolean }> {
@@ -126,9 +131,9 @@ export const admissionApi = {
   list(): Promise<{ items: CandidateAdmission[] }> {
     return request('/admissions')
   },
-  /** 记录本部门对候选人的录取决定（需 admissions.record）。 */
+  /** 记录本部门对候选人的录取决定（需 admissions.record）；条目键为候选人。 */
   set(candidateId: number, status: AdmissionStatus): Promise<{ ok: boolean }> {
-    return put(`/candidates/${candidateId}/admission`, { status })
+    return put(`/admissions/${candidateId}`, { status })
   },
 }
 
@@ -147,8 +152,9 @@ export const roomApi = {
     return del(`/rooms/${id}`)
   },
 
+  /** 拉取式分配：把候选人设置为房间当前候选人（幂等）。 */
   pullCandidate(roomId: number, candidateId: number): Promise<{ ok: boolean }> {
-    return post(`/rooms/${roomId}/pull_candidate`, { candidate_id: candidateId })
+    return put(`/rooms/${roomId}/candidate`, { candidate_id: candidateId })
   },
 }
 
@@ -168,7 +174,7 @@ export const userApi = {
     return del(`/users/${id}`)
   },
   resetPassword(id: number, newPassword: string): Promise<{ ok: boolean }> {
-    return post(`/users/${id}/reset_password`, { new_password: newPassword })
+    return put(`/users/${id}/password`, { new_password: newPassword })
   },
 }
 
@@ -210,17 +216,15 @@ export const departmentApi = {
   },
 }
 
-// ---- 系统状态 ----
+// ---- 系统状态（单例，部分更新） ----
 
 export const systemStatusApi = {
   get(): Promise<SystemStatus> {
     return request('/system/status')
   },
-  set(phase: SystemPhase): Promise<{ ok: boolean }> {
-    return put('/system/status', { phase })
-  },
-  setBidStep(step: number): Promise<{ ok: boolean }> {
-    return put('/system/bid-step', { step })
+  /** 部分更新系统状态：切换阶段（phase）与/或出价步长（bid_step）。 */
+  patch(body: { phase?: SystemPhase; bid_step?: number }): Promise<{ ok: boolean }> {
+    return patch('/system/status', body)
   },
 }
 
@@ -229,7 +233,7 @@ export const systemStatusApi = {
 export const leftoverApi = {
   /** 捡漏总览：当前阶段 + 各部门预算摘要（他部门出价保密为 null）+ 本部门预算。 */
   overview(): Promise<LeftoverOverview> {
-    return request('/leftover/overview')
+    return request('/leftover')
   },
 
   /** 本部门当前出价列表。 */
@@ -237,19 +241,14 @@ export const leftoverApi = {
     return request('/leftover/bids')
   },
 
-  /** 由出价计算的最终录取结果（赢家 = 最高出价部门；结算阶段只读展示）。 */
-  final(): Promise<{ items: LeftoverFinalResult[] }> {
-    return request('/leftover/final')
-  },
-
   /** 设置本部门对某候选人的出价（幂等 upsert；超出剩余预算返回 budget_exceeded）。 */
   setBid(candidateId: number, amount: number): Promise<{ item: Bid }> {
-    return put('/leftover/bids', { candidate_id: candidateId, amount })
+    return put(`/leftover/bids/${candidateId}`, { amount })
   },
 
-  /** 结算候选人：出价最高部门赢得该候选人（需 candidates.manage）。 */
+  /** 结算候选人：出价最高部门赢得该候选人（需 candidates.manage）；结算即创建成交结果。 */
   resolve(candidateId: number): Promise<LeftoverResolveResult> {
-    return post(`/leftover/candidates/${candidateId}/resolve`)
+    return post('/leftover/results', { candidate_id: candidateId })
   },
 
   /** 已结算赢家列表（全员可见）。 */

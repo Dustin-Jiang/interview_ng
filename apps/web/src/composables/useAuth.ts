@@ -1,8 +1,8 @@
 /**
  * useAuth —— 全局登录态组合式函数（函数式 ViewModel，无 Pinia）。
  * 职责：
- *  - 登录：调 /api/auth/login，token 存 localStorage（7 天，刷新不丢）；
- *  - 启动恢复：读 token 并调 /api/me 拉取用户/角色/权限并集；
+ *  - 登录：调 POST /api/sessions，token 存 localStorage（7 天，刷新不丢）；
+ *  - 启动恢复：读 token 并调 GET /api/me 拉取用户/角色/权限并集；
  *  - 权限驱动 UI 的输入：hasPermission(perm)；
  *  - 注册 HTTP 401 处理器（登出 + 跳登录页）。
  */

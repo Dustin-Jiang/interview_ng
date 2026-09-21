@@ -36,15 +36,16 @@ Model Domain Types（与后端 JSON 契约一一对应）
 - **组合式函数替代全局 store**：每个 `useXXX()` 在其调用者（如组件）各自的作用域内自管理状态，`onScopeDispose` 自动清理（如 `useRoomChat` 自动断开 WS），无全局单例与生命周期泄漏。唯一例外是 `useBoardChannel`（看板 WS 通道）：模块级单例 + 引用计数，多视图共享一条 `/ws/board` 连接。
 - **纯函数核心**：`src/domain` 里的状态推进与消息合并都是无副作用的（输入不改、返回新值），可独立单测。
 - **函数组合**：`useAsync` 作为通用异步原语被 `useCandidates`/`useRoomList` 复用；`useRoomChat` 内部用 `domain` 纯函数转换 WS 事件。
-- **实时刷新**：房间内数据走房间通道（`/ws/room/:id`，重连后按续传游标自动补拉增量）；列表页走看板通道（`useBoardRefresh(events, cb)`：事件到达 → 防抖 300ms 整表重拉），覆盖候场大屏、房间列表与候选人记录。
+- **实时刷新**：房间内数据走房间通道（`/ws/rooms/:id`，重连后按续传游标自动补拉增量）；列表页走看板通道（`useBoardRefresh(events, cb)`：事件到达 → 防抖 300ms 整表重拉），覆盖候场大屏、房间列表与候选人记录。
 - **视图弱耦合**：视图在 setup 顶层解构 `useXXX()` 的 refs 与函数，模板直接引用（refs 自动解包）。
+- **RESTful 路由**：页面 URL 与后端资源同构——集合 `/candidates`、`/rooms`、`/leftover`，条目 `/candidates/:candidateId`、`/rooms/:roomId`、`/leftover/candidates/:candidateId`；选中条目走路径参数（`useRosterRouteSync`），筛选/搜索态留在 query，旧路径保留重定向。
 
 
 ---
 
 ## 布局说明
 
-- **全局导航**：仅在「候选人管理」与「房间列表」场景显示（`src/App.vue` 依据路由是否处于房间内部决定）。进入具体房间（`/room/:roomId`）时隐藏全局导航，由房间视图自绘头部。
+- **全局导航**：仅在「候选人管理」与「房间列表」场景显示（`src/App.vue` 依据路由是否处于房间内部决定）。进入具体房间（`/rooms/:roomId`）时隐藏全局导航，由房间视图自绘头部。
 - **房间内部**（`src/views/RoomChat.vue`）：头部为「返回键 + 房间名」，主区域为聊天界面，右侧栏展示面试人（候选人）信息与当前状态/状态机。
 - **滚动策略**：整页固定为视口高度（`h-screen overflow-hidden`，不溢出滚动），滚动发生在**内部容器**——候选人列表、房间列表在各自视图内滚动；房间内聊天消息区在消息容器内滚动（新消息自动滚到底）。
 
@@ -58,7 +59,7 @@ Model Domain Types（与后端 JSON 契约一一对应）
 ```bash
 # 在仓库根执行（本应用属于 pnpm monorepo 的 apps/web 工作区）
 pnpm install        # 首次，安装全部 workspace 依赖
-pnpm dev            # 开发：http://localhost:8000 （已配置 /api 与 /ws 代理到 :8080）
+pnpm dev            # 开发：http://localhost:3000 （已配置 /api 与 /ws 代理到 :8080）
 # 等价：pnpm --filter @interview-ng/web dev
 ```
 
@@ -69,10 +70,10 @@ pnpm build          # 根聚合：构建 web + server；或单独 pnpm --filter 
 pnpm typecheck      # 或单独进入本目录：pnpm run typecheck / pnpm run build
 ```
 
-> Vite 已把 `/api` 与 `/ws` 代理到 `http://localhost:8080`，浏览器直接访问 `http://localhost:8000` 即可，无需 CORS 配置。
+> Vite 已把 `/api` 与 `/ws` 代理到 `http://localhost:8080`，浏览器直接访问 `http://localhost:3000` 即可，无需 CORS 配置。
 
 ---
 
 ## 当前用户与权限
 
-后端提供登录鉴权：`POST /api/auth/login` 签发 7 天 JWT（默认种子账号 `admin / admin`）。前端登录态由 `useAuth` 组合式函数管理（token 存 localStorage，`GET /api/me` 拉取用户/角色/权限并集），路由守卫未登录跳 `/login`；各操作按钮按当前用户权限（`hasPermission`）显隐，后端矩阵强制兜底。WS 连接（房间通道 `/ws/room/:roomId` 或看板通道 `/ws/board`）后首条消息发送 `auth`（携带 JWT）完成鉴权；鉴权被拒等致命错误会停止自动重连，界面退化为手动刷新。
+后端提供登录鉴权：`POST /api/sessions` 签发 7 天 JWT（默认种子账号 `admin / admin`）。前端登录态由 `useAuth` 组合式函数管理（token 存 localStorage，`GET /api/me` 拉取用户/角色/权限并集），路由守卫未登录跳 `/login`；各操作按钮按当前用户权限（`hasPermission`）显隐，后端矩阵强制兜底。WS 连接（房间通道 `/ws/rooms/:roomId` 或看板通道 `/ws/board`）后首条消息发送 `auth`（携带 JWT）完成鉴权；鉴权被拒等致命错误会停止自动重连，界面退化为手动刷新。

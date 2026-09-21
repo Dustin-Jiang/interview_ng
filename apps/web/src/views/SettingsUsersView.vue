@@ -1,32 +1,34 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
-import { Plus, RefreshCw, UsersRound } from 'lucide-vue-next'
+import { Plus, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useUsers } from '@/composables/useUsers'
 import { useAuth } from '@/composables/useAuth'
+import { useConfirmAction } from '@/composables/useConfirmAction'
 import type { User } from '@/models'
+import { toastError } from '@/lib/toast'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import DataTable from '@/components/ui/table/data-table.vue'
-import type { DataTableFeatures } from '@/components/ui/table/features'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Spinner } from '@/components/ui/spinner'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import type { DataTableFeatures } from '@/components/ui/table/features'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
-import EmptyState from '@/components/app/EmptyState.vue'
+import DataTableSection from '@/components/app/DataTableSection.vue'
+import FormDialog from '@/components/app/FormDialog.vue'
 import PageShell from '@/components/app/PageShell.vue'
+import RefreshButton from '@/components/app/RefreshButton.vue'
 import SearchInput from '@/components/app/SearchInput.vue'
 
 const { users, roles, departments, loading, keyword, load, setKeyword, createUser, updateUser, deleteUser, resetUserPassword } = useUsers()
 const { currentUserId } = useAuth()
 
 onMounted(() => void load())
+
+const emptyText = computed(() => (keyword.value ? '没有匹配的面试官' : '暂无面试官'))
 
 // ---- 用户操作 ----
 const userDialogOpen = ref(false)
@@ -87,29 +89,23 @@ async function submitUser() {
     }
     userDialogOpen.value = false
   } catch (e) {
-    toast.error((e as Error).message)
+    toastError(e)
   } finally {
     savingUser.value = false
   }
 }
 
 // 删除面试官确认对话框（替代 window.confirm）。
-const deleteTarget = ref<User | null>(null)
-const deleting = ref(false)
-
-async function confirmDelete() {
-  if (!deleteTarget.value || deleting.value) return
-  deleting.value = true
-  try {
-    await deleteUser(deleteTarget.value.id)
-    toast.success('已删除')
-    deleteTarget.value = null
-  } catch (e) {
-    toast.error((e as Error).message)
-  } finally {
-    deleting.value = false
-  }
-}
+const {
+  target: deleteTarget,
+  loading: deleting,
+  request: requestDelete,
+  onOpenChange: onDeleteOpenChange,
+  confirm: confirmDelete,
+} = useConfirmAction<User>({
+  action: (u) => deleteUser(u.id),
+  success: () => '已删除',
+})
 
 // 重置密码对话框（替代 window.prompt）：显式输入 + 校验。
 const resetTarget = ref<User | null>(null)
@@ -134,7 +130,7 @@ async function submitResetPassword() {
     toast.success('密码已重置，该用户旧登录已失效')
     resetTarget.value = null
   } catch (e) {
-    toast.error((e as Error).message)
+    toastError(e)
   } finally {
     resetting.value = false
   }
@@ -201,7 +197,7 @@ function renderUserActions(u: User) {
     h(Button, { size: 'sm', variant: 'outline', onClick: () => openResetPassword(u) }, () => '重置密码'),
   ]
   if (!isSelf(u)) {
-    buttons.push(h(Button, { size: 'sm', variant: 'destructive', onClick: () => (deleteTarget.value = u) }, () => '删除'))
+    buttons.push(h(Button, { size: 'sm', variant: 'destructive', onClick: () => requestDelete(u) }, () => '删除'))
   }
   return h('div', { class: 'flex gap-2' }, buttons)
 }
@@ -210,122 +206,107 @@ function renderUserActions(u: User) {
 <template>
   <PageShell title="面试官">
     <template #actions>
-      <Button variant="outline" size="icon" aria-label="刷新列表" @click="load">
-        <RefreshCw :class="loading ? 'animate-spin' : ''" aria-hidden="true" />
-      </Button>
+      <RefreshButton label="刷新列表" :loading="loading" @click="load" />
       <Button size="sm" @click="openCreateUser">
         <Plus aria-hidden="true" />
         新增面试官
       </Button>
     </template>
 
-    <div class="space-y-4">
-      <SearchInput
-        v-model="keyword"
-        placeholder="搜索用户名 / 姓名…"
-        @search="setKeyword"
-      />
-
-      <!-- 加载骨架屏 -->
-      <div v-if="loading && users.length === 0" class="space-y-2" aria-busy="true">
-        <Skeleton v-for="i in 5" :key="i" class="h-12 w-full rounded-md" />
-      </div>
-
-      <!-- 空态 -->
-      <EmptyState v-else-if="users.length === 0" :icon="UsersRound">
-        {{ keyword ? '没有匹配的面试官' : '暂无面试官' }}
-      </EmptyState>
-
-      <DataTable v-else :columns="userColumns" :data="users" />
-    </div>
+    <DataTableSection
+      :loading="loading"
+      :items="users"
+      :columns="userColumns"
+      :data="users"
+      :empty-text="emptyText"
+      :empty-icon="UsersRound"
+    >
+      <template #toolbar>
+        <SearchInput
+          v-model="keyword"
+          placeholder="搜索用户名 / 姓名…"
+          @search="setKeyword"
+        />
+      </template>
+    </DataTableSection>
 
     <!-- 用户对话框 -->
-    <Dialog :open="userDialogOpen" @update:open="userDialogOpen = $event">
-      <DialogContent size="md">
-        <DialogHeader>
-          <DialogTitle>{{ editingUser ? '编辑面试官' : '新增面试官' }}</DialogTitle>
-        </DialogHeader>
-        <div class="grid gap-4">
-          <div class="grid gap-2">
-            <Label for="u-username">用户名（登录名）</Label>
-            <Input id="u-username" v-model="userForm.username" placeholder="登录用户名" autocomplete="off" />
-          </div>
-          <div class="grid gap-2">
-            <Label for="u-name">姓名</Label>
-            <Input id="u-name" v-model="userForm.name" placeholder="显示姓名" />
-          </div>
-          <div v-if="!editingUser" class="grid gap-2">
-            <Label for="u-password">初始密码</Label>
-            <Input id="u-password" v-model="userForm.password" type="password" placeholder="初始密码" autocomplete="new-password" />
-          </div>
-          <div class="grid gap-2">
-            <Label for="u-department">部门</Label>
-            <Select :model-value="userForm.department_id ? String(userForm.department_id) : ''" @update:model-value="userForm.department_id = $event ? Number($event) : null">
-              <SelectTrigger id="u-department" class="w-full">
-                <SelectValue placeholder="选择部门" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="d in departments" :key="d.id" :value="String(d.id)">
-                  {{ d.name }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div class="grid gap-2">
-            <Label>角色</Label>
-            <div v-if="roles.length" class="grid grid-cols-2 gap-2">
-              <label
-                v-for="r in roles"
-                :key="r.id"
-                class="flex cursor-pointer items-center gap-2 rounded-md border p-2 text-sm transition-colors hover:bg-accent/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
-              >
-                <input
-                  type="checkbox"
-                  class="accent-primary"
-                  :checked="userForm.role_ids.includes(r.id)"
-                  @change="toggleUserRole(r.id)"
-                />
-                {{ r.name }}
-              </label>
-            </div>
-          </div>
+    <FormDialog
+      :open="userDialogOpen"
+      :title="editingUser ? '编辑面试官' : '新增面试官'"
+      :submit-text="editingUser ? '保存' : '创建'"
+      :loading="savingUser"
+      @update:open="userDialogOpen = $event"
+      @submit="submitUser"
+    >
+      <div class="grid gap-2">
+        <Label for="u-username">用户名（登录名）</Label>
+        <Input id="u-username" v-model="userForm.username" placeholder="登录用户名" autocomplete="off" />
+      </div>
+      <div class="grid gap-2">
+        <Label for="u-name">姓名</Label>
+        <Input id="u-name" v-model="userForm.name" placeholder="显示姓名" />
+      </div>
+      <div v-if="!editingUser" class="grid gap-2">
+        <Label for="u-password">初始密码</Label>
+        <Input id="u-password" v-model="userForm.password" type="password" placeholder="初始密码" autocomplete="new-password" />
+      </div>
+      <div class="grid gap-2">
+        <Label for="u-department">部门</Label>
+        <Select :model-value="userForm.department_id ? String(userForm.department_id) : ''" @update:model-value="userForm.department_id = $event ? Number($event) : null">
+          <SelectTrigger id="u-department" class="w-full">
+            <SelectValue placeholder="选择部门" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="d in departments" :key="d.id" :value="String(d.id)">
+              {{ d.name }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div class="grid gap-2">
+        <Label>角色</Label>
+        <div v-if="roles.length" class="grid grid-cols-2 gap-2">
+          <label
+            v-for="r in roles"
+            :key="r.id"
+            class="flex cursor-pointer items-center gap-2 rounded-md border p-2 text-sm transition-colors hover:bg-accent/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+          >
+            <input
+              type="checkbox"
+              class="accent-primary"
+              :checked="userForm.role_ids.includes(r.id)"
+              @change="toggleUserRole(r.id)"
+            />
+            {{ r.name }}
+          </label>
         </div>
-        <DialogFooter>
-          <Button variant="outline" :disabled="savingUser" @click="userDialogOpen = false">取消</Button>
-          <Button :disabled="savingUser" @click="submitUser">
-            <Spinner v-if="savingUser" />
-            {{ editingUser ? '保存' : '创建' }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </FormDialog>
 
     <!-- 重置密码对话框 -->
-    <Dialog :open="!!resetTarget" @update:open="resetTarget = $event ? resetTarget : null">
-      <DialogContent size="sm">
-        <DialogHeader>
-          <DialogTitle>重置密码</DialogTitle>
-        </DialogHeader>
-        <div class="grid gap-2">
-          <Label for="reset-pass">新密码（为「{{ resetTarget?.name || resetTarget?.username }}」设置）</Label>
-          <Input
-            id="reset-pass"
-            v-model="newPassword"
-            type="password"
-            placeholder="输入新密码"
-            autocomplete="new-password"
-            @keydown.enter="submitResetPassword"
-          />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" :disabled="resetting" @click="resetTarget = null">取消</Button>
-          <Button :disabled="resetting || !newPassword" @click="submitResetPassword">
-            <Spinner v-if="resetting" />
-            重置密码
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      :open="!!resetTarget"
+      title="重置密码"
+      submit-text="重置密码"
+      size="sm"
+      :loading="resetting"
+      :submit-disabled="!newPassword"
+      @update:open="resetTarget = $event ? resetTarget : null"
+      @submit="submitResetPassword"
+    >
+      <div class="grid gap-2">
+        <Label for="reset-pass">新密码（为「{{ resetTarget?.name || resetTarget?.username }}」设置）</Label>
+        <Input
+          id="reset-pass"
+          v-model="newPassword"
+          type="password"
+          placeholder="输入新密码"
+          autocomplete="new-password"
+          @keydown.enter="submitResetPassword"
+        />
+      </div>
+    </FormDialog>
 
     <!-- 删除面试官确认 -->
     <ConfirmDialog
@@ -334,7 +315,7 @@ function renderUserActions(u: User) {
       confirm-text="删除"
       destructive
       :loading="deleting"
-      @update:open="deleteTarget = $event ? deleteTarget : null"
+      @update:open="onDeleteOpenChange"
       @confirm="confirmDelete"
     />
   </PageShell>

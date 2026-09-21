@@ -2,14 +2,16 @@
 import { computed, h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import { Plus, RefreshCw, UsersRound } from 'lucide-vue-next'
+import { Plus, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useCandidates } from '@/composables/useCandidates'
 import { useAuth } from '@/composables/useAuth'
+import { useConfirmAction } from '@/composables/useConfirmAction'
 import { CANDIDATE_STATUSES, PERMISSIONS, type Candidate, type CandidateStatus } from '@/models'
 import { STATUS_PRESENTATION } from '@/presenters/status'
 import { formatDateTime } from '@/lib/format'
+import { toastError } from '@/lib/toast'
 
 // --- shadcn-vue UI ---
 import { Button } from '@/components/ui/button'
@@ -17,22 +19,22 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Spinner } from '@/components/ui/spinner'
-import DataTable from '@/components/ui/table/data-table.vue'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DataTableColumnHeader from '@/components/ui/table/data-table-column-header.vue'
 import type { DataTableFeatures } from '@/components/ui/table/features'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
-import EmptyState from '@/components/app/EmptyState.vue'
+import DataTableSection from '@/components/app/DataTableSection.vue'
+import FormDialog from '@/components/app/FormDialog.vue'
 import PageShell from '@/components/app/PageShell.vue'
+import RefreshButton from '@/components/app/RefreshButton.vue'
 import SearchInput from '@/components/app/SearchInput.vue'
 
 const router = useRouter()
 const { hasPermission } = useAuth()
 // 组合式函数（函数式 ViewModel）：顶层解构，模板直接引用（ref 自动解包）。
 const { candidates, statusFilter, keyword, loading, load, create, checkin, update, remove, resetStatus, setStatusFilter, setKeyword } = useCandidates()
+
+const emptyText = computed(() => (keyword.value ? '没有匹配的候选人' : '暂无候选人'))
 
 // 创建候选人对话框状态
 const createOpen = ref(false)
@@ -45,10 +47,6 @@ const editTarget = ref<Candidate | null>(null)
 const editName = ref('')
 const editProfile = ref('')
 const editing = ref(false)
-
-// 删除确认对话框状态
-const deleteTarget = ref<Candidate | null>(null)
-const deleting = ref(false)
 
 // 重置状态对话框状态
 const resetTarget = ref<Candidate | null>(null)
@@ -74,7 +72,7 @@ async function submitCreate() {
     createOpen.value = false
     toast.success('候选人已创建')
   } catch (e) {
-    toast.error((e as Error).message)
+    toastError(e)
   } finally {
     creating.value = false
   }
@@ -99,25 +97,23 @@ async function submitEdit() {
     editTarget.value = null
     toast.success('已保存')
   } catch (e) {
-    toast.error((e as Error).message)
+    toastError(e)
   } finally {
     editing.value = false
   }
 }
 
-async function confirmDelete() {
-  if (!deleteTarget.value || deleting.value) return
-  deleting.value = true
-  try {
-    await remove(deleteTarget.value.id)
-    toast.success('候选人已删除')
-    deleteTarget.value = null
-  } catch (e) {
-    toast.error((e as Error).message)
-  } finally {
-    deleting.value = false
-  }
-}
+// 删除确认对话框（替代 window.confirm）。
+const {
+  target: deleteTarget,
+  loading: deleting,
+  request: requestDelete,
+  onOpenChange: onDeleteOpenChange,
+  confirm: confirmDelete,
+} = useConfirmAction<Candidate>({
+  action: (c) => remove(c.id),
+  success: () => '候选人已删除',
+})
 
 function openReset(c: Candidate) {
   resetTarget.value = c
@@ -148,7 +144,7 @@ async function submitReset() {
     resetTarget.value = null
     toast.success('状态已重置')
   } catch (e) {
-    toast.error((e as Error).message)
+    toastError(e)
   } finally {
     resetting.value = false
   }
@@ -159,7 +155,7 @@ async function handleCheckin(c: Candidate) {
     await checkin(c.id)
     toast.success('签到成功')
   } catch (e) {
-    toast.error((e as Error).message)
+    toastError(e)
   }
 }
 
@@ -230,7 +226,7 @@ function renderActions(c: Candidate) {
       h(Button, { size: 'sm', variant: 'outline', onClick: () => openEdit(c) }, () => '编辑'),
       h(Button, { size: 'sm', variant: 'outline', onClick: () => openReset(c) }, () => '重置状态'),
       // 打开确认对话框（ConfirmDialog），不再使用 window.confirm。
-      h(Button, { size: 'sm', variant: 'destructive', onClick: () => (deleteTarget.value = c) }, () => '删除'),
+      h(Button, { size: 'sm', variant: 'destructive', onClick: () => requestDelete(c) }, () => '删除'),
     )
   }
   return h('div', { class: 'flex gap-2' }, buttons)
@@ -244,44 +240,43 @@ onMounted(() => {
 <template>
   <PageShell title="候选人管理">
     <template #actions>
-      <Button variant="outline" size="icon" aria-label="刷新候选人列表" @click="load">
-        <RefreshCw :class="loading ? 'animate-spin' : ''" aria-hidden="true" />
-      </Button>
-      <Dialog :open="createOpen" @update:open="createOpen = $event">
-        <DialogTrigger as-child>
+      <RefreshButton label="刷新候选人列表" :loading="loading" @click="load" />
+      <FormDialog
+        :open="createOpen"
+        title="新增候选人"
+        submit-text="创建"
+        :loading="creating"
+        @update:open="createOpen = $event"
+        @submit="submitCreate"
+      >
+        <template #trigger>
           <Button v-if="hasPermission(PERMISSIONS.CANDIDATES_CREATE)" @click="openCreate">
             <Plus aria-hidden="true" />
             新增候选人
           </Button>
-        </DialogTrigger>
-        <DialogContent size="md">
-          <DialogHeader>
-            <DialogTitle>新增候选人</DialogTitle>
-          </DialogHeader>
-          <div class="grid gap-4">
-            <div class="grid gap-2">
-              <Label for="cand-name">姓名</Label>
-              <Input id="cand-name" v-model="newName" placeholder="候选人姓名" @keydown.enter="submitCreate" />
-            </div>
-            <div class="grid gap-2">
-              <Label for="cand-profile">个人简介</Label>
-              <Textarea id="cand-profile" v-model="newProfile" rows="3" placeholder="技术栈 / 背景（可选）" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" :disabled="creating" @click="createOpen = false">取消</Button>
-            <Button :disabled="creating" @click="submitCreate">
-              <Spinner v-if="creating" />
-              创建
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </template>
+
+        <div class="grid gap-2">
+          <Label for="cand-name">姓名</Label>
+          <Input id="cand-name" v-model="newName" placeholder="候选人姓名" @keydown.enter="submitCreate" />
+        </div>
+        <div class="grid gap-2">
+          <Label for="cand-profile">个人简介</Label>
+          <Textarea id="cand-profile" v-model="newProfile" rows="3" placeholder="技术栈 / 背景（可选）" />
+        </div>
+      </FormDialog>
     </template>
 
-    <div class="space-y-3">
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <h2 class="text-sm font-semibold">候选人列表</h2>
+    <DataTableSection
+      title="候选人列表"
+      :loading="loading"
+      :items="candidates"
+      :columns="columns"
+      :data="candidates"
+      :empty-text="emptyText"
+      :empty-icon="UsersRound"
+    >
+      <template #toolbar>
         <div class="flex flex-wrap items-center gap-3">
           <!-- 搜索框：图标 + 可清空（Enter / 清空均触发检索）。 -->
           <SearchInput
@@ -289,7 +284,7 @@ onMounted(() => {
             placeholder="搜索姓名 / 简介…"
             @search="setKeyword"
           />
-          <Select :model-value="statusFilter || 'ALL'" @update:model-value="setStatusFilter($event === 'ALL' ? '' : ($event as any))">
+          <Select :model-value="statusFilter || 'ALL'" @update:model-value="setStatusFilter($event === 'ALL' ? '' : ($event as CandidateStatus))">
             <SelectTrigger class="w-[180px]" aria-label="按状态筛选">
               <SelectValue placeholder="全部状态" />
             </SelectTrigger>
@@ -301,78 +296,51 @@ onMounted(() => {
             </SelectContent>
           </Select>
         </div>
-      </div>
-
-      <!-- 加载骨架屏（首屏无数据时） -->
-      <div v-if="loading && candidates.length === 0" class="space-y-2" aria-busy="true">
-        <Skeleton v-for="i in 5" :key="i" class="h-12 w-full rounded-md" />
-      </div>
-
-      <!-- 空态：说明 + 引导动作 -->
-      <EmptyState v-else-if="candidates.length === 0" :icon="UsersRound">
-        {{ keyword ? '没有匹配的候选人' : '暂无候选人' }}
-      </EmptyState>
-
-      <!-- 数据表格 -->
-      <DataTable v-else :columns="columns" :data="candidates" />
-    </div>
+      </template>
+    </DataTableSection>
 
     <!-- 编辑对话框 -->
-    <Dialog :open="!!editTarget" @update:open="editTarget = $event ? editTarget : null">
-      <DialogContent size="md">
-        <DialogHeader>
-          <DialogTitle>编辑候选人</DialogTitle>
-        </DialogHeader>
-        <div class="grid gap-4">
-          <div class="grid gap-2">
-            <Label for="edit-name">姓名</Label>
-            <Input id="edit-name" v-model="editName" @keydown.enter="submitEdit" />
-          </div>
-          <div class="grid gap-2">
-            <Label for="edit-profile">个人简介</Label>
-            <Textarea id="edit-profile" v-model="editProfile" rows="3" placeholder="技术栈 / 背景（可选）" />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" :disabled="editing" @click="editTarget = null">取消</Button>
-          <Button :disabled="editing" @click="submitEdit">
-            <Spinner v-if="editing" />
-            保存
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      :open="!!editTarget"
+      title="编辑候选人"
+      :loading="editing"
+      @update:open="editTarget = $event ? editTarget : null"
+      @submit="submitEdit"
+    >
+      <div class="grid gap-2">
+        <Label for="edit-name">姓名</Label>
+        <Input id="edit-name" v-model="editName" @keydown.enter="submitEdit" />
+      </div>
+      <div class="grid gap-2">
+        <Label for="edit-profile">个人简介</Label>
+        <Textarea id="edit-profile" v-model="editProfile" rows="3" placeholder="技术栈 / 背景（可选）" />
+      </div>
+    </FormDialog>
 
     <!-- 重置状态对话框 -->
-    <Dialog :open="!!resetTarget" @update:open="resetTarget = $event ? resetTarget : null">
-      <DialogContent size="sm">
-        <DialogHeader>
-          <DialogTitle>重置状态</DialogTitle>
-        </DialogHeader>
-        <div class="grid gap-3">
-          <div class="grid gap-2">
-            <Label for="reset-status">目标状态</Label>
-            <Select :model-value="resetStatusValue" @update:model-value="resetStatusValue = $event as CandidateStatus">
-              <SelectTrigger id="reset-status" class="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="s in CANDIDATE_STATUSES" :key="s" :value="s">
-                  {{ STATUS_PRESENTATION[s].label }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" :disabled="resetting" @click="resetTarget = null">取消</Button>
-          <Button :disabled="resetting" @click="submitReset">
-            <Spinner v-if="resetting" />
-            重置
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      :open="!!resetTarget"
+      title="重置状态"
+      submit-text="重置"
+      size="sm"
+      :loading="resetting"
+      @update:open="resetTarget = $event ? resetTarget : null"
+      @submit="submitReset"
+    >
+      <div class="grid gap-2">
+        <Label for="reset-status">目标状态</Label>
+        <Select :model-value="resetStatusValue" @update:model-value="resetStatusValue = $event as CandidateStatus">
+          <SelectTrigger id="reset-status" class="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="s in CANDIDATE_STATUSES" :key="s" :value="s">
+              {{ STATUS_PRESENTATION[s].label }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    </FormDialog>
 
     <!-- 删除候选人确认 -->
     <ConfirmDialog
@@ -381,7 +349,7 @@ onMounted(() => {
       confirm-text="删除"
       destructive
       :loading="deleting"
-      @update:open="deleteTarget = $event ? deleteTarget : null"
+      @update:open="onDeleteOpenChange"
       @confirm="confirmDelete"
     />
   </PageShell>

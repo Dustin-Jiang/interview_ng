@@ -2,25 +2,28 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import { DoorOpen, Plus, RefreshCw, Trash2 } from 'lucide-vue-next'
+import { DoorOpen, Plus, Trash2 } from 'lucide-vue-next'
 
 import { useRoomList } from '@/composables/useRoomList'
 import { useAuth } from '@/composables/useAuth'
 import { useBoardRefresh } from '@/composables/useBoardChannel'
+import { useConfirmAction } from '@/composables/useConfirmAction'
 import { roomApi } from '@/api/http'
-import { PERMISSIONS, type CandidateStatus } from '@/models'
+import { PERMISSIONS, type CandidateStatus, type Room } from '@/models'
 import { roomPhaseOf } from '@/domain/status'
 import { STATUS_PRESENTATION, EMPTY_PRESENTATION } from '@/presenters/status'
 import { formatDateTime } from '@/lib/format'
+import { toastError } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
 import { tileVariants } from '@/components/ui/tokens'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import EmptyState from '@/components/app/EmptyState.vue'
+import ListSkeleton from '@/components/app/ListSkeleton.vue'
 import PageShell from '@/components/app/PageShell.vue'
+import RefreshButton from '@/components/app/RefreshButton.vue'
 
 import RoomChat from './RoomChat.vue'
 
@@ -66,10 +69,10 @@ function openRoom(id: number) {
 }
 
 function backToList() {
-  router.push({ name: 'room' })
+  router.push({ name: 'rooms' })
 }
 
-function statusOf(room: import('@/models').Room): { label: string; badge: 'outline' | 'secondary' | 'default' | 'destructive' } {
+function statusOf(room: Room): { label: string; badge: 'outline' | 'secondary' | 'default' | 'destructive' } {
   const s = roomPhaseOf(room) as CandidateStatus | null
   return s ? STATUS_PRESENTATION[s] : EMPTY_PRESENTATION
 }
@@ -80,28 +83,24 @@ async function createRoom() {
     toast.success(`已创建房间 #${res.id}`)
     await load()
   } catch (e) {
-    toast.error((e as Error).message)
+    toastError(e)
   }
 }
 
 // 删除空房确认对话框（替代 window.confirm）。
-const deleteTarget = ref<import('@/models').Room | null>(null)
-const deleting = ref(false)
-
-async function confirmDelete() {
-  if (!deleteTarget.value) return
-  deleting.value = true
-  try {
-    await roomApi.remove(deleteTarget.value.id)
-    toast.success(`已删除房间 #${deleteTarget.value.id}`)
-    deleteTarget.value = null
+const {
+  target: deleteTarget,
+  loading: deleting,
+  request: requestDelete,
+  onOpenChange: onDeleteOpenChange,
+  confirm: confirmDelete,
+} = useConfirmAction<Room>({
+  action: async (room) => {
+    await roomApi.remove(room.id)
     await load()
-  } catch (e) {
-    toast.error((e as Error).message)
-  } finally {
-    deleting.value = false
-  }
-}
+  },
+  success: (room) => `已删除房间 #${room.id}`,
+})
 </script>
 
 <template>
@@ -124,9 +123,7 @@ async function confirmDelete() {
         <Plus aria-hidden="true" />
         新建房间
       </Button>
-      <Button variant="outline" size="icon" aria-label="刷新房间列表" @click="load">
-        <RefreshCw :class="loading ? 'animate-spin' : ''" aria-hidden="true" />
-      </Button>
+      <RefreshButton label="刷新房间列表" :loading="loading" @click="load" />
     </template>
 
     <!-- 空态：说明 + 引导动作 -->
@@ -141,9 +138,12 @@ async function confirmDelete() {
     </EmptyState>
 
     <!-- 加载骨架屏 -->
-    <div v-else-if="loading && rooms.length === 0" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-busy="true">
-      <Skeleton v-for="i in 6" :key="i" class="h-[104px] rounded-xl" />
-    </div>
+    <ListSkeleton
+      v-else-if="loading && rooms.length === 0"
+      layout="grid"
+      :rows="6"
+      item-class="h-[104px] rounded-xl"
+    />
 
     <!-- 房间卡片网格（tileVariants 统一可交互表面） -->
     <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -178,7 +178,7 @@ async function confirmDelete() {
             variant="ghost"
             size="sm"
             class="h-7 gap-1 px-2 text-xs text-destructive hover:text-destructive"
-            @click="deleteTarget = room"
+            @click="requestDelete(room)"
           >
             <Trash2 aria-hidden="true" />
             删除空房
@@ -194,7 +194,7 @@ async function confirmDelete() {
       confirm-text="删除"
       destructive
       :loading="deleting"
-      @update:open="deleteTarget = $event ? deleteTarget : null"
+      @update:open="onDeleteOpenChange"
       @confirm="confirmDelete"
     />
   </PageShell>

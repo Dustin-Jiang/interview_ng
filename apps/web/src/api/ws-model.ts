@@ -5,7 +5,7 @@
  *  - type 为事件名（message_appended / room_phase_changed / ...）或 "reply"（命令回执）。
  *  - data 为对应载荷。
  *
- * 连接：`/ws/room/:roomId`（RESTful 路径，不带任何 query 参数）；
+ * 连接：`/ws/rooms/:roomId`（RESTful 路径，不带任何 query 参数）；
  * 连接建立后首条消息必须为 `auth`（携带 JWT），鉴权成功后才能收发业务命令。
  */
 import type { Message, Room } from '@/models'

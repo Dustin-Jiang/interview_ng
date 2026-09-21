@@ -1,6 +1,6 @@
 /**
  * WebSocket 通道服务 —— MVVM 的 Service（Model 访问）层。
- * 职责：管理一条到后端的 WS 长连接（路径参数化：房间通道 /ws/room/:id、看板通道 /ws/board），
+ * 职责：管理一条到后端的 WS 长连接（路径参数化：房间通道 /ws/rooms/:id、看板通道 /ws/board），
  * 收发信封、断线重连、致命错误停连。
  * 连接建立后先发 auth 消息（JWT），鉴权成功后才进入业务阶段；
  * 鉴权前发出的命令（如 useRoomChat 在 connect() 后立即 sync(0)）暂存，

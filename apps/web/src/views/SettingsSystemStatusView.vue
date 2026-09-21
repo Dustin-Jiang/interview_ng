@@ -7,21 +7,21 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
-import { Check, Gavel, RefreshCw, UserCheck, UserSearch, UsersRound } from 'lucide-vue-next'
+import { Check, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper } from '@tanstack/vue-table'
 
 import { admissionApi, candidateApi, departmentApi, systemStatusApi } from '@/api/http'
 import { useBoardChannel } from '@/composables/useBoardChannel'
 import { useSystemStatus } from '@/composables/useSystemStatus'
 import { buildAdmissionPreview, type AdmissionPreviewRow } from '@/domain/admission'
-import { ADMISSION_PRESENTATION, admissionOutcomePresentation } from '@/presenters/status'
+import { ADMISSION_PRESENTATION, PHASE_PRESENTATION, admissionOutcomePresentation } from '@/presenters/status'
 import type { SystemPhase, Candidate, CandidateAdmission, Department } from '@/models'
 import { PERMISSIONS, SYSTEM_PHASES } from '@/models'
 import { useAuth } from '@/composables/useAuth'
+import { toastError } from '@/lib/toast'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
 import { NumberField, NumberFieldContent, NumberFieldDecrement, NumberFieldIncrement, NumberFieldInput } from '@/components/ui/number-field'
 import DataTable from '@/components/ui/table/data-table.vue'
 import type { DataTableFeatures } from '@/components/ui/table/features'
@@ -34,16 +34,12 @@ import {
   StepperTrigger,
 } from '@/components/ui/stepper'
 import EmptyState from '@/components/app/EmptyState.vue'
+import ListSkeleton from '@/components/app/ListSkeleton.vue'
 import PageShell from '@/components/app/PageShell.vue'
+import RefreshButton from '@/components/app/RefreshButton.vue'
 
 const { status, loading, load, setPhase } = useSystemStatus()
 const switching = ref(false)
-const phaseMeta: Record<SystemPhase, { label: string; icon: typeof UsersRound }> = {
-  interview: { label: '面试阶段', icon: UsersRound },
-  admission: { label: '录取阶段', icon: UserCheck },
-  leftover: { label: '捡漏阶段', icon: UserSearch },
-  settlement: { label: '结算阶段', icon: Gavel },
-}
 
 /** 阶段 → Stepper 档位序号（1 起，与状态机推进方向一致）。 */
 const phaseSteps = SYSTEM_PHASES.map((phase, i) => ({ phase, step: i + 1 }))
@@ -75,9 +71,9 @@ async function switchTo(phase: SystemPhase) {
   switching.value = true
   try {
     await setPhase(phase)
-    toast.success(`系统已切换为「${phaseMeta[phase].label}」`)
+    toast.success(`系统已切换为「${PHASE_PRESENTATION[phase].label}」`)
   } catch (e) {
-    toast.error((e as Error).message)
+    toastError(e)
   } finally {
     switching.value = false
   }
@@ -104,11 +100,11 @@ async function saveBidStep() {
   }
   bidStepSaving.value = true
   try {
-    await systemStatusApi.setBidStep(step)
+    await systemStatusApi.patch({ bid_step: step })
     toast.success(`出价步长已设为 ${step}`)
     await load()
   } catch (e) {
-    toast.error((e as Error).message)
+    toastError(e)
   } finally {
     bidStepSaving.value = false
   }
@@ -201,14 +197,10 @@ onMounted(() => void load())
 <template>
   <PageShell title="系统状态">
     <template #actions>
-      <Button variant="outline" size="icon" aria-label="刷新系统状态" @click="load">
-        <RefreshCw :class="loading ? 'animate-spin' : ''" aria-hidden="true" />
-      </Button>
+      <RefreshButton label="刷新系统状态" :loading="loading" @click="load" />
     </template>
 
-    <div v-if="loading && !status" class="space-y-4" aria-busy="true">
-      <Skeleton v-for="i in 2" :key="i" class="h-28 w-full rounded-xl" />
-    </div>
+    <ListSkeleton v-if="loading && !status" :rows="2" item-class="h-28 w-full rounded-xl" class="space-y-4" />
 
     <template v-else>
       <Card class="p-5">
@@ -234,7 +226,7 @@ onMounted(() => void load())
               <StepperIndicator>
                 <Check v-if="state === 'completed'" class="h-4 w-4" aria-hidden="true" />
                 <component
-                  :is="phaseMeta[item.phase].icon"
+                  :is="PHASE_PRESENTATION[item.phase].icon"
                   v-else
                   class="h-4 w-4 shrink-0"
                   aria-hidden="true"
@@ -245,7 +237,7 @@ onMounted(() => void load())
               class="mt-2"
               :class="state === 'active' ? 'text-primary' : ''"
             >
-              {{ phaseMeta[item.phase].label }}
+              {{ PHASE_PRESENTATION[item.phase].label }}
             </StepperTitle>
           </StepperItem>
         </Stepper>
@@ -280,19 +272,10 @@ onMounted(() => void load())
       <div v-if="showPreview">
         <div class="mb-4 flex items-center justify-between gap-2">
           <h2 class="text-base font-semibold">录取情况预览</h2>
-          <Button
-            variant="outline"
-            size="icon"
-            aria-label="刷新录取情况"
-            @click="loadPreview"
-          >
-            <RefreshCw :class="previewLoading ? 'animate-spin' : ''" aria-hidden="true" />
-          </Button>
+          <RefreshButton label="刷新录取情况" :loading="previewLoading" @click="loadPreview" />
         </div>
 
-        <div v-if="previewLoading && previewRows.length === 0" class="space-y-2" aria-busy="true">
-          <Skeleton v-for="i in 3" :key="i" class="h-12 w-full rounded-md" />
-        </div>
+        <ListSkeleton v-if="previewLoading && previewRows.length === 0" :rows="3" />
 
         <EmptyState v-else-if="previewError" :icon="UsersRound">
           录取情况加载失败：{{ previewError }}

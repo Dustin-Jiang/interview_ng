@@ -130,7 +130,7 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     connecting.value = true
 
     const token = getAuthToken()
-    channel = new WsChannel(`/ws/room/${id}`, token, {
+    channel = new WsChannel(`/ws/rooms/${id}`, token, {
       onEvent: applyEvent,
       onReply: applyReply,
       onOpen: () => {

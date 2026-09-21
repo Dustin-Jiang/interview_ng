@@ -178,7 +178,7 @@ export interface LeftoverMyBudget {
   remaining: number
 }
 
-/** GET /leftover/overview 响应：当前阶段（字符串）+ 各部门预算摘要 + 本部门预算。 */
+/** GET /leftover 响应：当前阶段（字符串）+ 各部门预算摘要 + 本部门预算。 */
 export interface LeftoverOverview {
   phase: SystemPhase
   departments: LeftoverDepartmentBudget[]
@@ -193,18 +193,9 @@ export interface LeftoverResult {
   created_at: string
 }
 
-/** POST /leftover/candidates/:id/resolve 响应：赢家部门与成交金额。 */
+/** POST /leftover/results 响应：赢家部门与成交金额。 */
 export interface LeftoverResolveResult {
   candidate_id: number
   department_id: number
   amount: number
-}
-
-/** GET /leftover/final 响应行：由出价计算的最终录取结果（赢家 = 最高出价部门，同额先出价者）。 */
-export interface LeftoverFinalResult {
-  candidate_id: number
-  department_id: number
-  amount: number
-  /** 是否已正式结算落库（存在 admitted 录取记录）。 */
-  resolved: boolean
 }
