@@ -1,38 +1,108 @@
-# AGENTS.md
+# Repository Guidelines
 
-pnpm monorepo：`apps/web`（Vue 3 + Vite + TS + shadcn-vue，包名 `@interview-ng/web`）与 `apps/server`（Go，module `interview_ng`，**已从 pnpm workspace 排除**，见 `pnpm-workspace.yaml`）。文档与代码注释使用中文书写；新增文档/注释请保持一致。
+## 项目概述
 
-## 命令
+面试管理系统（interview_ng）：面试官协作面试、多部门录取决定、捡漏阶段按预算竞拍补录候选人。pnpm monorepo：
 
-- 根脚本：`pnpm dev`（仅 web）、`pnpm dev:server`、`pnpm build`、`pnpm typecheck`（仅 web，`vue-tsc --noEmit`）、`pnpm test`（web typecheck + `go test ./...`）。`pnpm test:server` **不带** `-race`。
-- Go 命令必须从 `apps/server/` 运行。根脚本会设置 `GOCACHE="$PWD/apps/server/.gopath/gocache"`，把构建缓存放在仓库内（已 gitignore）。Go 工具请同样设置，勿依赖全局缓存。
-- 单包命令：`pnpm --filter @interview-ng/web typecheck` / `build`（build = `vue-tsc -b && vite build`）。
+- `apps/web`（`@interview-ng/web`）：Vue 3 + Vite + TS + shadcn-vue 前端
+- `apps/server`（Go module `interview_ng`，Gin + Gorm）：单进程后端，**已从 pnpm workspace 排除**（`pnpm-workspace.yaml` 中 `!apps/server`）
+- 文档与代码注释一律使用中文
 
-## 运行环境
+## 架构与数据流
 
-- Postgres 通过 `docker-compose.yml`（`podman-compose up -d` 或 `docker compose up -d`；库 `interview`，postgres/postgres，:5432）。服务启动时 AutoMigrate —— 无迁移工具。
-- 服务端环境变量：`DATABASE_DSN`（默认 DSN 见 `cmd/server/main.go`）、`ADDR`（默认 `:8080`）、`JWT_SECRET`（JWT 签发密钥，缺省 dev 值）、`ADMIN_INIT_PASSWORD`（种子 admin 初始密码，缺省 `admin`）。
-- 登录鉴权：`POST /api/auth/login` 签发 7 天 JWT；`GET /api/me` 返回用户/角色/权限并集。RBAC 权限判断走 `internal/rbac` 内存缓存，变更即时生效；改密 bump `token_version` 踢旧 token。
-- Vite 将 `/api` 与 `/ws` 代理到 `:8080`；web dev 跑在 `:8000`（`apps/web/vite.config.ts`）。
-- 无开放注册。Web 端身份来自登录态（token 存 localStorage），不再写死 `CURRENT_USER_ID`。
+后端分层（依赖单向向下）：
 
-## 架构（单进程、内存权威）
+```
+cmd/server/main.go（装配：AutoMigrate 12 表 → seed → rbac → auth → state → broadcast → service → 路由）
+  handler（HTTP /api + WS /ws/rooms/:roomId、/ws/board）
+    → service.InterviewService（用例编排）
+      → state.StateStore（MemStateStore，唯一权威）
+        → gorm / Postgres
+```
 
-分层：`handler` → `service` → `state(StateStore)` → `model(Gorm)`，`broadcast` 订阅状态事件。详见根 README。
+- **事件流（出站）**：state 写操作在同一临界区内「先落库成功、后 `s.emit`」→ service 经 `broadcast.Manager.Publish` → handler 注册的 Sink → WS 客户端。事件带全局单调 `Seq`；消息带候选人维度 `msg_id` 作续传游标。事件类型与载荷见 `internal/state/event.go`。
+- **RBAC 旁路**：`internal/auth`（JWT + `RequireAuth`/`RequirePerm` 中间件）读 `internal/rbac/cache.go` 内存缓存（DB 权威 + 内存加速）；改密 bump `token_version` 踢旧 token。
+- **候选人七档状态机**（`internal/model/candidate.go`）：`NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED（面试已结束）→ ADMISSION_PENDING（待录取）→ ADMITTED（已录取）`，`StatusTransitions` 严格转移图 + `guardTransition`。
+- **系统四阶段**（`internal/model/system_status.go`）：`interview / admission / leftover / settlement`。切到捡漏/结算时批量同步录取档（唯一 admitted → 已录取，其余 → 待录取）；捡漏结算成交 → 候选人已录取。
+- **捡漏竞拍**（`internal/model/bid.go`）：预算 `max(500, (预期人数−已录取)×100)`；出价跨部门保密（事件不带金额）；唯一 admitted 才算已结算封盘，多家录取属争议进捡漏仲裁；出价步长 `bid_step`（默认 10）存于系统状态单行。
 
-- `internal/state/store.go`：`StateStore` 是唯一权威。当前实现为 `MemStateStore`（内存权威，Gorm 持久化）。所有写操作必须先落库成功，再产出事件（“先落库后广播”）——持久化成功前绝不广播。
-- 候选人状态机：`NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED`；非法迁移通过 `state.Error` 错误码拒绝（`store.go:59`）。管理端「重置到任意档」（`PUT /api/candidates/:id/status`）向后自动解绑房间、向前须已有房间。
-- 房间是**独立于候选人的物理会议室记录**：`candidate_id` 可空，无房间状态机，房间“状态”= 候选人状态的查询投影；仅空房可删。消息**按候选人归属**（`messages.candidate_id`），候选人维度续传游标，删候选人级联删其消息。候选人完成（推进或重置到 `COMPLETED`）**自动清房**（`rooms.candidate_id` 置空，绑定唯一权威在房间侧，候选人 `room_id` 为只读投影），房间转空闲、成员留守，可立即拉取下一位；消息仍按候选人归档保留。
-- **分配 = 房间内拉取**（`POST /api/rooms/:id/pull_candidate`），取代旧的 `POST /api/candidates/:id/assign`。
-- 一个房间 = 一个候选人 + 多个面试官；`room_members` 对 `(room_id, user_id)` 唯一，因此一个用户至多同时处于一个活跃房间。
-- 事件带全局单调 `Seq`；消息带候选人维度 `id` 作续传游标。WS 两条通道，JSON 信封 `{op, req_id, data}`，连接后首条消息必须为 `auth`（携带 JWT，10 秒超时）：房间通道 `GET /ws/room/:roomId`（无 query 参数，要求 `rooms.chat`，成功后自动 JoinRoom）；看板通道 `GET /ws/board`（要求 `rooms.view`，不 JoinRoom、仅接受 auth，扇出**所有**业务事件——含 `candidate_created/updated/deleted`、`room_created/deleted` 等全局事件与房间级事件各一份、不重复）。事件类型新增须同时更新看板扇出语义与前端订阅列表。
+前端（`apps/web/src`）为 MVVM 函数式，无 Pinia：
 
-## 测试
+- `api/`：axios 单例（`/api` baseURL、Bearer 注入、401 统一登出）、各资源 Service 对象（`http.ts`）、WS 客户端 `ws.ts`（首条消息必须 auth，断线 1.5s 重连，重连后增量补拉）
+- `composables/`：函数式 ViewModel；`useAsync(loader)` 是所有请求的基础原语（`{data, loading, error, run}`）；`useBoardChannel` 是唯一模块级单例 + 引用计数，`useBoardRefresh(events, cb)` 300ms 防抖重拉是列表页实时刷新标准模式
+- `models/index.ts`：与后端 JSON 契约一一对应的纯类型层
+- `domain/`：无 Vue 依赖的纯函数（状态机、消息合并、录取预览）
+- `presenters/`：状态 → 中文标签 + Badge variant 的展示映射
 
-- 后端测试：`internal/state/mem_store_test.go`、`internal/state/manage_test.go`、`internal/handler/handler_test.go`（含登录/权限矩阵/WS 端到端），均用内存 SQLite `:memory:`。根 README 里的 `tests/concurrency/` 套件与 `cmd/wssmoke` **只有文档、尚未实现** —— 相关命令会失败。验证请从 `apps/server/` 运行 `go test -race ./...`。
+## 关键目录
 
-## 前端约定
+| 路径 | 用途 |
+|---|---|
+| `apps/server/cmd/server/main.go` | 唯一入口：连接、迁移、装配、路由 |
+| `apps/server/internal/handler/` | `http.go`（全部 REST 路由与 `stateErr` 错误映射）、`ws.go`（WS 泵与命令分发）、`hub.go`、`envelope.go` |
+| `apps/server/internal/state/` | `store.go`（StateStore 接口 + `Error{Code,Msg}` + 哨兵错误）、`mem_store.go`（全部实现）、`event.go` |
+| `apps/server/internal/{auth,rbac,broadcast,seed}/` | JWT/中间件、权限缓存、事件扇出、启动种子（幂等 reconcile） |
+| `apps/web/src/api/`、`composables/`、`models/`、`domain/`、`presenters/` | 见上 |
+| `apps/web/src/views/` | 页面（组装层：只做筛选/展示派生 + 组合下方共享组件与 composable） |
+| `apps/web/src/components/ui/` | shadcn-vue 组件，`index.ts` + cva 变体约定 |
+| `apps/web/src/components/app/` | 自研业务外壳：`PageShell`、`EmptyState`、`SearchInput`、`ConfirmDialog`、`MessageTranscript`（通用）+ `MasterDetailSplit`、`RosterList`、`RosterPager`、`CandidateDetailHeader`（名册↔详情布局）、`DataTableSection`、`FormDialog`、`RefreshButton`、`ListSkeleton`、`ErrorAlert`（列表/表单/状态骨架） |
 
-- 无 Pinia/全局 store。MVVM 通过组合式函数（`src/composables/useXxx`，状态在调用方作用域内自管理，`onScopeDispose` 清理）+ 纯函数 `src/domain/` + `src/api/` 服务层实现。视图只绑定 VM；`src/models/` 与后端 JSON 契约一一对应。唯一例外：`useBoardChannel`（看板 WS 通道）为模块级单例 + 引用计数；列表页实时刷新统一走 `useBoardRefresh(events, cb)`（事件 → 防抖 300ms 重拉），房间内数据由 `useRoomChat` 的房间通道负责（重连自动补拉增量）。
-- **视觉 token 一律符合全局设计**：颜色/圆角/边框/阴影只能取自 `src/assets/index.css`（`:root`/`.dark` CSS 变量）与 `tailwind.config.cjs`（`theme.extend` 的语义色映射、radius 档位）的语义 token（如 `bg-muted`、`text-muted-foreground`、`bg-border`、`bg-accent`），禁止硬编码 hex/rgb/hsl 或任意值色。新增/扩展组件须沿用 `components/ui/<name>/index.ts` + cva 变体约定（参考 button/badge/icon-badge），并在既有变体基础上扩展；状态只通过带文字标签的 Badge 传达，不依赖颜色单通道。
-- **无 caption 小字**：禁止在标题/栏目标题之下附加小字号说明文字（页头 description、卡片副标题、对话框说明、空态 hint、表单说明行等）。出现 caption 即意味着标题不够明确——要么删掉冗余说明，要么把标题改写得足够准确、自明。数据内容（如个人简介）与功能元信息（字段标签、时间戳、空态主文案、`-`/`无` 占位）不受此限。
+## 开发命令
+
+```bash
+pnpm dev              # 仅 web（vite，端口 3000）
+pnpm dev:server       # Go 服务（:8080）
+pnpm build            # web 构建（vue-tsc -b && vite build）
+pnpm typecheck        # web 类型检查（vue-tsc -b --noEmit，走 project references）
+pnpm test             # typecheck + go test ./...
+pnpm test:server      # go test ./...（不带 -race）
+just test-server      # go test -race ./...
+just db               # docker compose up -d（或 podman compose up -d）
+```
+
+- Go 命令**必须从 `apps/server/` 运行**，且设置 `GOCACHE="$PWD/.gopath/gocache"`（构建缓存进仓库内，已 gitignore）。推荐 `go test -race ./...`。
+- Postgres：`docker-compose.yml`（postgres:16-alpine，库 `interview`，postgres/postgres，:5432）。Schema 由 Gorm AutoMigrate 在启动时创建——**没有迁移工具**。
+- 服务端环境变量：`DATABASE_DSN`、`ADDR`（默认 `:8080`）、`JWT_SECRET`（缺省 dev 值）、`ADMIN_INIT_PASSWORD`（默认 `admin`）。无开放注册。
+
+## 代码约定与常见模式
+
+- **后端**
+  - 所有写操作走 `MemStateStore`：`s.mu` 临界区内「先落库成功，后 emit 事件」，持久化失败绝不广播。
+  - 错误：领域层返回 `&state.Error{Code, Msg}`（机器码如 `not_leftover_phase`/`budget_exceeded`）或哨兵错误；handler 用 `stateErr()` 统一映射 HTTP 状态码。
+  - 状态变更必须经 `guardTransition` / `validStatus` 校验；房间是独立物理记录，绑定的唯一权威在 `rooms.candidate_id`，候选人 `room_id` 是只读投影；候选人完成即自动清房；消息按候选人归属、删除候选人级联删消息。
+- **前端**
+  - 列表页模式：多个独立 `useAsync` 资源 + `useBoardRefresh([...事件], reloadAll)` + `RefreshButton`；筛选态同步 URL query、选中条目同步路径参数（`router.replace`，均可深链）。
+  - **URL 一律 RESTful**：集合用复数名词 + 条目 `/:id`（页面 `/candidates`、`/candidates/:candidateId`、`/rooms`、`/rooms/:roomId`、`/leftover`、`/leftover/candidates/:candidateId`；接口 `/api/candidates`、`/api/rooms/:id/candidate`），路径段 kebab-case，**禁止动词路径**（如 login/checkin/resolve/pull 这类动词改为资源：`POST /api/sessions`、`PUT /api/candidates/:id/check-in`、`POST /api/leftover/results`）；集合项用 POST/GET/DELETE，单例子资源用 PUT，部分更新用 PATCH（`PATCH /api/system/status`）。旧页面路径保留重定向，接口不留别名。
+  - **先复用后新写**：「左名册 + 右详情」用 `MasterDetailSplit` + `RosterList` + `RosterPager`（选中/键盘/深链状态在 `useRosterSelection`）；管理列表用 `DataTableSection`（骨架→空态→表格）；增改表单用 `FormDialog`；二次确认用 `useConfirmAction` + `ConfirmDialog`；加载/错误/刷新用 `ListSkeleton` / `ErrorAlert` / `RefreshButton`；异常提示用 `lib/toast.ts` 的 `toastError`。视图层只保留筛选与展示派生。
+  - **单文件行数**：视图/组件/组合式函数尽量 ≤ 400 行；超标即按上述原语拆分，避免超长文件难以维护。
+  - WS 消息经 `domain/` 纯函数不可变更新（如 `mergeMessages` 按 id 去重升序）。
+  - **视觉 token**：颜色/圆角/边框/阴影只能取自 `src/assets/index.css`（`:root`/`.dark` 语义变量）与 `tailwind.config.cjs` 语义映射（如 `bg-muted`、`text-muted-foreground`），**禁止硬编码 hex/rgb/hsl**。新组件沿用 `components/ui/<name>/index.ts` + cva 变体；状态只通过带文字标签的 Badge 传达，不依赖颜色单通道。
+  - **无 caption 小字**：禁止在标题下附加小字号说明文字（页头 description、表单说明行、空态 hint 等）——要么删掉冗余说明，要么改写标题。数据内容（如个人简介）与功能元信息（字段标签、时间戳、`-` 占位）不受限。
+  - 导航/操作提示用 `vue-sonner` toast；确认类操作用 `components/app/ConfirmDialog.vue`。
+
+## 重要文件
+
+- `apps/server/cmd/server/main.go` —— 装配入口（改模型后核对 AutoMigrate 列表）
+- `apps/server/internal/state/store.go` —— StateStore 接口 = 权威层契约（新增能力先改这里）
+- `apps/server/internal/state/mem_store.go` —— 全部业务实现（~1400 行）
+- `apps/server/internal/handler/http.go` —— 路由 + 权限中间件 + `stateErr` 映射
+- `apps/web/src/api/http.ts` —— axios 封装与全部 REST Service 对象
+- `apps/web/src/models/index.ts` —— 前后端契约类型（改后端 JSON 必同步）
+- `apps/web/vite.config.ts` —— dev 端口 **3000**；`/api` 与 `/ws` 代理到 `:8080`
+- `README.md` —— 架构、数据模型、WS 协议、API 端点清单（中文，最完整）
+
+## 运行时与工具链
+
+- Node 侧一律 **pnpm**（`packageManager: pnpm@11.7.0`）；Go 1.26.5。
+- 依赖注入是手工构造（`main.go` 一条链），无框架。
+- UI 组件经 shadcn-vue 约定（`components.json`，style default，lucide 图标）；本仓库 `reka-ui` + cva + tailwind-merge。
+- `tests/concurrency/` 与 `cmd/wssmoke` **只有文档、没有实现**——相关命令会失败，勿引用。
+
+## 测试与 QA
+
+- 仅 Go 侧有测试，全部用内存 SQLite `:memory:`（每测试独立建库 + AutoMigrate）：
+  - `internal/state/mem_store_test.go`（状态机/捡漏/阶段同步）、`manage_test.go`（管理操作 + 并发拉取仅一成功）
+  - `internal/handler/handler_test.go`（最重的集成层：seed+rbac+auth+broadcast+service 全栈进 gin.TestMode，REST 走 httptest，WS 走 gorilla 客户端）
+  - `internal/seed/seed_test.go`、`internal/broadcast/manager_test.go`
+- 前端**没有测试框架**，`pnpm test:web` 只是 `vue-tsc -b --noEmit`——回归保障主要在 Go 测试 + 手动浏览器验证。
+- 验证标准：`cd apps/server && go test -race ./...` 全绿；UI 改动需启动实际服务（Postgres + :8080 + :3000）在浏览器确认。
