@@ -490,14 +490,14 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
               <span class="flex items-center justify-between gap-2">
                 <span class="min-w-0 truncate text-sm font-medium">{{ c.name }}</span>
                 <span class="flex shrink-0 items-center gap-1">
-                  <Badge :variant="STATUS_PRESENTATION[c.status].badge">
-                    {{ STATUS_PRESENTATION[c.status].label }}
-                  </Badge>
                   <Badge
                     v-if="showAdmissionControls && admissionByCandidate.get(c.id)"
                     :variant="ADMISSION_PRESENTATION[admissionByCandidate.get(c.id)!].badge"
                   >
                     本部门{{ ADMISSION_PRESENTATION[admissionByCandidate.get(c.id)!].label }}
+                  </Badge>
+                  <Badge :variant="STATUS_PRESENTATION[c.status].badge">
+                    {{ STATUS_PRESENTATION[c.status].label }}
                   </Badge>
                 </span>
               </span>
