@@ -59,6 +59,8 @@ interview_ng/
 - **消息/日志**：全部落库且**按候选人归属**（候选人换房历史随人走）；候选人删除级联删消息；面试官删除后其消息保留（sender 置空）。
 - **房间**：独立于候选人的物理会议室记录（`candidate_id` 可空，可先建房后绑人、重置解绑后房保留）；**无房间状态机**，房间状态 = 候选人状态的查询投影；仅空房可删；不归档。
 - **分配**：候选人被房间内面试官**拉取**（`PUT /api/rooms/:id/candidate`），取代"页面推分配"；并发拉取由状态机原子拒绝。
+- **数据导入**：设置页 `/settings/imports`（需 `candidates.manage`）三步导入候选人——① 选 `.xlsx`（单工作表，≤2000 行 / ≤5MB）② 每行成为 JSON 对象（首行表头为 key、值做类型推断、全空行跳过）并用 JMESPath 逐字段映射（中文列名须写成 `"列名"`，界面提供可复制列名清单）③ 确认提交；**解析与映射全在浏览器**（服务端零依赖、无 multipart），提交只发映射后的行，由 `POST /api/candidates/imports` 单事务全或无落库。学号取单元格**原始值**（格式化文本可能带千分位，会破坏纯数字校验）。
+- **学号（身份键）**：`student_no` 必填、纯数字（1–64 位，全角数字按半角归一化、首尾空白去除）、唯一（DB 唯一索引兜底），前导零有意义（`00123` ≠ `123`）；新增/编辑/导入三条写入路径同一套校验，单条编辑允许改学号（撞号 → 409「学号已存在」，改号不影响运行态：房间绑定/消息/录取决定/出价均随候选人 id 保留）。**该列为 NOT NULL，故旧库必须重置**（AutoMigrate 无法给已有数据的表加 NOT NULL 列）。
 - **候选人与状态机**：五档状态 `NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED` 为唯一权威；管理端支持"重置到任意档"（向后自动解绑房间、向前须已有房间）。
 - **完成后自动清房**：候选人完成（无论房间内推进到 `COMPLETED`，还是管理端重置到 `COMPLETED`）自动清空房间绑定（`rooms.candidate_id` 置空，绑定唯一权威在房间侧），房间转空闲、成员留守，可立即拉取下一位候选人；消息仍**按候选人归档保留**，新候选人会话从零开始。
 - **鉴权**：登录 + JWT（7 天，`ver` 吊销计数）；RBAC 角色↔权限（9 枚权限目录），权限判断走内存缓存即时生效；`users.manage` 下可管理用户与角色。
@@ -89,7 +91,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 | `roles` | id, name(唯一), description | 角色（权限组，RBAC） |
 | `role_permissions` | role_id, permission（联合唯一） | 角色↔权限关联 |
 | `user_roles` | user_id, role_id（联合唯一） | 用户↔角色 M2M |
-| `candidates` | id, name, profile, status | 候选人（非登录用户）；当前房间归属为查询投影（`rooms.candidate_id` 主导，`room_id` 不落库） |
+| `candidates` | id, **student_no(唯一, NOT NULL)**, name, profile, status | 候选人（非登录用户）；**学号 = 身份键**（纯数字、唯一、前导零有意义），当前房间归属为查询投影（`rooms.candidate_id` 主导，`room_id` 不落库） |
 | `rooms` | id, candidate_id(可空) | 房间 = 独立物理会议室记录，`candidate_id` 可空；无状态机、无主持人，"状态"= 候选人状态的查询投影 |
 | `room_members` | room_id, user_id（`idx_room_user` 唯一） | 房间成员，一次一活跃房间 |
 | `messages` | id, candidate_id, sender_id(可空), content | 群聊记录（长存），**按候选人归属**，`id` 即候选人维度续传游标 |
@@ -174,13 +176,14 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 - `GET  /api/me`（当前用户 + 角色 + 权限并集）
 - `PUT  /api/me/password` `{old_password, new_password}`（自助改密）
 - `GET  /api/candidates?status=&q=&limit=&offset=`
-- `POST /api/candidates` `{name, profile?}`
+- `POST /api/candidates` `{student_no, name, profile?}`（学号必填唯一；重复 → 409）
 - `GET  /api/candidates/:id`
 - `PUT  /api/candidates/:id/check-in`（签到，无请求体）
-- `PUT  /api/candidates/:id` `{name, profile}`（编辑）
+- `PUT  /api/candidates/:id` `{student_no, name, profile}`（编辑，含学号；撞号 → 409）
 - `DELETE /api/candidates/:id`（级联删消息并解绑房间）
 - `PUT  /api/candidates/:id/status` `{status}`（重置到任意档：向后自动解绑、向前须已有房间）
 - `GET  /api/candidates/:id/messages`（候选人历史面试记录归档，完成 / 换房后仍可查）
+- `POST /api/candidates/imports` `{rows:[{student_no, name, profile}]}`（**批量导入**，需 `candidates.manage`）：单事务**全或无**，按学号 upsert（命中即覆盖姓名/简介，值相同也写；批内同学号后者覆盖前者），只写 `student_no/name/profile`，运行态一律不动；成功 `200 {created, updated, rows:[{index, status, candidate_id}]}`，任一行的硬错误 → `400 {error, rows:[{index, error}]}`（整批未落库）。单次上限 2000 行
 - `GET  /api/admissions`、`PUT /api/admissions/:candidateId` `{status}`（录取决定：默认本部门可见，记录需 `admissions.record`）
 - `GET  /api/rooms`、`GET /api/rooms/:id`
 - `POST /api/rooms`（建空房，`rooms.manage`）
@@ -200,6 +203,14 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 
 ---
 
+## 依赖说明
+
+- 前端 `xlsx`（SheetJS，Apache-2.0）取自**官方 CDN tarball**（非 npm registry）：`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`，导入子路径 `xlsx/dist/xlsx.mini.min.js`（mini 构建，仅读 `.xlsx`，体积约为 full 的 1/3）。
+- 前端 `@jmespath-community/jmespath`（MPL-2.0）用于导入页的字段映射表达式求值。
+- 后端**零新增依赖**：导入的行解析、映射与校验都在浏览器完成，服务端只做校验与事务落库。
+
+---
+
 ## 测试
 
 按层级分开目录，**并发/集成测试独立收集**，与源码解耦：
@@ -208,6 +219,8 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 internal/state/mem_store_test.go    # 状态机/生命周期/订阅（源码包旁功能单测）
 internal/state/manage_test.go       # 拉取并发、重置联动、级联删除、删房规则、用户/角色生命周期
 internal/handler/handler_test.go    # 登录/me/401/403/权限矩阵 + WS(auth 消息→sync) 端到端
+internal/state/import_test.go       # 学号校验/唯一冲突/导入 upsert（含批内覆盖、全或无回滚、量级上限）/关键词检索
+internal/handler/import_test.go     # 导入端点端到端（行级报告、整批回滚、403、409）
 tests/
 └── concurrency/                    # 仅文档、尚未实现
 ```

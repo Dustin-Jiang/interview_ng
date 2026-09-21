@@ -23,6 +23,8 @@ cmd/server/main.go（装配：AutoMigrate 12 表 → seed → rbac → auth → 
 - **事件流（出站）**：state 写操作在同一临界区内「先落库成功、后 `s.emit`」→ service 经 `broadcast.Manager.Publish` → handler 注册的 Sink → WS 客户端。事件带全局单调 `Seq`；消息带候选人维度 `msg_id` 作续传游标。事件类型与载荷见 `internal/state/event.go`。
 - **RBAC 旁路**：`internal/auth`（JWT + `RequireAuth`/`RequirePerm` 中间件）读 `internal/rbac/cache.go` 内存缓存（DB 权威 + 内存加速）；改密 bump `token_version` 踢旧 token。
 - **候选人七档状态机**（`internal/model/candidate.go`）：`NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED（面试已结束）→ ADMISSION_PENDING（待录取）→ ADMITTED（已录取）`，`StatusTransitions` 严格转移图 + `guardTransition`。
+- **候选人学号**（`internal/model/candidate.go`）：`student_no` 是**身份键**——必填、纯数字（1–64 位；全角数字折半角、去首尾空白）、唯一（`uniqueIndex` 兜底），前导零有意义（`00123` ≠ `123`，文本列存储）；三条写入路径（`POST /api/candidates`、`PUT /api/candidates/:id`、导入）统一走 `ValidateStudentNo`，撞号 → `ErrStudentNoExists` → **409**。该列为 NOT NULL，**旧库必须重置**（AutoMigrate 无法给已有数据的表加 NOT NULL 列）。
+- **批量导入**（`internal/state/mem_store.go` 的 `ImportCandidates` + `POST /api/candidates/imports`）：浏览器解析 Excel 并映射后提交行数组；服务端**单事务全或无**按学号 upsert（只写 `student_no/name/profile`，运行态不动；批内同学号后者覆盖前者），校验失败一次返回全部行级错误（`*state.ImportError` → `400 {error, rows:[{index,error}]}`）。
 - **系统四阶段**（`internal/model/system_status.go`）：`interview / admission / leftover / settlement`。**进入结算阶段即按出价自动结算全部竞拍**（最高价部门录取、其余出价部门放弃、争议一并仲裁；幂等封盘），并批量同步录取档（唯一 admitted → 已录取，其余 → 待录取）；结算不提供逐个手动入口。
 - **捡漏竞拍**（`internal/model/bid.go`）：预算 `max(500, (预期人数−已录取)×100)`；出价跨部门保密（事件不带金额）；唯一 admitted 才算已结算封盘，多家录取属争议进捡漏仲裁；出价步长 `bid_step`（默认 10）存于系统状态单行。
 
@@ -31,8 +33,9 @@ cmd/server/main.go（装配：AutoMigrate 12 表 → seed → rbac → auth → 
 - `api/`：axios 单例（`/api` baseURL、Bearer 注入、401 统一登出）、各资源 Service 对象（`http.ts`）、WS 客户端 `ws.ts`（首条消息必须 auth，断线 1.5s 重连，重连后增量补拉）
 - `composables/`：函数式 ViewModel；`useAsync(loader)` 是所有请求的基础原语（`{data, loading, error, run}`）；`useBoardChannel` 是唯一模块级单例 + 引用计数，`useBoardRefresh(events, cb)` 300ms 防抖重拉是列表页实时刷新标准模式
 - `models/index.ts`：与后端 JSON 契约一一对应的纯类型层
-- `domain/`：无 Vue 依赖的纯函数（状态机、消息合并、录取预览）
+- `domain/`：无 Vue 依赖的纯函数（状态机、消息合并、录取预览、**学号归一化校验**、**Excel 解析与 JMESPath 映射**）
 - `presenters/`：状态 → 中文标签 + Badge variant 的展示映射
+- **数据导入页**（`/settings/imports`，需 `candidates.manage`）：`xlsx`（官方 CDN tarball，import `xlsx/dist/xlsx.mini.min.js`）与 `@jmespath-community/jmespath` **只在该分区的懒加载 chunk 里引入**；解析、映射、预览全在浏览器完成，服务端零新增依赖、无 multipart。JMESPath 里中文列名必须加引号（`"姓名"`），界面给出可复制的列名清单。
 
 ## 关键目录
 
@@ -45,7 +48,7 @@ cmd/server/main.go（装配：AutoMigrate 12 表 → seed → rbac → auth → 
 | `apps/web/src/api/`、`composables/`、`models/`、`domain/`、`presenters/` | 见上 |
 | `apps/web/src/views/` | 页面（组装层：只做筛选/展示派生 + 组合下方共享组件与 composable） |
 | `apps/web/src/components/ui/` | shadcn-vue 组件，`index.ts` + cva 变体约定 |
-| `apps/web/src/components/app/` | 自研业务外壳：`PageShell`、`EmptyState`、`SearchInput`、`ConfirmDialog`、`MessageTranscript`（通用）+ `MasterDetailSplit`、`RosterList`、`RosterPager`、`CandidateDetailHeader`（名册↔详情布局）、`DataTableSection`、`FormDialog`、`RefreshButton`、`ListSkeleton`、`ErrorAlert`（列表/表单/状态骨架） |
+| `apps/web/src/components/app/` | 自研业务外壳：`PageShell`、`EmptyState`、`SearchInput`、`ConfirmDialog`、`MessageTranscript`（通用）+ `MasterDetailSplit`、`RosterList`、`RosterPager`、`CandidateDetailHeader`（名册↔详情布局）、`DataTableSection`、`FormDialog`、`RefreshButton`、`ListSkeleton`、`ErrorAlert`（列表/表单/状态骨架）、`FileDropInput`、`CandidateFormFields`、`ImportFileStep`/`ImportMappingStep`/`ImportPreviewTable`/`ImportSubmitStep`（数据导入） |
 
 ## 开发命令
 
