@@ -27,16 +27,16 @@ func NewHTTPServer(svc *service.InterviewService, st state.StateStore, am *auth.
 // require 权限中间件简写。
 func (h *HTTPServer) require(perm string) gin.HandlerFunc { return h.auth.RequirePerm(perm) }
 
-// RegisterRoutes 注册 HTTP 路由（/api 组：health/login 公共，其余经鉴权 + 权限矩阵）。
+// RegisterRoutes 注册 HTTP 路由（/api 组：health/sessions 公共，其余经鉴权 + 权限矩阵）。
 func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	g := r.Group("/api")
 	g.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
-	g.POST("/auth/login", h.login)
+	g.POST("/sessions", h.login)
 
 	authed := g.Group("")
 	authed.Use(h.auth.RequireAuth())
 	authed.GET("/me", h.me)
-	authed.POST("/auth/password", h.changePassword)
+	authed.PUT("/me/password", h.changePassword)
 
 	// 候选人（浏览任意登录，操作按权限）
 	authed.GET("/candidates", h.listCandidates)
@@ -44,7 +44,7 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	// 候选人面试记录归档（按候选人维度，完成后仍可查；任意登录用户可读 —— 查看与管理分离）
 	authed.GET("/candidates/:id/messages", h.listCandidateMessages)
 	authed.POST("/candidates", h.require(dsmodel.PermCandidatesCreate), h.createCandidate)
-	authed.POST("/candidates/:id/checkin", h.require(dsmodel.PermCandidatesCheckin), h.checkin)
+	authed.PUT("/candidates/:id/check-in", h.require(dsmodel.PermCandidatesCheckin), h.checkin)
 	authed.PUT("/candidates/:id", h.require(dsmodel.PermCandidatesManage), h.updateCandidate)
 	authed.DELETE("/candidates/:id", h.require(dsmodel.PermCandidatesManage), h.deleteCandidate)
 	authed.PUT("/candidates/:id/status", h.require(dsmodel.PermCandidatesManage), h.resetCandidateStatus)
@@ -56,14 +56,14 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	authed.DELETE("/rooms/:id", h.require(dsmodel.PermRoomsManage), h.deleteRoom)
 	authed.POST("/rooms/:id/members", h.require(dsmodel.PermRoomsManage), h.addRoomMember)
 	authed.DELETE("/rooms/:id/members/:userId", h.require(dsmodel.PermRoomsManage), h.removeRoomMember)
-	authed.POST("/rooms/:id/pull_candidate", h.require(dsmodel.PermCandidatesAssign), h.pullCandidate)
+	authed.PUT("/rooms/:id/candidate", h.require(dsmodel.PermCandidatesAssign), h.pullCandidate)
 
 	// 用户与角色（users.manage）
 	authed.GET("/users", h.require(dsmodel.PermUsersManage), h.listUsers)
 	authed.POST("/users", h.require(dsmodel.PermUsersManage), h.createUser)
 	authed.PUT("/users/:id", h.require(dsmodel.PermUsersManage), h.updateUser)
 	authed.DELETE("/users/:id", h.require(dsmodel.PermUsersManage), h.deleteUser)
-	authed.POST("/users/:id/reset_password", h.require(dsmodel.PermUsersManage), h.resetUserPassword)
+	authed.PUT("/users/:id/password", h.require(dsmodel.PermUsersManage), h.resetUserPassword)
 	authed.GET("/roles", h.require(dsmodel.PermUsersManage), h.listRoles)
 	authed.POST("/roles", h.require(dsmodel.PermUsersManage), h.createRole)
 	authed.PUT("/roles/:id", h.require(dsmodel.PermUsersManage), h.updateRole)
@@ -77,20 +77,19 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 
 	// 系统状态（读取任意登录：录取阶段 UI 需全员可见；切换仅 users.manage）
 	authed.GET("/system/status", h.getSystemStatus)
-	authed.PUT("/system/status", h.require(dsmodel.PermUsersManage), h.setSystemStatus)
-	authed.PUT("/system/bid-step", h.require(dsmodel.PermUsersManage), h.setBidStep)
+	authed.PATCH("/system/status", h.require(dsmodel.PermUsersManage), h.patchSystemStatus)
 
 	// 录取状态（浏览任意登录：默认本部门，跨部门需 browse_all；记录需 admissions.record）
 	authed.GET("/admissions", h.listAdmissions)
-	authed.PUT("/candidates/:id/admission", h.require(dsmodel.PermAdmissionRecord), h.upsertCandidateAdmission)
+	authed.PUT("/admissions/:candidateId", h.require(dsmodel.PermAdmissionRecord), h.upsertCandidateAdmission)
 
 	// 捡漏竞拍（浏览任意登录；出价需 admissions.record 且仅本部门可见；结算需 candidates.manage）
-	authed.GET("/leftover/overview", h.leftoverOverview)
+	authed.GET("/leftover", h.leftoverOverview)
 	authed.GET("/leftover/bids", h.listLeftoverBids)
-	authed.GET("/leftover/final", h.leftoverFinal)
-	authed.PUT("/leftover/bids", h.require(dsmodel.PermAdmissionRecord), h.upsertLeftoverBid)
+	authed.GET("/leftover/projections", h.leftoverFinal)
+	authed.PUT("/leftover/bids/:candidateId", h.require(dsmodel.PermAdmissionRecord), h.upsertLeftoverBid)
 	authed.GET("/leftover/results", h.leftoverResults)
-	authed.POST("/leftover/candidates/:id/resolve", h.require(dsmodel.PermCandidatesManage), h.resolveLeftover)
+	authed.POST("/leftover/results", h.require(dsmodel.PermCandidatesManage), h.resolveLeftover)
 }
 
 //---- 认证 ----
@@ -628,39 +627,35 @@ func (h *HTTPServer) getSystemStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, st)
 }
 
-type updateSystemStatusReq struct {
-	Phase string `json:"phase"`
+type patchSystemStatusReq struct {
+	Phase   *string `json:"phase"`
+	BidStep *int    `json:"bid_step"`
 }
 
-func (h *HTTPServer) setSystemStatus(c *gin.Context) {
-	var req updateSystemStatusReq
+// patchSystemStatus 部分更新系统状态：phase 与/或 bid_step，至少一项（users.manage）。
+func (h *HTTPServer) patchSystemStatus(c *gin.Context) {
+	var req patchSystemStatusReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	if err := h.svc.SetSystemStatus(c.Request.Context(), dsmodel.SystemPhase(req.Phase)); err != nil {
-		status, code := stateErr(err)
-		c.JSON(status, gin.H{"error": code})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-type setBidStepReq struct {
-	Step int `json:"step"`
-}
-
-// setBidStep 设置出价步长（users.manage；≥1）。
-func (h *HTTPServer) setBidStep(c *gin.Context) {
-	var req setBidStepReq
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if req.Phase == nil && req.BidStep == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	if err := h.svc.SetBidStep(c.Request.Context(), req.Step); err != nil {
-		status, code := stateErr(err)
-		c.JSON(status, gin.H{"error": code})
-		return
+	if req.Phase != nil {
+		if err := h.svc.SetSystemStatus(c.Request.Context(), dsmodel.SystemPhase(*req.Phase)); err != nil {
+			status, code := stateErr(err)
+			c.JSON(status, gin.H{"error": code})
+			return
+		}
+	}
+	if req.BidStep != nil {
+		if err := h.svc.SetBidStep(c.Request.Context(), *req.BidStep); err != nil {
+			status, code := stateErr(err)
+			c.JSON(status, gin.H{"error": code})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -703,7 +698,7 @@ type upsertAdmissionReq struct {
 }
 
 func (h *HTTPServer) upsertCandidateAdmission(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, _ := strconv.ParseUint(c.Param("candidateId"), 10, 64)
 	uid := auth.UserID(c)
 	var req upsertAdmissionReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -808,12 +803,12 @@ func (h *HTTPServer) listLeftoverBids(c *gin.Context) {
 }
 
 type upsertLeftoverBidReq struct {
-	CandidateID uint64 `json:"candidate_id"`
-	Amount      int    `json:"amount"`
+	Amount int `json:"amount"`
 }
 
 // upsertLeftoverBid 记录/覆盖本部门对候选人的出价（仅捡漏阶段、受预算约束）。
 func (h *HTTPServer) upsertLeftoverBid(c *gin.Context) {
+	candidateID, _ := strconv.ParseUint(c.Param("candidateId"), 10, 64)
 	var req upsertLeftoverBidReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -828,7 +823,7 @@ func (h *HTTPServer) upsertLeftoverBid(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "当前用户未归属部门，无法出价"})
 		return
 	}
-	if err := h.svc.UpsertLeftoverBid(c.Request.Context(), req.CandidateID, *deptID, req.Amount); err != nil {
+	if err := h.svc.UpsertLeftoverBid(c.Request.Context(), candidateID, *deptID, req.Amount); err != nil {
 		status, msg := stateErr(err)
 		c.JSON(status, gin.H{"error": msg})
 		return
@@ -836,10 +831,18 @@ func (h *HTTPServer) upsertLeftoverBid(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+type resolveLeftoverReq struct {
+	CandidateID uint64 `json:"candidate_id"`
+}
+
 // resolveLeftover 结算候选人：最高出价部门录取（需 candidates.manage）。
 func (h *HTTPServer) resolveLeftover(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	ev, err := h.svc.ResolveLeftoverCandidate(c.Request.Context(), id)
+	var req resolveLeftoverReq
+	if err := c.ShouldBindJSON(&req); err != nil || req.CandidateID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	ev, err := h.svc.ResolveLeftoverCandidate(c.Request.Context(), req.CandidateID)
 	if err != nil {
 		status, msg := stateErr(err)
 		c.JSON(status, gin.H{"error": msg})

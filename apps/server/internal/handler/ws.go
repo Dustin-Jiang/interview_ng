@@ -91,7 +91,7 @@ func NewWSServer(svc *service.InterviewService, b *broadcast.Manager, st state.S
 
 // RegisterRoutes 注册 WS 与相关路由。
 func (w *WSServer) RegisterRoutes(r *gin.Engine) {
-	r.GET("/ws/room/:roomId", w.serveWS)
+	r.GET("/ws/rooms/:roomId", w.serveWS)
 	r.GET("/ws/board", w.serveBoard)
 }
 

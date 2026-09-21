@@ -84,13 +84,13 @@ func TestLoginAndAuthFlow(t *testing.T) {
 	}
 
 	// 错误密码 → 401
-	code, _ := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"wrong"}`, "")
+	code, _ := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"wrong"}`, "")
 	if code != http.StatusUnauthorized {
 		t.Fatalf("bad login: got %d", code)
 	}
 
 	// 正确登录 → 200 + token
-	code, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	code, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	if code != http.StatusOK {
 		t.Fatalf("login: got %d %v", code, out)
 	}
@@ -118,7 +118,7 @@ func TestLoginAndAuthFlow(t *testing.T) {
 func TestPermissionEnforcement(t *testing.T) {
 	r := newTestApp(t)
 
-	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
 	// admin 可访问 /api/users（users.manage）
@@ -135,7 +135,7 @@ func TestPermissionEnforcement(t *testing.T) {
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"reader1","name":"只读","password":"pass","role_ids":[`+strconv.Itoa(int(roleID))+`]}`, token)
 	uid := int(out["id"].(float64))
 
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"reader1","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"reader1","password":"pass"}`, "")
 	rToken := out["token"].(string)
 
 	// 只读用户访问 /api/users → 403
@@ -157,24 +157,24 @@ func TestPermissionEnforcement(t *testing.T) {
 func TestWSMessageAuthAndSync(t *testing.T) {
 	r := newTestApp(t)
 
-	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
 	// 准备：候选人签到 → 建房 → 拉取 → 加入（让房间有候选人与成员）
 	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"张三","profile":"后端"}`, token)
 	candID := int(out["id"].(float64))
-	doJSON(t, r, "POST", "/api/candidates/"+itoa(candID)+"/checkin", "", token)
+	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/check-in", "", token)
 	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
 	roomID := int(out["id"].(float64))
-	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/pull_candidate", `{"candidate_id":`+itoa(candID)+`}`, token)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	doJSON(t, r, "PUT", "/api/rooms/"+itoa(roomID)+"/candidate", `{"candidate_id":`+itoa(candID)+`}`, token)
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	adminID := int(out["user"].(map[string]any)["id"].(float64))
 	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/members", `{"user_id":`+itoa(adminID)+`}`, token)
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/room/" + itoa(roomID)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/rooms/" + itoa(roomID)
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial ws: %v", err)
@@ -233,7 +233,7 @@ func TestWSMessageAuthAndSync(t *testing.T) {
 func TestRoomCompleteClearsCandidateForNext(t *testing.T) {
 	r := newTestApp(t)
 
-	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
 	// 准备：候选人 A/B 签到；建房 → 拉取 A → 加入成员
@@ -241,19 +241,19 @@ func TestRoomCompleteClearsCandidateForNext(t *testing.T) {
 	candA := int(out["id"].(float64))
 	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"乙","profile":"前端"}`, token)
 	candB := int(out["id"].(float64))
-	doJSON(t, r, "POST", "/api/candidates/"+itoa(candA)+"/checkin", "", token)
-	doJSON(t, r, "POST", "/api/candidates/"+itoa(candB)+"/checkin", "", token)
+	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candA)+"/check-in", "", token)
+	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candB)+"/check-in", "", token)
 	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
 	roomID := int(out["id"].(float64))
-	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/pull_candidate", `{"candidate_id":`+itoa(candA)+`}`, token)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	doJSON(t, r, "PUT", "/api/rooms/"+itoa(roomID)+"/candidate", `{"candidate_id":`+itoa(candA)+`}`, token)
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	adminID := int(out["user"].(map[string]any)["id"].(float64))
 	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/members", `{"user_id":`+itoa(adminID)+`}`, token)
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/room/" + itoa(roomID)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/rooms/" + itoa(roomID)
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial ws: %v", err)
@@ -336,7 +336,7 @@ func TestRoomCompleteClearsCandidateForNext(t *testing.T) {
 	}
 
 	// 同一房间拉取下一候选人 B
-	code, pullOut := doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/pull_candidate", `{"candidate_id":`+itoa(candB)+`}`, token)
+	code, pullOut := doJSON(t, r, "PUT", "/api/rooms/"+itoa(roomID)+"/candidate", `{"candidate_id":`+itoa(candB)+`}`, token)
 	if code != http.StatusOK {
 		t.Fatalf("pull B: got %d %v", code, pullOut)
 	}
@@ -354,7 +354,7 @@ func TestRoomCompleteClearsCandidateForNext(t *testing.T) {
 func TestSignedInBroadcastsToAllRooms(t *testing.T) {
 	r := newTestApp(t)
 
-	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
 	// 建两个面试官用户（各持 interviewer 权限，含 rooms.chat），分别进不同房间，
@@ -376,9 +376,9 @@ func TestSignedInBroadcastsToAllRooms(t *testing.T) {
 	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomB)+"/members", `{"user_id":`+itoa(userIDs[1])+`}`, token)
 
 	// 为两用户签发各自 token
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"itvA","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"itvA","password":"pass"}`, "")
 	tokenA := out["token"].(string)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"itvB","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"itvB","password":"pass"}`, "")
 	tokenB := out["token"].(string)
 
 	srv := httptest.NewServer(r)
@@ -386,7 +386,7 @@ func TestSignedInBroadcastsToAllRooms(t *testing.T) {
 
 	dial := func(room int) *websocket.Conn {
 		t.Helper()
-		url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/room/" + itoa(room)
+		url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/rooms/" + itoa(room)
 		conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 		if err != nil {
 			t.Fatalf("dial room %d: %v", room, err)
@@ -428,7 +428,7 @@ func TestSignedInBroadcastsToAllRooms(t *testing.T) {
 	// 建候选人并签到 → 应全局广播到房间 B
 	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"新签","profile":"前端"}`, token)
 	candID := int(out["id"].(float64))
-	if code, _ := doJSON(t, r, "POST", "/api/candidates/"+itoa(candID)+"/checkin", "", token); code != http.StatusOK {
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/check-in", "", token); code != http.StatusOK {
 		t.Fatalf("checkin failed: %d", code)
 	}
 
@@ -452,24 +452,24 @@ func TestSignedInBroadcastsToAllRooms(t *testing.T) {
 func TestCandidateTranscriptArchivedAfterComplete(t *testing.T) {
 	r := newTestApp(t)
 
-	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
 	// 准备：候选人签到 → 建房 → 拉取 → 加入成员
 	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"甲","profile":"后端"}`, token)
 	candID := int(out["id"].(float64))
-	doJSON(t, r, "POST", "/api/candidates/"+itoa(candID)+"/checkin", "", token)
+	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/check-in", "", token)
 	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
 	roomID := int(out["id"].(float64))
-	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/pull_candidate", `{"candidate_id":`+itoa(candID)+`}`, token)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	doJSON(t, r, "PUT", "/api/rooms/"+itoa(roomID)+"/candidate", `{"candidate_id":`+itoa(candID)+`}`, token)
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	adminID := int(out["user"].(map[string]any)["id"].(float64))
 	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/members", `{"user_id":`+itoa(adminID)+`}`, token)
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/room/" + itoa(roomID)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/rooms/" + itoa(roomID)
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial ws: %v", err)
@@ -535,7 +535,7 @@ func TestCandidateTranscriptArchivedAfterComplete(t *testing.T) {
 	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"viewer","description":"","permissions":["rooms.view"]}`, token)
 	viewerRole := int(out["id"].(float64))
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"viewer1","name":"","password":"pass","role_ids":[`+itoa(viewerRole)+`]}`, token)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"viewer1","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"viewer1","password":"pass"}`, "")
 	vToken := out["token"].(string)
 	if code, _ := doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", vToken); code != http.StatusOK {
 		t.Fatalf("viewer transcript: got %d", code)
@@ -543,7 +543,7 @@ func TestCandidateTranscriptArchivedAfterComplete(t *testing.T) {
 
 	// 无任何权限的普通用户也可查看归档（查看与管理分离）
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"nobody","name":"","password":"pass","role_ids":[]}`, token)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"nobody","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"nobody","password":"pass"}`, "")
 	nToken := out["token"].(string)
 	if code, _ := doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", nToken); code != http.StatusOK {
 		t.Fatalf("no-perm transcript: got %d", code)
@@ -559,7 +559,7 @@ func TestCandidateTranscriptArchivedAfterComplete(t *testing.T) {
 func TestDepartmentManageAndPermission(t *testing.T) {
 	r := newTestApp(t)
 
-	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
 	// 管理员为全局系统角色，不隶属任何部门（默认部门已由种子创建，但不归属 admin）
@@ -640,14 +640,14 @@ func TestDepartmentManageAndPermission(t *testing.T) {
 	}
 
 	// 无 users.manage 权限用户（interviewer 角色）访问部门接口 → 403
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	code, itvRole := doJSON(t, r, "POST", "/api/roles", `{"name":"itv2","description":"","permissions":["rooms.view"]}`, token)
 	if code != http.StatusCreated {
 		t.Fatalf("create role: got %d %v", code, itvRole)
 	}
 	roleID := int(itvRole["id"].(float64))
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"itv2u","name":"","password":"pass","role_ids":[`+itoa(roleID)+`]}`, token)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"itv2u","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"itv2u","password":"pass"}`, "")
 	tokenB := out["token"].(string)
 	if code, _ := doJSON(t, r, "GET", "/api/departments", "", tokenB); code != http.StatusForbidden {
 		t.Fatalf("interviewer list departments: got %d", code)
@@ -658,7 +658,7 @@ func TestDepartmentManageAndPermission(t *testing.T) {
 func TestSystemStatusManageAndPermission(t *testing.T) {
 	r := newTestApp(t)
 
-	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
 	// 默认面试阶段
@@ -671,7 +671,7 @@ func TestSystemStatusManageAndPermission(t *testing.T) {
 	}
 
 	// 切换到录取阶段
-	code, out = doJSON(t, r, "PUT", "/api/system/status", `{"phase":"admission"}`, token)
+	code, out = doJSON(t, r, "PATCH", "/api/system/status", `{"phase":"admission"}`, token)
 	if code != http.StatusOK {
 		t.Fatalf("set admission: got %d %v", code, out)
 	}
@@ -681,7 +681,7 @@ func TestSystemStatusManageAndPermission(t *testing.T) {
 	}
 
 	// 切换到捡漏阶段
-	code, out = doJSON(t, r, "PUT", "/api/system/status", `{"phase":"leftover"}`, token)
+	code, out = doJSON(t, r, "PATCH", "/api/system/status", `{"phase":"leftover"}`, token)
 	if code != http.StatusOK {
 		t.Fatalf("set leftover: got %d %v", code, out)
 	}
@@ -691,20 +691,35 @@ func TestSystemStatusManageAndPermission(t *testing.T) {
 	}
 
 	// 非法阶段 → 400
-	if code, _ := doJSON(t, r, "PUT", "/api/system/status", `{"phase":"bogus"}`, token); code != http.StatusBadRequest {
+	if code, _ := doJSON(t, r, "PATCH", "/api/system/status", `{"phase":"bogus"}`, token); code != http.StatusBadRequest {
 		t.Fatalf("invalid phase: got %d", code)
+	}
+
+	// 合并更新：单独改出价步长（资源字段名 bid_step），阶段不受影响
+	code, out = doJSON(t, r, "PATCH", "/api/system/status", `{"bid_step":50}`, token)
+	if code != http.StatusOK {
+		t.Fatalf("set bid step: got %d %v", code, out)
+	}
+	code, out = doJSON(t, r, "GET", "/api/system/status", "", token)
+	if int(out["bid_step"].(float64)) != 50 || out["phase"] != "leftover" {
+		t.Fatalf("status after bid step: %v", out)
+	}
+
+	// 两字段皆缺 → 400
+	if code, _ := doJSON(t, r, "PATCH", "/api/system/status", `{}`, token); code != http.StatusBadRequest {
+		t.Fatalf("empty patch: got %d", code)
 	}
 
 	// 无 users.manage 权限用户：可读状态（UI 全员可见），但不可切换
 	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"itv3","description":"","permissions":["rooms.view"]}`, token)
 	roleID := int(out["id"].(float64))
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"itv3u","name":"","password":"pass","role_ids":[`+itoa(roleID)+`]}`, token)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"itv3u","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"itv3u","password":"pass"}`, "")
 	tokenB := out["token"].(string)
 	if code, _ := doJSON(t, r, "GET", "/api/system/status", "", tokenB); code != http.StatusOK {
 		t.Fatalf("interviewer get status: got %d", code)
 	}
-	if code, _ := doJSON(t, r, "PUT", "/api/system/status", `{"phase":"admission"}`, tokenB); code != http.StatusForbidden {
+	if code, _ := doJSON(t, r, "PATCH", "/api/system/status", `{"phase":"admission"}`, tokenB); code != http.StatusForbidden {
 		t.Fatalf("interviewer set status: got %d", code)
 	}
 }
@@ -714,7 +729,7 @@ func TestSystemStatusManageAndPermission(t *testing.T) {
 func TestCandidateAdmissionByDepartmentAndPermission(t *testing.T) {
 	r := newTestApp(t)
 
-	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
 	// 建两个部门
@@ -738,9 +753,9 @@ func TestCandidateAdmissionByDepartmentAndPermission(t *testing.T) {
 	roleReader := int(out["id"].(float64))
 	doJSON(t, r, "PUT", "/api/users/"+itoa(uidB), `{"username":"feReader","name":"前端只读","role_ids":[`+itoa(roleReader)+`],"department_id":`+itoa(deptB)+`}`, token)
 
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"feAdmin","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"feAdmin","password":"pass"}`, "")
 	tokenA := out["token"].(string)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"feReader","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"feReader","password":"pass"}`, "")
 	tokenB := out["token"].(string)
 
 	// 建候选人
@@ -748,13 +763,13 @@ func TestCandidateAdmissionByDepartmentAndPermission(t *testing.T) {
 	candID := int(out["id"].(float64))
 
 	// feAdmin（admissions.record）记录本部门录取决定 → 200
-	code, out := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/admission", `{"status":"admitted"}`, tokenA)
+	code, out := doJSON(t, r, "PUT", "/api/admissions/"+itoa(candID), `{"status":"admitted"}`, tokenA)
 	if code != http.StatusOK {
 		t.Fatalf("upsert own dept: got %d %v", code, out)
 	}
 
 	// feReader 无 admissions.record → 403
-	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/admission", `{"status":"withdrawn"}`, tokenB); code != http.StatusForbidden {
+	if code, _ := doJSON(t, r, "PUT", "/api/admissions/"+itoa(candID), `{"status":"withdrawn"}`, tokenB); code != http.StatusForbidden {
 		t.Fatalf("reader upsert: got %d", code)
 	}
 
@@ -845,14 +860,14 @@ func readEventsUntil(t *testing.T, conn *websocket.Conn, want ...string) map[str
 func TestBoardChannelAuthAndEvents(t *testing.T) {
 	r := newTestApp(t)
 
-	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
 	// 无 rooms.view 的用户：鉴权应被拒
 	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"noview","description":"无查看","permissions":["candidates.create"]}`, token)
 	roleID := int(out["id"].(float64))
 	doJSON(t, r, "POST", "/api/users", `{"username":"noview1","name":"无权","password":"pass","role_ids":[`+itoa(roleID)+`]}`, token)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"noview1","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"noview1","password":"pass"}`, "")
 	noViewToken, _ := out["token"].(string)
 
 	srv := httptest.NewServer(r)
@@ -890,7 +905,7 @@ func TestBoardChannelAuthAndEvents(t *testing.T) {
 	// 同时开一条房间通道连接：验证全局事件不会因"房间扇出 + 全局扇出"重复投递给看板
 	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
 	warmRoomID := int(out["id"].(float64))
-	roomURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/room/" + itoa(warmRoomID)
+	roomURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/rooms/" + itoa(warmRoomID)
 	roomConn, _, err := websocket.DefaultDialer.Dial(roomURL, nil)
 	if err != nil {
 		t.Fatalf("dial warm room: %v", err)
@@ -905,8 +920,8 @@ func TestBoardChannelAuthAndEvents(t *testing.T) {
 	candID := int(out["id"].(float64))
 	doJSON(t, r, "POST", "/api/rooms", "", token)
 	roomID := int(out["id"].(float64))
-	doJSON(t, r, "POST", "/api/candidates/"+itoa(candID)+"/checkin", "", token)
-	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/pull_candidate", `{"candidate_id":`+itoa(candID)+`}`, token)
+	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/check-in", "", token)
+	doJSON(t, r, "PUT", "/api/rooms/"+itoa(roomID)+"/candidate", `{"candidate_id":`+itoa(candID)+`}`, token)
 
 	counts := readEventsUntil(t, conn,
 		"candidate_created", "room_created", "candidate_signed_in", "candidate_assigned")
@@ -925,7 +940,7 @@ func TestBoardChannelAuthAndEvents(t *testing.T) {
 func TestLeftoverBiddingEndpoints(t *testing.T) {
 	r := newTestApp(t)
 
-	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
 	// 两个部门：A 预期 20 人（预算 2000），B 预期 0（预算下限 500）
@@ -939,23 +954,23 @@ func TestLeftoverBiddingEndpoints(t *testing.T) {
 	roleBid := int(out["id"].(float64))
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"bidA","name":"bidA","password":"pass","role_ids":[`+itoa(roleBid)+`],"department_id":`+itoa(deptA)+`}`, token)
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"bidB","name":"bidB","password":"pass","role_ids":[`+itoa(roleBid)+`],"department_id":`+itoa(deptB)+`}`, token)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"bidA","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"bidA","password":"pass"}`, "")
 	tokenA := out["token"].(string)
-	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"bidB","password":"pass"}`, "")
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"bidB","password":"pass"}`, "")
 	tokenB := out["token"].(string)
 
 	// 候选人 + 切到捡漏阶段
 	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"张三"}`, token)
 	cand := int(out["id"].(float64))
-	if code, _ := doJSON(t, r, "PUT", "/api/system/status", `{"phase":"leftover"}`, token); code != http.StatusOK {
+	if code, _ := doJSON(t, r, "PATCH", "/api/system/status", `{"phase":"leftover"}`, token); code != http.StatusOK {
 		t.Fatalf("set phase failed")
 	}
 
 	// A 出 800 → 200；B 预算 500 出 600 → 400 budget_exceeded
-	if code, out := doJSON(t, r, "PUT", "/api/leftover/bids", `{"candidate_id":`+itoa(cand)+`,"amount":800}`, tokenA); code != http.StatusOK {
+	if code, out := doJSON(t, r, "PUT", "/api/leftover/bids/"+itoa(cand), `{"amount":800}`, tokenA); code != http.StatusOK {
 		t.Fatalf("bidA: got %d %v", code, out)
 	}
-	if code, _ := doJSON(t, r, "PUT", "/api/leftover/bids", `{"candidate_id":`+itoa(cand)+`,"amount":600}`, tokenB); code != http.StatusBadRequest {
+	if code, _ := doJSON(t, r, "PUT", "/api/leftover/bids/"+itoa(cand), `{"amount":600}`, tokenB); code != http.StatusBadRequest {
 		t.Fatalf("bidB over budget: got %d", code)
 	}
 
@@ -969,7 +984,7 @@ func TestLeftoverBiddingEndpoints(t *testing.T) {
 	}
 
 	// 总览：A 的 my 预算 2000/已出 800/剩 1200；B 部门 spent 保密为 null
-	code, out = doJSON(t, r, "GET", "/api/leftover/overview", "", tokenA)
+	code, out = doJSON(t, r, "GET", "/api/leftover", "", tokenA)
 	if code != http.StatusOK {
 		t.Fatalf("overview: got %d", code)
 	}
@@ -996,7 +1011,7 @@ func TestLeftoverBiddingEndpoints(t *testing.T) {
 	if b := all[0].(map[string]any); int(b["department_id"].(float64)) != deptA || b["amount"].(float64) != 800 {
 		t.Fatalf("admin bids[0]=%v", b)
 	}
-	code, out = doJSON(t, r, "GET", "/api/leftover/overview", "", token)
+	code, out = doJSON(t, r, "GET", "/api/leftover", "", token)
 	if code != http.StatusOK {
 		t.Fatalf("admin overview: got %d", code)
 	}
@@ -1014,10 +1029,10 @@ func TestLeftoverBiddingEndpoints(t *testing.T) {
 	}
 
 	// 无 candidates.manage 结算 → 403；admin 结算 → 赢家 A 800
-	if code, _ := doJSON(t, r, "POST", "/api/leftover/candidates/"+itoa(cand)+"/resolve", "", tokenA); code != http.StatusForbidden {
+	if code, _ := doJSON(t, r, "POST", "/api/leftover/results", `{"candidate_id":`+itoa(cand)+`}`, tokenA); code != http.StatusForbidden {
 		t.Fatalf("bidder resolve: got %d", code)
 	}
-	code, out = doJSON(t, r, "POST", "/api/leftover/candidates/"+itoa(cand)+"/resolve", "", token)
+	code, out = doJSON(t, r, "POST", "/api/leftover/results", `{"candidate_id":`+itoa(cand)+`}`, token)
 	if code != http.StatusOK {
 		t.Fatalf("resolve: got %d %v", code, out)
 	}
@@ -1026,7 +1041,7 @@ func TestLeftoverBiddingEndpoints(t *testing.T) {
 	}
 
 	// 结算后封盘；结果公开
-	if code, _ := doJSON(t, r, "PUT", "/api/leftover/bids", `{"candidate_id":`+itoa(cand)+`,"amount":100}`, tokenB); code != http.StatusBadRequest {
+	if code, _ := doJSON(t, r, "PUT", "/api/leftover/bids/"+itoa(cand), `{"amount":100}`, tokenB); code != http.StatusBadRequest {
 		t.Fatalf("bid after resolve: got %d", code)
 	}
 	code, out = doJSON(t, r, "GET", "/api/leftover/results", "", tokenB)

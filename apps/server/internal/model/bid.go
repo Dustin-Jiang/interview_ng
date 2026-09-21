@@ -48,7 +48,7 @@ type MyLeftover struct {
 	Remaining    int    `json:"remaining"`
 }
 
-// LeftoverOverview 捡漏阶段总览（GET /api/leftover/overview）。
+// LeftoverOverview 捡漏阶段总览（GET /api/leftover）。
 type LeftoverOverview struct {
 	Phase       SystemPhase          `json:"phase"`
 	Departments []DepartmentLeftover `json:"departments"`
@@ -63,7 +63,7 @@ type LeftoverResult struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// LeftoverFinalResult 结算阶段最终录取结果（GET /api/leftover/final，只读计算不落库）。
+// LeftoverFinalResult 结算阶段最终录取结果（GET /api/leftover/projections，只读计算不落库）。
 // 赢家 = 最高出价部门，同额取先出价者（bid id 更小）。
 type LeftoverFinalResult struct {
 	CandidateID  uint64 `json:"candidate_id"`

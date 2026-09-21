@@ -58,7 +58,7 @@ interview_ng/
 - **恢复**：消息 `id` 为主续传游标（**按候选人维度**）；事件带 `Seq` 幂等；「先落库成功 → 后广播」。
 - **消息/日志**：全部落库且**按候选人归属**（候选人换房历史随人走）；候选人删除级联删消息；面试官删除后其消息保留（sender 置空）。
 - **房间**：独立于候选人的物理会议室记录（`candidate_id` 可空，可先建房后绑人、重置解绑后房保留）；**无房间状态机**，房间状态 = 候选人状态的查询投影；仅空房可删；不归档。
-- **分配**：候选人被房间内面试官**拉取**（`pull_candidate`），取代"页面推分配"；并发拉取由状态机原子拒绝。
+- **分配**：候选人被房间内面试官**拉取**（`PUT /api/rooms/:id/candidate`），取代"页面推分配"；并发拉取由状态机原子拒绝。
 - **候选人与状态机**：五档状态 `NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED` 为唯一权威；管理端支持"重置到任意档"（向后自动解绑房间、向前须已有房间）。
 - **完成后自动清房**：候选人完成（无论房间内推进到 `COMPLETED`，还是管理端重置到 `COMPLETED`）自动清空房间绑定（`rooms.candidate_id` 置空，绑定唯一权威在房间侧），房间转空闲、成员留守，可立即拉取下一位候选人；消息仍**按候选人归档保留**，新候选人会话从零开始。
 - **鉴权**：登录 + JWT（7 天，`ver` 吊销计数）；RBAC 角色↔权限（9 枚权限目录），权限判断走内存缓存即时生效；`users.manage` 下可管理用户与角色。
@@ -99,11 +99,11 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 权限目录（11 枚）：`users.manage`、`candidates.manage`、`candidates.browse_all`（跨部门浏览录取状态与捡漏出价）、`candidates.create`、`candidates.checkin`、`candidates.assign`、`rooms.view`、`rooms.chat`、`rooms.move_phase`、`rooms.manage`、`admissions.record`（记录本部门录取决定/捡漏出价）。预置角色：`admin`（全部）、`interviewer`（6 枚流程权限，不含录取状态浏览/记录）。
 
-**捡漏阶段**（`phase=leftover`）：各部门按预算竞拍补录候选人。预算 = `max(500, (预期人数 − 已确认录取人数) × 100)`（已结算赢家的出价随录取释放，不重复占用）；出价受剩余预算约束（`PUT /api/leftover/bids`），各部门间出价金额互不可见、持 `candidates.browse_all` 的管理端可见全部门出价与各部门预算占用；管理端 `POST /api/leftover/candidates/:id/resolve` 结算：最高出价部门录取（admitted），其余出价部门 withdrawn，结果经 `GET /api/leftover/results` 公开。
+**捡漏阶段**（`phase=leftover`）：各部门按预算竞拍补录候选人。预算 = `max(500, (预期人数 − 已确认录取人数) × 100)`（已结算赢家的出价随录取释放，不重复占用）；出价受剩余预算约束（`PUT /api/leftover/bids/:candidateId`），各部门间出价金额互不可见、持 `candidates.browse_all` 的管理端可见全部门出价与各部门预算占用；管理端 `POST /api/leftover/results` `{candidate_id}` 结算：最高出价部门录取（admitted），其余出价部门 withdrawn，结果经 `GET /api/leftover/results` 公开。
 
-**结算阶段**（`phase=settlement`）：竞拍数据只读——出价（`PUT /api/leftover/bids`）与逐个结算（`resolve`）均被拒绝（`not_leftover_phase`）；最终录取结果由出价只读计算（`GET /api/leftover/final`）：每个有出价的候选人取赢家 = 最高出价部门、同额取先出价者，`resolved` 标记该结果是否已正式落库（正式结算须回捡漏阶段执行）。
+**结算阶段**（`phase=settlement`）：竞拍数据只读——出价（`PUT /api/leftover/bids/:candidateId`）与逐个结算（`POST /api/leftover/results`）均被拒绝（`not_leftover_phase`）；最终录取结果由出价只读计算（`GET /api/leftover/projections`）：每个有出价的候选人取赢家 = 最高出价部门、同额取先出价者，`resolved` 标记该结果是否已正式落库（正式结算须回捡漏阶段执行）。
 
-**录取争议仲裁**：已结算 = 恰好一家部门 admitted（唯一录取确定，封盘）；0 家未定可竞拍；≥2 家同时录取属争议——该候选人不算已结算、自动进入捡漏竞拍，`POST /api/leftover/candidates/:id/resolve` 结算时最高出价部门录取，其余部门（含未出价的手动录取记录）一律改 withdrawn。
+**录取争议仲裁**：已结算 = 恰好一家部门 admitted（唯一录取确定，封盘）；0 家未定可竞拍；≥2 家同时录取属争议——该候选人不算已结算、自动进入捡漏竞拍，`POST /api/leftover/results` 结算时最高出价部门录取，其余部门（含未出价的手动录取记录）一律改 withdrawn。
 
 **阶段切换同步**：切换到 捡漏/结算 阶段时批量同步录取档状态——恰好一家 admitted（唯一录取确定）→ `ADMITTED`（已录取）；其余（未定/争议/无决定）→ `ADMISSION_PENDING`（待录取）；未完成候选人不动。捡漏逐个结算成交后，该候选人也推进到 `ADMITTED`。
 
@@ -113,7 +113,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 两条 WS 通道，连接建立后首条消息必须为 `auth`（携带 JWT），鉴权成功后才可收发；10 秒内未鉴权将断开。
 
-**房间通道** `GET /ws/room/:roomId`（RESTful 路径，**不带任何 query 参数**）：要求 `rooms.chat` 权限，成功后自动 JoinRoom（一用户至多一活跃房间），收发房间业务命令。
+**房间通道** `GET /ws/rooms/:roomId`（RESTful 路径，**不带任何 query 参数**）：要求 `rooms.chat` 权限，成功后自动 JoinRoom（一用户至多一活跃房间），收发房间业务命令。
 
 **看板通道** `GET /ws/board`：要求 `rooms.view` 权限，不 JoinRoom、无成员语义、仅接受 `auth` 一条命令。扇出所有业务事件（房间级 + 全局级，各一份不重复），供候场大屏 / 房间列表 / 候选人记录等列表页感知变化后防抖重拉。
 
@@ -141,7 +141,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 ## 认证与鉴权
 
-- 登录：`POST /api/auth/login`（JWT，7 天有效，`JWT_SECRET` 环境变量配置）；无登录接口的旧版已移除。
+- 登录：`POST /api/sessions`（JWT，7 天有效，`JWT_SECRET` 环境变量配置）；无登录接口的旧版已移除。
 - RBAC：角色↔权限存库，权限判断走**内存 RBAC 缓存**，角色/权限/改密变更即时生效（改密 bump `token_version`，旧 token 立即失效）。
 - 错误语义：未登录/无效 token → **401**；有身份但缺权限 → **403**。
 - 种子：启动时若无用户则创建 `admin`（全权限）+ `interviewer` 角色与默认账号 `admin/admin`（可用 `ADMIN_INIT_PASSWORD` 覆盖）。
@@ -165,33 +165,37 @@ go run ./cmd/server           # 或从仓库根 pnpm run dev:server
 
 ```bash
 pnpm install                  # 首次，在仓库根安装所有 workspace 依赖
-pnpm dev                      # http://localhost:8000 （vite 已把 /api 与 /ws 代理到 :8080）
+pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /ws 代理到 :8080）
 ```
 
 接口：
 - `GET  /api/health`
-- `POST /api/auth/login` `{username, password}`
+- `POST /api/sessions` `{username, password}`（登录，签发 JWT）
 - `GET  /api/me`（当前用户 + 角色 + 权限并集）
-- `POST /api/auth/password` `{old_password, new_password}`（自助改密）
+- `PUT  /api/me/password` `{old_password, new_password}`（自助改密）
 - `GET  /api/candidates?status=&q=&limit=&offset=`
 - `POST /api/candidates` `{name, profile?}`
 - `GET  /api/candidates/:id`
-- `POST /api/candidates/:id/checkin`
+- `PUT  /api/candidates/:id/check-in`（签到，无请求体）
 - `PUT  /api/candidates/:id` `{name, profile}`（编辑）
 - `DELETE /api/candidates/:id`（级联删消息并解绑房间）
 - `PUT  /api/candidates/:id/status` `{status}`（重置到任意档：向后自动解绑、向前须已有房间）
+- `GET  /api/candidates/:id/messages`（候选人历史面试记录归档，完成 / 换房后仍可查）
+- `GET  /api/admissions`、`PUT /api/admissions/:candidateId` `{status}`（录取决定：默认本部门可见，记录需 `admissions.record`）
 - `GET  /api/rooms`、`GET /api/rooms/:id`
 - `POST /api/rooms`（建空房，`rooms.manage`）
 - `DELETE /api/rooms/:id`（仅空房可删）
 - `POST /api/rooms/:id/members` `{user_id}`、`DELETE /api/rooms/:id/members/:userId`
-- `POST /api/rooms/:id/pull_candidate` `{candidate_id}`（**拉取式分配**：候选人从待分配池被拉入房间，取代旧的 `POST /api/candidates/:id/assign`）
-- `GET/POST /api/users`、`PUT/DELETE /api/users/:id`、`POST /api/users/:id/reset_password`（`users.manage`）
+- `PUT  /api/rooms/:id/candidate` `{candidate_id}`（**拉取式分配**：候选人从待分配池被拉入房间）
+- `GET/POST /api/users`、`PUT/DELETE /api/users/:id`、`PUT /api/users/:id/password` `{new_password}`（`users.manage`；后者为管理员重置他人密码）
 - `GET/POST /api/roles`、`PUT/DELETE /api/roles/:id`（`users.manage`，角色管理）
-- `GET /api/leftover/overview`（捡漏总览：各部门预算，spent/remaining 默认仅本部门可见、`browse_all` 全可见）、`GET /api/leftover/bids`（默认本部门出价，`browse_all` 返回全部门）
-- `PUT /api/leftover/bids` `{candidate_id, amount}`（出价/改价，`admissions.record`，仅捡漏阶段、受剩余预算约束）
-- `GET /api/leftover/results`（已结算赢家与成交金额，全员可见）、`POST /api/leftover/candidates/:id/resolve`（结算，`candidates.manage`）
-- `GET /api/leftover/final`（由出价只读计算的最终录取结果；保密语义与出价一致——默认仅已成交或本部门的进行中出价可见，`candidates.browse_all` 全量）
-- `GET  /ws/room/:roomId`（房间通道，连接后首条 `auth` 消息）
+- `GET/POST /api/departments`、`PUT/DELETE /api/departments/:id`（`users.manage`，部门管理）
+- `GET /api/system/status`（读取当前阶段，任意登录）、`PATCH /api/system/status` `{phase?, bid_step?}`（切换阶段 / 出价步长，`users.manage`，两项至少给一项）
+- `GET /api/leftover`（捡漏总览：各部门预算，spent/remaining 默认仅本部门可见、`browse_all` 全可见）、`GET /api/leftover/bids`（默认本部门出价，`browse_all` 返回全部门）
+- `PUT /api/leftover/bids/:candidateId` `{amount}`（出价/改价，`admissions.record`，仅捡漏阶段、受剩余预算约束）
+- `GET /api/leftover/results`（已结算赢家与成交金额，全员可见）、`POST /api/leftover/results` `{candidate_id}`（结算，`candidates.manage`）
+- `GET /api/leftover/projections`（由出价只读计算的最终录取结果；保密语义与出价一致——默认仅已成交或本部门的进行中出价可见，`candidates.browse_all` 全量）
+- `GET  /ws/rooms/:roomId`（房间通道，连接后首条 `auth` 消息）
 - `GET  /ws/board`（看板通道，扇出全部业务事件供列表页实时刷新）
 
 ---
