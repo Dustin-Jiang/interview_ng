@@ -2,6 +2,8 @@ package state_test
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -32,13 +34,18 @@ func newTestStore(t *testing.T) state.StateStore {
 }
 
 // mustCreateCandidate 创建候选人并返回其 id（从创建事件载荷提取，测试辅助）。
+// 学号自动生成（保证唯一且为纯数字）；学号自身的校验规则由专门用例覆盖。
 func mustCreateCandidate(ctx context.Context, st state.StateStore, name, profile string) uint64 {
-	ev, err := st.CreateCandidate(ctx, name, profile)
+	seq := testStudentNo.Add(1)
+	ev, err := st.CreateCandidate(ctx, fmt.Sprintf("%08d", seq), name, profile)
 	if err != nil {
 		panic(err)
 	}
 	return state.CandidateIDOf(ev)
 }
+
+// testStudentNo 测试用学号自增序号（跨用例唯一，避免唯一索引冲突）。
+var testStudentNo atomic.Uint64
 
 // mustCreateRoom 创建空房并返回其 id（测试辅助）。
 func mustCreateRoom(ctx context.Context, st state.StateStore) uint64 {

@@ -161,7 +161,7 @@ func TestWSMessageAuthAndSync(t *testing.T) {
 	token := out["token"].(string)
 
 	// 准备：候选人签到 → 建房 → 拉取 → 加入（让房间有候选人与成员）
-	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"张三","profile":"后端"}`, token)
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024001","name":"张三","profile":"后端"}`, token)
 	candID := int(out["id"].(float64))
 	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/check-in", "", token)
 	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
@@ -237,9 +237,9 @@ func TestRoomCompleteClearsCandidateForNext(t *testing.T) {
 	token := out["token"].(string)
 
 	// 准备：候选人 A/B 签到；建房 → 拉取 A → 加入成员
-	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"甲","profile":"后端"}`, token)
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024002","name":"甲","profile":"后端"}`, token)
 	candA := int(out["id"].(float64))
-	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"乙","profile":"前端"}`, token)
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024003","name":"乙","profile":"前端"}`, token)
 	candB := int(out["id"].(float64))
 	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candA)+"/check-in", "", token)
 	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candB)+"/check-in", "", token)
@@ -426,7 +426,7 @@ func TestSignedInBroadcastsToAllRooms(t *testing.T) {
 	}
 
 	// 建候选人并签到 → 应全局广播到房间 B
-	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"新签","profile":"前端"}`, token)
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024004","name":"新签","profile":"前端"}`, token)
 	candID := int(out["id"].(float64))
 	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/check-in", "", token); code != http.StatusOK {
 		t.Fatalf("checkin failed: %d", code)
@@ -456,7 +456,7 @@ func TestCandidateTranscriptArchivedAfterComplete(t *testing.T) {
 	token := out["token"].(string)
 
 	// 准备：候选人签到 → 建房 → 拉取 → 加入成员
-	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"甲","profile":"后端"}`, token)
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024002","name":"甲","profile":"后端"}`, token)
 	candID := int(out["id"].(float64))
 	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/check-in", "", token)
 	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
@@ -759,7 +759,7 @@ func TestCandidateAdmissionByDepartmentAndPermission(t *testing.T) {
 	tokenB := out["token"].(string)
 
 	// 建候选人
-	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"张三","profile":"后端"}`, token)
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024001","name":"张三","profile":"后端"}`, token)
 	candID := int(out["id"].(float64))
 
 	// feAdmin（admissions.record）记录本部门录取决定 → 200
@@ -916,7 +916,7 @@ func TestBoardChannelAuthAndEvents(t *testing.T) {
 	}
 
 	// 触发：建候选人 → 建房 → 签到 → 拉取（房间级事件也应扇出）
-	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"张三","profile":"后端"}`, token)
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024001","name":"张三","profile":"后端"}`, token)
 	candID := int(out["id"].(float64))
 	doJSON(t, r, "POST", "/api/rooms", "", token)
 	roomID := int(out["id"].(float64))
@@ -930,7 +930,7 @@ func TestBoardChannelAuthAndEvents(t *testing.T) {
 	}
 
 	// 删除空房 → room_deleted；编辑/删除候选人 → candidate_updated / candidate_deleted
-	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID), `{"name":"张三丰","profile":""}`, token)
+	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID), `{"student_no":"2024001","name":"张三丰","profile":""}`, token)
 	doJSON(t, r, "DELETE", "/api/candidates/"+itoa(candID), "", token)
 	readEventsUntil(t, conn, "candidate_updated", "candidate_deleted")
 }
@@ -961,7 +961,7 @@ func TestLeftoverBiddingEndpoints(t *testing.T) {
 	tokenB := out["token"].(string)
 
 	// 候选人 + 切到捡漏阶段
-	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"张三"}`, token)
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024005","name":"张三"}`, token)
 	cand := int(out["id"].(float64))
 	if code, _ := doJSON(t, r, "PATCH", "/api/system/status", `{"phase":"leftover"}`, token); code != http.StatusOK {
 		t.Fatalf("set phase failed")

@@ -44,6 +44,8 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	// 候选人面试记录归档（按候选人维度，完成后仍可查；任意登录用户可读 —— 查看与管理分离）
 	authed.GET("/candidates/:id/messages", h.listCandidateMessages)
 	authed.POST("/candidates", h.require(dsmodel.PermCandidatesCreate), h.createCandidate)
+	// 批量导入（管理员数据导入）：请求体为浏览器侧解析+映射后的行数组，服务端单事务全或无落库。
+	authed.POST("/candidates/imports", h.require(dsmodel.PermCandidatesManage), h.importCandidates)
 	authed.PUT("/candidates/:id/check-in", h.require(dsmodel.PermCandidatesCheckin), h.checkin)
 	authed.PUT("/candidates/:id", h.require(dsmodel.PermCandidatesManage), h.updateCandidate)
 	authed.DELETE("/candidates/:id", h.require(dsmodel.PermCandidatesManage), h.deleteCandidate)
@@ -188,8 +190,9 @@ func (h *HTTPServer) listCandidateMessages(c *gin.Context) {
 }
 
 type createCandidateReq struct {
-	Name    string `json:"name"`
-	Profile string `json:"profile"`
+	StudentNo string `json:"student_no"`
+	Name      string `json:"name"`
+	Profile   string `json:"profile"`
 }
 
 func (h *HTTPServer) createCandidate(c *gin.Context) {
@@ -198,12 +201,39 @@ func (h *HTTPServer) createCandidate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
 	}
-	ev, err := h.svc.CreateCandidate(c.Request.Context(), req.Name, req.Profile)
+	ev, err := h.svc.CreateCandidate(c.Request.Context(), req.StudentNo, req.Name, req.Profile)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"id": state.CandidateIDOf(ev)})
+}
+
+type importCandidatesReq struct {
+	Rows []state.CandidateImportRow `json:"rows"`
+}
+
+// importCandidates 批量导入候选人：请求体只承载"已解析并映射好"的行，
+// 服务端负责校验、单事务全或无落库与行级报告（解析在浏览器内完成）。
+func (h *HTTPServer) importCandidates(c *gin.Context) {
+	var req importCandidatesReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	report, err := h.svc.ImportCandidates(c.Request.Context(), req.Rows)
+	if err != nil {
+		// 校验失败的整批拒绝：一次返回全部问题行（行号 + 原因），便于改完重传。
+		if ie, ok := err.(*state.ImportError); ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": ie.Error(), "rows": ie.Rows})
+			return
+		}
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
+		return
+	}
+	c.JSON(http.StatusOK, report)
 }
 
 func (h *HTTPServer) checkin(c *gin.Context) {
@@ -216,8 +246,9 @@ func (h *HTTPServer) checkin(c *gin.Context) {
 }
 
 type updateCandidateReq struct {
-	Name    string `json:"name"`
-	Profile string `json:"profile"`
+	StudentNo string `json:"student_no"`
+	Name      string `json:"name"`
+	Profile   string `json:"profile"`
 }
 
 func (h *HTTPServer) updateCandidate(c *gin.Context) {
@@ -227,8 +258,9 @@ func (h *HTTPServer) updateCandidate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
 	}
-	if err := h.svc.UpdateCandidate(c.Request.Context(), id, req.Name, req.Profile); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	if err := h.svc.UpdateCandidate(c.Request.Context(), id, req.StudentNo, req.Name, req.Profile); err != nil {
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -733,11 +765,15 @@ func statusLiteral(s string) dsmodel.CandidateStatus {
 }
 
 // stateErr 把 state 层错误映射为 HTTP 状态码与错误信息。
-// 除 not_found（资源不存在 → 404）外，所有 *state.Error 业务码统一 400，其余落 500。
+// not_found → 404（资源不存在）；student_no_exists → 409（唯一性冲突）；
+// 其余 *state.Error 业务码统一 400，非业务错误落 500。
 func stateErr(err error) (int, string) {
 	if se, ok := err.(*state.Error); ok {
-		if se.Code == "not_found" {
+		switch se.Code {
+		case "not_found":
 			return http.StatusNotFound, se.Msg
+		case "student_no_exists":
+			return http.StatusConflict, se.Msg
 		}
 		return http.StatusBadRequest, se.Msg
 	}

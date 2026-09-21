@@ -37,13 +37,26 @@ func (s *InterviewService) CheckIn(ctx context.Context, candidateID uint64) erro
 }
 
 // CreateCandidate 新建候选人（未签到）。先落库，成功后广播。
-func (s *InterviewService) CreateCandidate(ctx context.Context, name, profile string) (*state.Event, error) {
-	ev, err := s.store.CreateCandidate(ctx, name, profile)
+func (s *InterviewService) CreateCandidate(ctx context.Context, studentNo, name, profile string) (*state.Event, error) {
+	ev, err := s.store.CreateCandidate(ctx, studentNo, name, profile)
 	if err != nil {
 		return nil, err
 	}
 	s.broad.Publish(ev)
 	return ev, nil
+}
+
+// ImportCandidates 批量导入候选人（管理员数据导入）。先落库（单事务全或无），
+// 提交成功后再逐条广播 —— 整批事件与整批数据同生共死。
+func (s *InterviewService) ImportCandidates(ctx context.Context, rows []state.CandidateImportRow) (*state.ImportReport, error) {
+	report, err := s.store.ImportCandidates(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+	for _, ev := range report.Events {
+		s.broad.Publish(ev)
+	}
+	return report, nil
 }
 
 // Publish 直接扇出一个事件（供 handler 在需要时手动广播已落库事件）。
@@ -152,9 +165,9 @@ func (s *InterviewService) SetBidStep(ctx context.Context, step int) error {
 
 // ---- 候选人管理 ----
 
-// UpdateCandidate 编辑候选人姓名/简介。先落库后广播。
-func (s *InterviewService) UpdateCandidate(ctx context.Context, id uint64, name, profile string) error {
-	ev, err := s.store.UpdateCandidate(ctx, id, name, profile)
+// UpdateCandidate 编辑候选人学号/姓名/简介。先落库后广播。
+func (s *InterviewService) UpdateCandidate(ctx context.Context, id uint64, studentNo, name, profile string) error {
+	ev, err := s.store.UpdateCandidate(ctx, id, studentNo, name, profile)
 	if err != nil {
 		return err
 	}

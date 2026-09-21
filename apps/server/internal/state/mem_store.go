@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -163,7 +164,7 @@ func (s *MemStateStore) ListCandidates(ctx context.Context, status dsmodel.Candi
 	}
 	if q != "" {
 		like := "%" + q + "%"
-		qdb = qdb.Where("name LIKE ? OR profile LIKE ?", like, like)
+		qdb = qdb.Where("student_no LIKE ? OR name LIKE ? OR profile LIKE ?", like, like, like)
 	}
 	var out []*dsmodel.Candidate
 	if err := qdb.Order("id asc").Limit(limit).Offset(offset).Find(&out).Error; err != nil {
@@ -227,10 +228,21 @@ func (s *MemStateStore) CheckIn(ctx context.Context, candidateID uint64) (*Event
 	return ev, nil
 }
 
-func (s *MemStateStore) CreateCandidate(ctx context.Context, name, profile string) (*Event, error) {
+func (s *MemStateStore) CreateCandidate(ctx context.Context, studentNo, name, profile string) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := &dsmodel.Candidate{Name: name, Profile: profile, Status: dsmodel.StatusNotCheckedIn}
+	no, err := normalizeStudentNo(studentNo)
+	if err != nil {
+		return nil, err
+	}
+	taken, err := s.studentNoTakenLocked(ctx, no, 0)
+	if err != nil {
+		return nil, err
+	}
+	if taken {
+		return nil, ErrStudentNoExists
+	}
+	c := &dsmodel.Candidate{StudentNo: no, Name: name, Profile: profile, Status: dsmodel.StatusNotCheckedIn}
 	if err := s.db.WithContext(ctx).Create(c).Error; err != nil {
 		return nil, err
 	}
@@ -238,6 +250,120 @@ func (s *MemStateStore) CreateCandidate(ctx context.Context, name, profile strin
 	ev := &Event{Type: EventCandidateCreated, Data: CandidateRef{c.ID}}
 	s.emit(0, ev)
 	return ev, nil
+}
+
+// ImportCandidates 批量导入候选人。三段式：
+//  1. 整批校验（一次列出全部问题行，全或无）；
+//  2. 单事务 upsert（按学号命中即更新姓名/简介，未命中即新建；批内重复后者覆盖前者）；
+//  3. 事务提交后逐条广播（先落库后广播）。
+//
+// 只写 student_no/name/profile —— 候选人的运行态（状态机 / 房间绑定 / 消息 /
+// 录取决定 / 出价）一律不动。
+func (s *MemStateStore) ImportCandidates(ctx context.Context, rows []CandidateImportRow) (*ImportReport, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(rows) == 0 {
+		return nil, &Error{Code: "import_empty", Msg: "导入数据为空"}
+	}
+	if len(rows) > MaxImportRows {
+		return nil, &Error{Code: "import_too_large", Msg: fmt.Sprintf("单次导入最多 %d 行", MaxImportRows)}
+	}
+
+	// 1) 整批校验：学号必填且纯数字、姓名必填；收集全部问题行（不是遇到第一个就返回）。
+	nos := make([]string, len(rows))
+	var rowErrs []RowError
+	for i, r := range rows {
+		no, err := dsmodel.ValidateStudentNo(r.StudentNo)
+		if err != nil {
+			rowErrs = append(rowErrs, RowError{Index: i, Msg: err.Error()})
+			continue
+		}
+		if r.Name == "" {
+			rowErrs = append(rowErrs, RowError{Index: i, Msg: "姓名不能为空"})
+			continue
+		}
+		nos[i] = no
+	}
+	if len(rowErrs) > 0 {
+		return nil, &ImportError{Rows: rowErrs}
+	}
+
+	// 2) 单事务落库：一次预取批内涉及的既有候选人（按学号），避免逐行点查。
+	report := &ImportReport{Rows: make([]ImportOutcome, 0, len(rows))}
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing []dsmodel.Candidate
+		if err := tx.Where("student_no IN ?", nos).Find(&existing).Error; err != nil {
+			return err
+		}
+		byNo := make(map[string]uint64, len(existing))
+		for i := range existing {
+			byNo[existing[i].StudentNo] = existing[i].ID
+		}
+		inBatch := make(map[string]uint64, len(rows))
+		for i := range rows {
+			no := nos[i]
+			id, hit := inBatch[no]
+			if !hit {
+				id, hit = byNo[no]
+			}
+			if hit {
+				if err := tx.Model(&dsmodel.Candidate{}).Where("id = ?", id).
+					Updates(map[string]any{"name": rows[i].Name, "profile": rows[i].Profile}).Error; err != nil {
+					return err
+				}
+				inBatch[no] = id
+				report.Updated++
+				report.Rows = append(report.Rows, ImportOutcome{Index: i, Status: ImportStatusUpdated, CandidateID: id})
+				report.Events = append(report.Events, &Event{Type: EventCandidateUpdated, Data: CandidateRef{id}})
+				continue
+			}
+			c := &dsmodel.Candidate{
+				StudentNo: no,
+				Name:      rows[i].Name,
+				Profile:   rows[i].Profile,
+				Status:    dsmodel.StatusNotCheckedIn,
+			}
+			if err := tx.Create(c).Error; err != nil {
+				return err
+			}
+			inBatch[no] = c.ID
+			report.Created++
+			report.Rows = append(report.Rows, ImportOutcome{Index: i, Status: ImportStatusCreated, CandidateID: c.ID})
+			report.Events = append(report.Events, &Event{Type: EventCandidateCreated, Data: CandidateRef{c.ID}})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// 3) 事务已提交，逐条广播。
+	for _, ev := range report.Events {
+		s.emit(0, ev)
+	}
+	return report, nil
+}
+
+// normalizeStudentNo 归一化并校验学号，非法规格转成带业务码的状态错误（→ 400）。
+func normalizeStudentNo(raw string) (string, error) {
+	no, err := dsmodel.ValidateStudentNo(raw)
+	if err != nil {
+		return "", &Error{Code: "student_no_invalid", Msg: err.Error()}
+	}
+	return no, nil
+}
+
+// studentNoTakenLocked 判断学号是否已被其他候选人占用（excludeID=0 表示不限本人）。
+// 调用方须持 s.mu：单写者下"先查后写"即为权威，DB 唯一索引只作兜底。
+func (s *MemStateStore) studentNoTakenLocked(ctx context.Context, studentNo string, excludeID uint64) (bool, error) {
+	q := s.db.WithContext(ctx).Model(&dsmodel.Candidate{}).Where("student_no = ?", studentNo)
+	if excludeID != 0 {
+		q = q.Where("id <> ?", excludeID)
+	}
+	var n int64
+	if err := q.Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func (s *MemStateStore) MovePhase(ctx context.Context, roomID, operatorID uint64, to dsmodel.CandidateStatus) (*Event, error) {
@@ -756,14 +882,25 @@ func (s *MemStateStore) SetBidStep(ctx context.Context, step int) error {
 
 //---- 候选人管理 ----
 
-func (s *MemStateStore) UpdateCandidate(ctx context.Context, id uint64, name, profile string) (*Event, error) {
+func (s *MemStateStore) UpdateCandidate(ctx context.Context, id uint64, studentNo, name, profile string) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := s.ensureCandidate(ctx, id); err != nil {
 		return nil, err
 	}
+	no, err := normalizeStudentNo(studentNo)
+	if err != nil {
+		return nil, err
+	}
+	taken, err := s.studentNoTakenLocked(ctx, no, id)
+	if err != nil {
+		return nil, err
+	}
+	if taken {
+		return nil, ErrStudentNoExists
+	}
 	if err := s.db.WithContext(ctx).Model(&dsmodel.Candidate{}).Where("id = ?", id).
-		Updates(map[string]any{"name": name, "profile": profile}).Error; err != nil {
+		Updates(map[string]any{"student_no": no, "name": name, "profile": profile}).Error; err != nil {
 		return nil, err
 	}
 	ev := &Event{Type: EventCandidateUpdated, Data: CandidateRef{id}}

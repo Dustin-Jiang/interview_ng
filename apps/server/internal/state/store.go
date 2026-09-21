@@ -23,7 +23,7 @@ type StateStore interface {
 	GetRoom(ctx context.Context, roomID uint64) (*dsmodel.Room, error)
 	// ListRooms 分页列出房间（面试官浏览；每项附带绑定候选人与消息条数）。
 	ListRooms(ctx context.Context, limit, offset int) ([]*dsmodel.Room, error)
-	// ListCandidates 分页列出候选人（面试官浏览），可按状态与关键词（姓名/简介）筛选。
+	// ListCandidates 分页列出候选人（面试官浏览），可按状态与关键词（学号/姓名/简介）筛选。
 	ListCandidates(ctx context.Context, status dsmodel.CandidateStatus, q string, limit, offset int) ([]*dsmodel.Candidate, error)
 	// ListMessagesAfter 返回房间内 id>afterID 的消息（断线续传增量）。
 	ListMessagesAfter(ctx context.Context, roomID uint64, afterID uint64) ([]*dsmodel.Message, error)
@@ -33,7 +33,13 @@ type StateStore interface {
 	// CheckIn 候选人签到：NOT_CHECKED_IN -> CHECKED_IN_PENDING_ASSIGN。
 	CheckIn(ctx context.Context, candidateID uint64) (*Event, error)
 	// CreateCandidate 新建候选人（初始状态 NOT_CHECKED_IN），返回创建事件（载荷 CandidateRef）。
-	CreateCandidate(ctx context.Context, name, profile string) (*Event, error)
+	// 学号必填且唯一（纯数字，见 model.ValidateStudentNo）；重复 → ErrStudentNoExists。
+	CreateCandidate(ctx context.Context, studentNo, name, profile string) (*Event, error)
+	// ImportCandidates 批量导入候选人（管理员数据导入的落库端）：按学号 upsert，
+	// 单事务【全或无】——任一行不合法即整批不落库并返回行级错误报告（*ImportError）；
+	// 批内重复学号后者覆盖前者；只写 student_no/name/profile，
+	// 候选人的运行态（状态机 / 房间绑定 / 消息 / 录取决定 / 出价）一律不动。
+	ImportCandidates(ctx context.Context, rows []CandidateImportRow) (*ImportReport, error)
 	// MovePhase 推进阶段：ASSIGNED -> IN_PROGRESS -> COMPLETED。
 	// 由当前房间成员调用（无主持人概念，成员即可推进）。
 	// 推进到 COMPLETED 自动解绑房间（rooms.candidate_id 置空，绑定唯一权威），
@@ -94,8 +100,10 @@ type StateStore interface {
 
 	// ---- 候选人管理 ----
 
-	// UpdateCandidate 编辑候选人姓名/简介，返回更新事件（载荷 CandidateRef）。
-	UpdateCandidate(ctx context.Context, id uint64, name, profile string) (*Event, error)
+	// UpdateCandidate 编辑候选人学号/姓名/简介，返回更新事件（载荷 CandidateRef）。
+	// 学号可改（改到他人已占用的学号 → ErrStudentNoExists）；学号是身份键，
+	// 修改不影响候选人的运行态（房间绑定 / 消息 / 录取决定 / 出价均随 id 保留）。
+	UpdateCandidate(ctx context.Context, id uint64, studentNo, name, profile string) (*Event, error)
 	// DeleteCandidate 删除候选人：连带删其消息档案并解绑房间（房间保留为空记录），
 	// 返回删除事件（载荷 CandidateRef）。
 	DeleteCandidate(ctx context.Context, id uint64) (*Event, error)
@@ -161,4 +169,53 @@ var (
 	ErrNotMember       = &Error{Code: "not_member", Msg: "operator is not a room member"}
 	ErrAlreadyAssigned = &Error{Code: "already_assigned", Msg: "candidate already assigned"}
 	ErrUserInRoom      = &Error{Code: "user_in_room", Msg: "user already in an active room"}
+	// ErrStudentNoExists 学号已被其他候选人占用（候选人身份键唯一，编辑/新增均返回此错）。
+	ErrStudentNoExists = &Error{Code: "student_no_exists", Msg: "学号已存在"}
 )
+
+// MaxImportRows 单次导入的行数上限（前端亦按此预检，服务端兜底）。
+const MaxImportRows = 2000
+
+// CandidateImportRow 是批量导入的一行输入：前端在浏览器内解析 Excel 并映射后的规范化字段
+// （服务端不解析表格，只做校验与落库）。
+type CandidateImportRow struct {
+	StudentNo string `json:"student_no"`
+	Name      string `json:"name"`
+	Profile   string `json:"profile"`
+}
+
+// ImportOutcome 单行导入结果（status: created / updated）。
+type ImportOutcome struct {
+	Index       int    `json:"index"`
+	Status      string `json:"status"`
+	CandidateID uint64 `json:"candidate_id"`
+}
+
+// 导入行状态取值。
+const (
+	ImportStatusCreated = "created" // 新建
+	ImportStatusUpdated = "updated" // 命中既有学号，覆盖姓名/简介
+)
+
+// ImportReport 批量导入的落库报告。
+// Events 承载本批已落库事件（json:"-"），由 service 层负责【落库后】扇出。
+type ImportReport struct {
+	Created int             `json:"created"`
+	Updated int             `json:"updated"`
+	Rows    []ImportOutcome `json:"rows"`
+	Events  []*Event        `json:"-"`
+}
+
+// RowError 导入的行级错误（Index 为请求体中的行下标）。
+type RowError struct {
+	Index int    `json:"index"`
+	Msg   string `json:"error"`
+}
+
+// ImportError 批量导入的校验失败（全或无：任一行不合法即整批不落库，
+// 报告一次列出全部问题行，便于改完重传）。
+type ImportError struct {
+	Rows []RowError
+}
+
+func (e *ImportError) Error() string { return "导入数据校验未通过" }
