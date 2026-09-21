@@ -1,6 +1,9 @@
+import type { Component } from 'vue'
+import { Gavel, UserCheck, UserSearch, UsersRound } from 'lucide-vue-next'
+
 import type { BadgeVariants } from '@/components/ui/badge'
 import type { AdmissionOutcome } from '@/domain/admission'
-import type { AdmissionStatus, CandidateStatus } from '@/models'
+import type { AdmissionStatus, CandidateStatus, SystemPhase } from '@/models'
 
 /** 房间派生状态的"空闲"哨兵键（无候选人的空房间）。 */
 export const ROOM_EMPTY = 'ROOM_EMPTY'
@@ -21,6 +24,14 @@ export const STATUS_PRESENTATION: Record<
 
 /** 空房间派生状态展示。 */
 export const EMPTY_PRESENTATION = { label: '空闲', badge: 'outline' } as const
+
+/** 系统阶段展示元数据：中文标签 + 图标（捡漏页与系统状态页共用，避免两处标签漂移）。 */
+export const PHASE_PRESENTATION: Record<SystemPhase, { label: string; icon: Component }> = {
+  interview: { label: '面试阶段', icon: UsersRound },
+  admission: { label: '录取阶段', icon: UserCheck },
+  leftover: { label: '捡漏阶段', icon: UserSearch },
+  settlement: { label: '结算阶段', icon: Gavel },
+}
 
 /** 录取决定状态的展示元数据：中文标签 + 徽章变体。 */
 export const ADMISSION_PRESENTATION: Record<

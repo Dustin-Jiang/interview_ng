@@ -50,6 +50,9 @@ const WAITING_STATUS_RANK: Record<CandidateStatus, number> = {
   CHECKED_IN_PENDING_ASSIGN: 2,
   NOT_CHECKED_IN: 3,
   COMPLETED: 4,
+  // 录取阶段状态不上屏（下方已过滤），仅为满足全档位 Record 而列出。
+  ADMISSION_PENDING: 5,
+  ADMITTED: 6,
 }
 
 /**

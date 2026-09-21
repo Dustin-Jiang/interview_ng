@@ -11,6 +11,7 @@ import { onScopeDispose, ref, type Ref } from 'vue'
 import { getAuthToken } from '@/api/http'
 import { WsChannel } from '@/api/ws'
 import type { ChanEvent } from '@/api/ws-model'
+import { useDebouncedRefresh } from '@/composables/useDebouncedRefresh'
 
 export type BoardHandler = (ev: ChanEvent) => void
 
@@ -81,20 +82,10 @@ export function useBoardChannel(): UseBoardChannel {
  * 供列表页"事件到达 → 整表重拉"的标准模式使用；作用域销毁自动清理定时器与订阅。
  */
 export function useBoardRefresh(events: readonly string[], cb: () => void): UseBoardChannel {
-  let timer: ReturnType<typeof setTimeout> | null = null
-  const schedule = (): void => {
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(() => {
-      timer = null
-      cb()
-    }, 300)
-  }
+  const debounced = useDebouncedRefresh(cb)
   const board = useBoardChannel()
   board.subscribe((ev) => {
-    if (events.includes(ev.type)) schedule()
-  })
-  onScopeDispose(() => {
-    if (timer) clearTimeout(timer)
+    if (events.includes(ev.type)) debounced.schedule()
   })
   return board
 }
