@@ -60,7 +60,7 @@ export function sortWaitingBoard<T extends { status: CandidateStatus; created_at
   items: readonly T[],
 ): T[] {
   return items
-    .filter((c) => c.status !== 'COMPLETED')
+    .filter((c) => c.status !== 'COMPLETED' && c.status !== 'ADMISSION_PENDING' && c.status !== 'ADMITTED')
     .slice()
     .sort(
       (a, b) =>

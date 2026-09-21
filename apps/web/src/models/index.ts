@@ -3,13 +3,15 @@
  * 仅表达数据形状，不含 UI/展示逻辑（MVVM 的 Model 层）。
  */
 
-/** 候选人状态（与后端 model.CandidateStatus 一致的五档状态机）。 */
+/** 候选人状态（与后端 model.CandidateStatus 一致的七档状态机）。 */
 export type CandidateStatus =
   | 'NOT_CHECKED_IN'
   | 'CHECKED_IN_PENDING_ASSIGN'
   | 'ASSIGNED'
   | 'IN_PROGRESS'
   | 'COMPLETED'
+  | 'ADMISSION_PENDING'
+  | 'ADMITTED'
 
 export const CANDIDATE_STATUSES: CandidateStatus[] = [
   'NOT_CHECKED_IN',
@@ -17,6 +19,8 @@ export const CANDIDATE_STATUSES: CandidateStatus[] = [
   'ASSIGNED',
   'IN_PROGRESS',
   'COMPLETED',
+  'ADMISSION_PENDING',
+  'ADMITTED',
 ]
 
 /** 权限名（10 枚，RBAC 目录与后端一致）。 */
@@ -68,14 +72,16 @@ export interface Department {
   updated_at: string
 }
 
-/** 系统阶段：面试阶段 / 录取阶段 / 捡漏阶段（与后端 model.SystemPhase 一致）。 */
-export type SystemPhase = 'interview' | 'admission' | 'leftover'
+/** 系统阶段：面试阶段 / 录取阶段 / 捡漏阶段 / 结算阶段（与后端 model.SystemPhase 一致）。 */
+export type SystemPhase = 'interview' | 'admission' | 'leftover' | 'settlement'
 
-export const SYSTEM_PHASES: SystemPhase[] = ['interview', 'admission', 'leftover']
+export const SYSTEM_PHASES: SystemPhase[] = ['interview', 'admission', 'leftover', 'settlement']
 
 export interface SystemStatus {
   id: number
   phase: SystemPhase
+  /** 出价步长（上下键调整报价的步进），管理员可改，默认 10。 */
+  bid_step: number
   updated_at: string
 }
 
@@ -139,4 +145,66 @@ export interface UserProfile {
   user: User
   roles: string[]
   permissions: Permission[]
+}
+
+// ---- 捡漏阶段竞拍（leftover） ----
+
+/** 捡漏出价记录（候选人 + 部门唯一；接口仅返回本部门的出价）。 */
+export interface Bid {
+  id: number
+  candidate_id: number
+  department_id: number
+  amount: number
+  created_at: string
+  updated_at: string
+}
+
+/** 捡漏阶段部门预算摘要；spent/remaining 仅当前用户所在部门非 null（他部门出价保密）。 */
+export interface LeftoverDepartmentBudget {
+  id: number
+  name: string
+  expected_count: number
+  admitted_count: number
+  budget: number
+  spent: number | null
+  remaining: number | null
+}
+
+/** 当前用户所在部门的捡漏预算（用户无部门时整体为 null）。 */
+export interface LeftoverMyBudget {
+  department_id: number
+  budget: number
+  spent: number
+  remaining: number
+}
+
+/** GET /leftover/overview 响应：当前阶段（字符串）+ 各部门预算摘要 + 本部门预算。 */
+export interface LeftoverOverview {
+  phase: SystemPhase
+  departments: LeftoverDepartmentBudget[]
+  my: LeftoverMyBudget | null
+}
+
+/** 已结算的捡漏赢家记录（全员可见）。 */
+export interface LeftoverResult {
+  candidate_id: number
+  department_id: number
+  amount: number
+  created_at: string
+}
+
+/** POST /leftover/candidates/:id/resolve 响应：赢家部门与成交金额。 */
+export interface LeftoverResolveResult {
+  candidate_id: number
+  department_id: number
+  amount: number
+}
+
+/** GET /leftover/final 响应行：由出价计算的最终录取结果（赢家 = 最高出价部门，同额先出价者）。 */
+export interface LeftoverFinalResult {
+  candidate_id: number
+  department_id: number
+  amount: number
+  /** 是否已正式结算落库（存在 admitted 录取记录）。 */
+  resolved: boolean
 }

@@ -139,7 +139,7 @@ async function submitReset() {
     return
   }
   if (isForwardTarget.value && !resetTarget.value.room_id) {
-    toast.error('该候选人尚未绑定房间，不能重置到待面试/面试中/已结束')
+    toast.error('该候选人尚未绑定房间，不能重置到待面试/面试中/面试已结束')
     return
   }
   resetting.value = true

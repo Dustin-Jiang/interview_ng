@@ -14,7 +14,9 @@ export const STATUS_PRESENTATION: Record<
   CHECKED_IN_PENDING_ASSIGN: { label: '排队中', badge: 'secondary' },
   ASSIGNED: { label: '待面试', badge: 'secondary' },
   IN_PROGRESS: { label: '面试中', badge: 'default' },
-  COMPLETED: { label: '已结束', badge: 'destructive' },
+  COMPLETED: { label: '面试已结束', badge: 'destructive' },
+  ADMISSION_PENDING: { label: '待录取', badge: 'secondary' },
+  ADMITTED: { label: '已录取', badge: 'default' },
 }
 
 /** 空房间派生状态展示。 */
