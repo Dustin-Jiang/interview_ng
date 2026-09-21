@@ -108,6 +108,11 @@ function cellText(cell: unknown): string {
  * @param fileName 原始文件名（报告与界面展示用）
  */
 export function parseWorkbook(data: ArrayBuffer, fileName: string): ImportSheet {
+  // 只接受 .xlsx：SheetJS 对 .csv 等文本格式会按二进制猜测编码（中文表头会变成乱码），
+  // 与其静默读出错列名，不如在上传环节直接拒绝。
+  if (!/\.xlsx$/i.test(fileName)) {
+    throw new Error('只支持 .xlsx 工作簿')
+  }
   if (data.byteLength > IMPORT_MAX_BYTES) {
     throw new Error(`文件超过 ${IMPORT_MAX_BYTES / 1024 / 1024}MB，请拆分后重传`)
   }
