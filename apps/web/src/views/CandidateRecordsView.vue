@@ -497,7 +497,7 @@ const detailClass = computed(() => (showDetail.value ? 'flex' : 'hidden lg:flex'
                     v-if="showAdmissionControls && admissionByCandidate.get(c.id)"
                     :variant="ADMISSION_PRESENTATION[admissionByCandidate.get(c.id)!].badge"
                   >
-                    {{ ADMISSION_PRESENTATION[admissionByCandidate.get(c.id)!].label }}
+                    本部门{{ ADMISSION_PRESENTATION[admissionByCandidate.get(c.id)!].label }}
                   </Badge>
                 </span>
               </span>

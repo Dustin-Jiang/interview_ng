@@ -34,6 +34,11 @@ const quickLinks = computed(() => {
       visible: true,
     },
     {
+      name: '捡漏竞拍',
+      to: { name: 'leftover' },
+      visible: true,
+    },
+    {
       name: '面试房间',
       to: { name: 'room' },
       visible: hasPermission(PERMISSIONS.ROOMS_VIEW),

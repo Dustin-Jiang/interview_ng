@@ -1,5 +1,5 @@
 <!--
-  SettingsSystemStatusView —— 系统状态设置：在「面试阶段 / 录取阶段 / 捡漏阶段」之间切换。
+  SettingsSystemStatusView —— 系统状态设置：在「面试阶段 / 录取阶段 / 捡漏阶段 / 结算阶段」之间切换。
   阶段呈 Stepper 进度条：已越过的档带勾选、当前档高亮、后续档待激活，点击任意档即切换。
   录取/捡漏阶段时下方展示录取情况预览：全体候选人 × 各部门决定的矩阵与汇总结论
   （唯一部门录取且其余全部放弃 → 「录取到该部门」）。跨部门数据需 candidates.browse_all。
@@ -7,10 +7,10 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
-import { Check, RefreshCw, UserCheck, UserSearch, UsersRound } from 'lucide-vue-next'
+import { Check, Gavel, RefreshCw, UserCheck, UserSearch, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper } from '@tanstack/vue-table'
 
-import { admissionApi, candidateApi, departmentApi } from '@/api/http'
+import { admissionApi, candidateApi, departmentApi, systemStatusApi } from '@/api/http'
 import { useBoardChannel } from '@/composables/useBoardChannel'
 import { useSystemStatus } from '@/composables/useSystemStatus'
 import { buildAdmissionPreview, type AdmissionPreviewRow } from '@/domain/admission'
@@ -18,11 +18,11 @@ import { ADMISSION_PRESENTATION, admissionOutcomePresentation } from '@/presente
 import type { SystemPhase, Candidate, CandidateAdmission, Department } from '@/models'
 import { PERMISSIONS, SYSTEM_PHASES } from '@/models'
 import { useAuth } from '@/composables/useAuth'
-
+import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { NumberField, NumberFieldContent, NumberFieldDecrement, NumberFieldIncrement, NumberFieldInput } from '@/components/ui/number-field'
 import DataTable from '@/components/ui/table/data-table.vue'
 import type { DataTableFeatures } from '@/components/ui/table/features'
 import {
@@ -38,11 +38,11 @@ import PageShell from '@/components/app/PageShell.vue'
 
 const { status, loading, load, setPhase } = useSystemStatus()
 const switching = ref(false)
-
 const phaseMeta: Record<SystemPhase, { label: string; icon: typeof UsersRound }> = {
   interview: { label: '面试阶段', icon: UsersRound },
   admission: { label: '录取阶段', icon: UserCheck },
   leftover: { label: '捡漏阶段', icon: UserSearch },
+  settlement: { label: '结算阶段', icon: Gavel },
 }
 
 /** 阶段 → Stepper 档位序号（1 起，与状态机推进方向一致）。 */
@@ -87,6 +87,32 @@ async function switchTo(phase: SystemPhase) {
 const { hasPermission } = useAuth()
 const canBrowseAll = computed(() => hasPermission(PERMISSIONS.CANDIDATES_BROWSE_ALL))
 
+
+// ---- 出价步长（管理面板设置，服务端校验 ≥1） ----
+const bidStepDraft = ref<number | null>(status.value?.bid_step ?? 10)
+const bidStepSaving = ref(false)
+
+watch(() => status.value?.bid_step, (v) => {
+  if (v != null) bidStepDraft.value = v
+}, { immediate: true })
+
+async function saveBidStep() {
+  const step = bidStepDraft.value
+  if (step == null || !Number.isInteger(step) || step < 1) {
+    toast.error('出价步长须为正整数')
+    return
+  }
+  bidStepSaving.value = true
+  try {
+    await systemStatusApi.setBidStep(step)
+    toast.success(`出价步长已设为 ${step}`)
+    await load()
+  } catch (e) {
+    toast.error((e as Error).message)
+  } finally {
+    bidStepSaving.value = false
+  }
+}
 const previewCandidates = ref<Candidate[]>([])
 const previewDepartments = ref<Department[]>([])
 const previewAdmissions = ref<CandidateAdmission[]>([])
@@ -96,7 +122,9 @@ const previewError = ref('')
 const showPreview = computed(
   () =>
     canBrowseAll.value &&
-    (status.value?.phase === 'admission' || status.value?.phase === 'leftover'),
+    (status.value?.phase === 'admission' ||
+      status.value?.phase === 'leftover' ||
+      status.value?.phase === 'settlement'),
 )
 
 const previewRows = computed<AdmissionPreviewRow[]>(() =>
@@ -223,8 +251,33 @@ onMounted(() => void load())
         </Stepper>
       </Card>
 
+      <!-- 出价步长（users.manage）：上下键调整报价的步进 -->
+      <Card class="p-5">
+        <div class="flex flex-wrap items-center justify-between gap-x-8 gap-y-3">
+          <h2 class="text-base font-semibold">出价步长</h2>
+          <div class="flex items-center gap-2">
+            <NumberField
+              :model-value="bidStepDraft"
+              :step="1"
+              :min="1"
+              class="w-28"
+              @update:model-value="bidStepDraft = $event"
+            >
+              <NumberFieldContent>
+                <NumberFieldDecrement />
+                <NumberFieldInput aria-label="出价步长" />
+                <NumberFieldIncrement />
+              </NumberFieldContent>
+            </NumberField>
+            <Button size="sm" :disabled="bidStepSaving || Number(bidStepDraft) === (status?.bid_step ?? 0)" @click="saveBidStep">
+              保存
+            </Button>
+          </div>
+        </div>
+      </Card>
+
       <!-- 录取情况预览：全体候选人 × 各部门决定 + 汇总结论 -->
-      <Card v-if="showPreview" class="p-5">
+      <div v-if="showPreview">
         <div class="mb-4 flex items-center justify-between gap-2">
           <h2 class="text-base font-semibold">录取情况预览</h2>
           <Button
@@ -250,7 +303,7 @@ onMounted(() => void load())
         </EmptyState>
 
         <DataTable v-else :columns="previewColumns" :data="previewRows" />
-      </Card>
+      </div>
     </template>
   </PageShell>
 </template>

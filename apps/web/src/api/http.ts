@@ -4,7 +4,7 @@
  * 鉴权：请求拦截器自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
  */
 import axios, { type AxiosRequestConfig } from 'axios'
-import type { AdmissionStatus, Candidate, CandidateAdmission, CandidateStatus, Department, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
+import type { AdmissionStatus, Bid, Candidate, CandidateAdmission, CandidateStatus, Department, LeftoverFinalResult, LeftoverOverview, LeftoverResolveResult, LeftoverResult, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
 
 /** 401 处理器：由 useAuth 注册（登出 + 跳登录页），避免循环依赖。 */
 let onUnauthorized: (() => void) | null = null
@@ -218,5 +218,42 @@ export const systemStatusApi = {
   },
   set(phase: SystemPhase): Promise<{ ok: boolean }> {
     return put('/system/status', { phase })
+  },
+  setBidStep(step: number): Promise<{ ok: boolean }> {
+    return put('/system/bid-step', { step })
+  },
+}
+
+// ---- 捡漏阶段竞拍 ----
+
+export const leftoverApi = {
+  /** 捡漏总览：当前阶段 + 各部门预算摘要（他部门出价保密为 null）+ 本部门预算。 */
+  overview(): Promise<LeftoverOverview> {
+    return request('/leftover/overview')
+  },
+
+  /** 本部门当前出价列表。 */
+  bids(): Promise<{ items: Bid[] }> {
+    return request('/leftover/bids')
+  },
+
+  /** 由出价计算的最终录取结果（赢家 = 最高出价部门；结算阶段只读展示）。 */
+  final(): Promise<{ items: LeftoverFinalResult[] }> {
+    return request('/leftover/final')
+  },
+
+  /** 设置本部门对某候选人的出价（幂等 upsert；超出剩余预算返回 budget_exceeded）。 */
+  setBid(candidateId: number, amount: number): Promise<{ item: Bid }> {
+    return put('/leftover/bids', { candidate_id: candidateId, amount })
+  },
+
+  /** 结算候选人：出价最高部门赢得该候选人（需 candidates.manage）。 */
+  resolve(candidateId: number): Promise<LeftoverResolveResult> {
+    return post(`/leftover/candidates/${candidateId}/resolve`)
+  },
+
+  /** 已结算赢家列表（全员可见）。 */
+  results(): Promise<{ items: LeftoverResult[] }> {
+    return request('/leftover/results')
   },
 }

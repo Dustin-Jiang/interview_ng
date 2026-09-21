@@ -20,6 +20,7 @@ const navItems = computed(() => {
     // 查看与管理分离：名册对所有人可见，管理入口仅对持权限者渲染。
     { name: '候选人', to: { name: 'candidates' } },
     { name: '候场大屏', to: { name: 'waiting' } },
+    { name: '捡漏竞拍', to: { name: 'leftover' } },
   ]
   if (hasPermission(PERMISSIONS.ROOMS_VIEW)) {
     items.push({ name: '面试房间', to: { name: 'room' } })

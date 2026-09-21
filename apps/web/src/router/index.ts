@@ -61,6 +61,12 @@ export const router = createRouter({
       component: () => import('@/views/WaitingBoardView.vue'),
     },
     {
+      // 捡漏竞拍：COMPLETED 候选人池 + 本部门出价 + 结算。
+      path: '/leftover',
+      name: 'leftover',
+      component: () => import('@/views/LeftoverView.vue'),
+    },
+    {
       path: '/room/:roomId?',
       name: 'room',
       component: () => import('@/views/RoomView.vue'),
