@@ -78,10 +78,19 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	// 系统状态（读取任意登录：录取阶段 UI 需全员可见；切换仅 users.manage）
 	authed.GET("/system/status", h.getSystemStatus)
 	authed.PUT("/system/status", h.require(dsmodel.PermUsersManage), h.setSystemStatus)
+	authed.PUT("/system/bid-step", h.require(dsmodel.PermUsersManage), h.setBidStep)
 
 	// 录取状态（浏览任意登录：默认本部门，跨部门需 browse_all；记录需 admissions.record）
 	authed.GET("/admissions", h.listAdmissions)
 	authed.PUT("/candidates/:id/admission", h.require(dsmodel.PermAdmissionRecord), h.upsertCandidateAdmission)
+
+	// 捡漏竞拍（浏览任意登录；出价需 admissions.record 且仅本部门可见；结算需 candidates.manage）
+	authed.GET("/leftover/overview", h.leftoverOverview)
+	authed.GET("/leftover/bids", h.listLeftoverBids)
+	authed.GET("/leftover/final", h.leftoverFinal)
+	authed.PUT("/leftover/bids", h.require(dsmodel.PermAdmissionRecord), h.upsertLeftoverBid)
+	authed.GET("/leftover/results", h.leftoverResults)
+	authed.POST("/leftover/candidates/:id/resolve", h.require(dsmodel.PermCandidatesManage), h.resolveLeftover)
 }
 
 //---- 认证 ----
@@ -637,6 +646,25 @@ func (h *HTTPServer) setSystemStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+type setBidStepReq struct {
+	Step int `json:"step"`
+}
+
+// setBidStep 设置出价步长（users.manage；≥1）。
+func (h *HTTPServer) setBidStep(c *gin.Context) {
+	var req setBidStepReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	if err := h.svc.SetBidStep(c.Request.Context(), req.Step); err != nil {
+		status, code := stateErr(err)
+		c.JSON(status, gin.H{"error": code})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 //---- 录取状态 ----
 
 // listAdmissions 返回当前用户可见的录取决定：
@@ -720,4 +748,130 @@ func stateErr(err error) (int, string) {
 		return http.StatusBadRequest, se.Msg
 	}
 	return http.StatusInternalServerError, err.Error()
+}
+
+//---- 捡漏竞拍 ----
+
+// myDepartmentID 当前登录用户归属部门（nil 表示未归属部门）。
+func (h *HTTPServer) myDepartmentID(c *gin.Context) (*uint64, error) {
+	uid := auth.UserID(c)
+	me, err := h.auth.Me(c.Request.Context(), uid)
+	if err != nil {
+		return nil, err
+	}
+	return me.User.DepartmentID, nil
+}
+
+// leftoverOverview 捡漏总览：各部门预算与当前阶段。
+// spent/remaining 默认仅本部门可见；持 candidates.browse_all 的管理端全部门可见。
+func (h *HTTPServer) leftoverOverview(c *gin.Context) {
+	deptID, err := h.myDepartmentID(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	exposeAll := h.auth.HasPermission(auth.UserID(c), dsmodel.PermCandidatesBrowseAll)
+	out, err := h.svc.LeftoverOverview(c.Request.Context(), deptID, exposeAll)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// listLeftoverBids 返回出价列表：默认仅本部门（出价保密）；
+// 持 candidates.browse_all 的管理端返回全部部门；未归属部门且无跨部门权限 → 空。
+func (h *HTTPServer) listLeftoverBids(c *gin.Context) {
+	if h.auth.HasPermission(auth.UserID(c), dsmodel.PermCandidatesBrowseAll) {
+		out, err := h.svc.ListLeftoverBids(c.Request.Context(), nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": out})
+		return
+	}
+	deptID, err := h.myDepartmentID(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	out := []*dsmodel.Bid{}
+	if deptID != nil {
+		out, err = h.svc.ListLeftoverBids(c.Request.Context(), deptID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
+}
+
+type upsertLeftoverBidReq struct {
+	CandidateID uint64 `json:"candidate_id"`
+	Amount      int    `json:"amount"`
+}
+
+// upsertLeftoverBid 记录/覆盖本部门对候选人的出价（仅捡漏阶段、受预算约束）。
+func (h *HTTPServer) upsertLeftoverBid(c *gin.Context) {
+	var req upsertLeftoverBidReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	deptID, err := h.myDepartmentID(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if deptID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "当前用户未归属部门，无法出价"})
+		return
+	}
+	if err := h.svc.UpsertLeftoverBid(c.Request.Context(), req.CandidateID, *deptID, req.Amount); err != nil {
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// resolveLeftover 结算候选人：最高出价部门录取（需 candidates.manage）。
+func (h *HTTPServer) resolveLeftover(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	ev, err := h.svc.ResolveLeftoverCandidate(c.Request.Context(), id)
+	if err != nil {
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
+		return
+	}
+	ref, _ := ev.Data.(state.LeftoverRef)
+	c.JSON(http.StatusOK, gin.H{"candidate_id": ref.CandidateID, "department_id": ref.DepartmentID, "amount": ref.Amount})
+}
+
+// leftoverResults 已结算候选人的赢家与成交金额（全员可见）。
+func (h *HTTPServer) leftoverResults(c *gin.Context) {
+	out, err := h.svc.ListLeftoverResults(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
+}
+
+// leftoverFinal 结算阶段最终录取结果（只读计算：赢家 = 最高出价部门）。
+// 保密语义与出价一致：默认仅已成交或本部门的进行中结果；browse_all 管理端全量。
+func (h *HTTPServer) leftoverFinal(c *gin.Context) {
+	deptID, err := h.myDepartmentID(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	exposeAll := h.auth.HasPermission(auth.UserID(c), dsmodel.PermCandidatesBrowseAll)
+	out, err := h.svc.LeftoverFinalResults(c.Request.Context(), deptID, exposeAll)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
 }

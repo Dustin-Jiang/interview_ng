@@ -16,6 +16,8 @@ const (
 	EventCandidateDeleted EventType = "candidate_deleted" // 删除候选人（级联清房删消息）
 	EventRoomCreated      EventType = "room_created"      // 新建空房
 	EventRoomDeleted      EventType = "room_deleted"      // 删除空房
+	EventLeftoverBid      EventType = "leftover_bid"      // 捡漏出价变更（不含金额，跨部门保密）
+	EventLeftoverResolved EventType = "leftover_resolved" // 捡漏候选人结算（最高出价录取）
 )
 
 // Event 是不可变的状态变更事件，是"系统内部状态唯一性"的对外契约。
@@ -48,6 +50,14 @@ func CandidateIDOf(ev *Event) uint64 {
 		return r.CandidateID
 	}
 	return 0
+}
+
+// LeftoverRef 捡漏类事件（bid/resolved）的载荷。出价事件不携带金额（跨部门保密）；
+// 结算事件附 Amount（成交金额，结算后公开）。
+type LeftoverRef struct {
+	CandidateID  uint64 `json:"candidate_id"`
+	DepartmentID uint64 `json:"department_id"`
+	Amount       int    `json:"amount,omitempty"`
 }
 
 // RoomIDOf 从房间类事件载荷提取房间 id；载荷缺失或类型不符返回 0。

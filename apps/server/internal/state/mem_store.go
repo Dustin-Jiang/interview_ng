@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -686,7 +687,7 @@ func (s *MemStateStore) ensureSystemStatus(ctx context.Context) (*dsmodel.System
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	st = dsmodel.SystemStatus{ID: systemStatusID, Phase: dsmodel.SystemPhaseInterview}
+	st = dsmodel.SystemStatus{ID: systemStatusID, Phase: dsmodel.SystemPhaseInterview, BidStep: dsmodel.DefaultBidStep}
 	if err := s.db.WithContext(ctx).Create(&st).Error; err != nil {
 		return nil, err
 	}
@@ -704,8 +705,45 @@ func (s *MemStateStore) SetSystemStatus(ctx context.Context, phase dsmodel.Syste
 	if _, err := s.ensureSystemStatus(ctx); err != nil {
 		return err
 	}
+	if err := s.db.WithContext(ctx).Model(&dsmodel.SystemStatus{}).Where("id = ?", systemStatusID).
+		Update("phase", phase).Error; err != nil {
+		return err
+	}
+	// 切换到捡漏/结算阶段时，批量同步录取档状态（唯一录取确定 → 已录取，其余 → 待录取）。
+	if phase == dsmodel.SystemPhaseLeftover || phase == dsmodel.SystemPhaseSettlement {
+		if err := s.syncAdmissionStatuses(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// syncAdmissionStatuses 批量同步录取档候选人状态（先落库，无事件广播——由前端阶段切换后重拉）。
+// 规则：恰好一家 admitted（唯一录取确定）→ ADMITTED；其余（未定/争议/无决定）→ ADMISSION_PENDING。
+// 仅影响 COMPLETED / ADMISSION_PENDING / ADMITTED 三档，未完成的候选人不动。
+func (s *MemStateStore) syncAdmissionStatuses(ctx context.Context) error {
+	inScope := "status IN ('COMPLETED', 'ADMISSION_PENDING', 'ADMITTED')"
+	settled := "SELECT COUNT(*) FROM candidate_admissions a WHERE a.candidate_id = candidates.id AND a.status = 'admitted'"
+	if err := s.db.WithContext(ctx).Exec(
+		"UPDATE candidates SET status = 'ADMITTED', updated_at = CURRENT_TIMESTAMP WHERE "+inScope+" AND ("+settled+") = 1",
+	).Error; err != nil {
+		return err
+	}
+	return s.db.WithContext(ctx).Exec(
+		"UPDATE candidates SET status = 'ADMISSION_PENDING', updated_at = CURRENT_TIMESTAMP WHERE "+inScope+" AND ("+settled+") <> 1",
+	).Error
+}
+
+// SetBidStep 设置出价步长（管理面板；≥1）。
+func (s *MemStateStore) SetBidStep(ctx context.Context, step int) error {
+	if step < 1 {
+		return &Error{Code: "invalid_bid_step", Msg: "出价步长须为正整数"}
+	}
+	if _, err := s.ensureSystemStatus(ctx); err != nil {
+		return err
+	}
 	return s.db.WithContext(ctx).Model(&dsmodel.SystemStatus{}).Where("id = ?", systemStatusID).
-		Update("phase", phase).Error
+		Update("bid_step", step).Error
 }
 
 //---- 候选人管理 ----
@@ -742,8 +780,11 @@ func (s *MemStateStore) DeleteCandidate(ctx context.Context, id uint64) (*Event,
 	if err := s.db.WithContext(ctx).Where("candidate_id = ?", id).Delete(&dsmodel.Message{}).Error; err != nil {
 		return nil, err
 	}
-	// 连带删各部门的录取决定
+	// 连带删各部门的录取决定与捡漏出价
 	if err := s.db.WithContext(ctx).Where("candidate_id = ?", id).Delete(&dsmodel.CandidateAdmission{}).Error; err != nil {
+		return nil, err
+	}
+	if err := s.db.WithContext(ctx).Where("candidate_id = ?", id).Delete(&dsmodel.Bid{}).Error; err != nil {
 		return nil, err
 	}
 	if err := s.db.WithContext(ctx).Delete(&dsmodel.Candidate{}, id).Error; err != nil {
@@ -765,6 +806,8 @@ func (s *MemStateStore) ResetCandidateStatus(ctx context.Context, id uint64, to 
 		return nil, ErrIllegalStatus
 	}
 	forward := to == dsmodel.StatusAssigned || to == dsmodel.StatusInProgress || to == dsmodel.StatusCompleted
+	// 录取档（待录取/已录取）位于面试完成之后：房间已解绑，重置不需要房间绑定。
+	postInterview := to == dsmodel.StatusAdmissionPending || to == dsmodel.StatusAdmitted
 	backward := to == dsmodel.StatusNotCheckedIn || to == dsmodel.StatusCheckedInPendingAssign
 
 	var roomID uint64
@@ -783,6 +826,8 @@ func (s *MemStateStore) ResetCandidateStatus(ctx context.Context, id uint64, to 
 				return nil, err
 			}
 		}
+	case postInterview:
+		// 待录取/已录取：仅改状态，不涉及房间。
 	case backward:
 		// 自动解绑房间（room 保留为空记录）；事件保持全局广播（回到排队池变化）。
 		if room, err := s.roomByCandidate(ctx, id); err == nil {
@@ -858,6 +903,335 @@ func validAdmissionStatus(s dsmodel.AdmissionStatus) bool {
 		}
 	}
 	return false
+}
+
+//---- 捡漏阶段（按预算竞拍） ----
+
+// admittedCount 统计部门已确认录取（admitted）人数。
+func (s *MemStateStore) admittedCount(ctx context.Context, departmentID uint64) (int, error) {
+	var n int64
+	if err := s.db.WithContext(ctx).Model(&dsmodel.CandidateAdmission{}).
+		Where("department_id = ? AND status = ?", departmentID, dsmodel.AdmissionAdmitted).
+		Count(&n).Error; err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
+// deptSpent 统计部门当前出价总额（预算占用）。
+// 已结算赢家的出价不计入：该候选人录取本身已缩减预算，再计出价会双重扣减。
+func (s *MemStateStore) deptSpent(ctx context.Context, departmentID uint64) (int, error) {
+	var n *int64
+	if err := s.db.WithContext(ctx).Model(&dsmodel.Bid{}).
+		Where("department_id = ? AND NOT EXISTS (SELECT 1 FROM candidate_admissions a "+
+			"WHERE a.candidate_id = bids.candidate_id AND a.department_id = bids.department_id AND a.status = ?)",
+			departmentID, dsmodel.AdmissionAdmitted).
+		Select("COALESCE(SUM(amount),0)").Scan(&n).Error; err != nil {
+		return 0, err
+	}
+	if n == nil {
+		return 0, nil
+	}
+	return int(*n), nil
+}
+
+// LeftoverOverview 返回捡漏总览：各部门预算。
+// exposeAll 为 true 时所有部门 spent/remaining 公开（持 candidates.browse_all 的管理端）；
+// 否则仅本部门可见（出价保密）。
+func (s *MemStateStore) LeftoverOverview(ctx context.Context, myDepartmentID *uint64, exposeAll bool) (*dsmodel.LeftoverOverview, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.ensureSystemStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	depts, err := s.ListDepartments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &dsmodel.LeftoverOverview{Phase: st.Phase, Departments: []dsmodel.DepartmentLeftover{}}
+	for _, d := range depts {
+		admitted, err := s.admittedCount(ctx, d.ID)
+		if err != nil {
+			return nil, err
+		}
+		item := &dsmodel.DepartmentLeftover{
+			ID: d.ID, Name: d.Name, ExpectedCount: d.ExpectedCount,
+			AdmittedCount: admitted,
+			Budget:        dsmodel.LeftoverBudget(d.ExpectedCount, admitted),
+		}
+		own := myDepartmentID != nil && d.ID == *myDepartmentID
+		if own || exposeAll {
+			spent, err := s.deptSpent(ctx, d.ID)
+			if err != nil {
+				return nil, err
+			}
+			item.Spent = &spent
+			rem := item.Budget - spent
+			item.Remaining = &rem
+			if own {
+				out.My = &dsmodel.MyLeftover{DepartmentID: d.ID, Budget: item.Budget, Spent: spent, Remaining: rem}
+			}
+		}
+		out.Departments = append(out.Departments, *item)
+	}
+	return out, nil
+}
+
+// ListLeftoverBids 返回出价列表：departmentID 为 nil 时跨部门（管理端），否则仅本部门。
+func (s *MemStateStore) ListLeftoverBids(ctx context.Context, departmentID *uint64) ([]*dsmodel.Bid, error) {
+	qb := s.db.WithContext(ctx).Model(&dsmodel.Bid{})
+	if departmentID != nil {
+		qb = qb.Where("department_id = ?", *departmentID)
+	}
+	out := []*dsmodel.Bid{}
+	if err := qb.Order("candidate_id asc, department_id asc").Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UpsertLeftoverBid 记录/覆盖本部门对候选人的出价。
+// 约束：仅捡漏阶段；候选人未结算；新总额（含本次出价）不得超过部门预算。
+func (s *MemStateStore) UpsertLeftoverBid(ctx context.Context, candidateID, departmentID uint64, amount int) (*Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if amount <= 0 {
+		return nil, &Error{Code: "invalid_amount", Msg: "出价须为正数"}
+	}
+	if _, err := s.ensureCandidate(ctx, candidateID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureDepartment(ctx, departmentID); err != nil {
+		return nil, err
+	}
+	st, err := s.ensureSystemStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if st.Phase != dsmodel.SystemPhaseLeftover {
+		return nil, &Error{Code: "not_leftover_phase", Msg: "当前不在捡漏阶段，无法出价"}
+	}
+	// 封盘判定：恰好一家部门 admitted（录取已确定）才封盘；
+	// 0 家 = 未定可竞拍；≥2 家 = 多部门录取争议，同样进入捡漏由出价仲裁。
+	admittedN, err := s.candidateAdmittedCount(ctx, candidateID)
+	if err != nil {
+		return nil, err
+	}
+	if admittedN == 1 {
+		return nil, &Error{Code: "already_resolved", Msg: "候选人已确定唯一录取部门"}
+	}
+	var dept dsmodel.Department
+	if err := s.db.WithContext(ctx).First(&dept, departmentID).Error; err != nil {
+		return nil, err
+	}
+	admitted, err := s.admittedCount(ctx, departmentID)
+	if err != nil {
+		return nil, err
+	}
+	budget := dsmodel.LeftoverBudget(dept.ExpectedCount, admitted)
+	// 当前占用（若覆盖旧出价则先扣除旧额）
+	var old dsmodel.Bid
+	oldAmount := 0
+	err = s.db.WithContext(ctx).
+		Where("candidate_id = ? AND department_id = ?", candidateID, departmentID).
+		First(&old).Error
+	if err == nil {
+		oldAmount = old.Amount
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	spent, err := s.deptSpent(ctx, departmentID)
+	if err != nil {
+		return nil, err
+	}
+	if spent-oldAmount+amount > budget {
+		return nil, &Error{Code: "budget_exceeded", Msg: "超出部门剩余预算"}
+	}
+	var bid dsmodel.Bid
+	if oldAmount > 0 {
+		bid = old
+		if err := s.db.WithContext(ctx).Model(&bid).Update("amount", amount).Error; err != nil {
+			return nil, err
+		}
+	} else {
+		bid = dsmodel.Bid{CandidateID: candidateID, DepartmentID: departmentID, Amount: amount}
+		if err := s.db.WithContext(ctx).Create(&bid).Error; err != nil {
+			return nil, err
+		}
+	}
+	ev := &Event{Type: EventLeftoverBid, Data: LeftoverRef{CandidateID: candidateID, DepartmentID: departmentID}}
+	s.emit(0, ev)
+	return ev, nil
+}
+
+// ResolveLeftoverCandidate 结算候选人：最高出价部门录取，其余出价部门放弃。
+// 同额取先出价者（bid id 更小）。幂等保护：已存在 admitted 记录则拒绝。
+func (s *MemStateStore) ResolveLeftoverCandidate(ctx context.Context, candidateID uint64) (*Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.ensureCandidate(ctx, candidateID); err != nil {
+		return nil, err
+	}
+	// 逐个结算仅限捡漏阶段：结算阶段竞拍数据只读，最终结果由 LeftoverFinalResults 计算。
+	st, err := s.ensureSystemStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if st.Phase != dsmodel.SystemPhaseLeftover {
+		return nil, &Error{Code: "not_leftover_phase", Msg: "当前不在捡漏阶段，无法结算"}
+	}
+	// 封盘判定与出价一致：恰好一家 admitted 才视为已确定；多家录取属争议，允许竞拍仲裁。
+	settled, err := s.candidateAdmittedCount(ctx, candidateID)
+	if err != nil {
+		return nil, err
+	}
+	if settled == 1 {
+		return nil, &Error{Code: "already_resolved", Msg: "候选人已确定唯一录取部门"}
+	}
+	bids := []*dsmodel.Bid{}
+	if err := s.db.WithContext(ctx).
+		Where("candidate_id = ?", candidateID).
+		Order("amount desc, id asc").Find(&bids).Error; err != nil {
+		return nil, err
+	}
+	if len(bids) == 0 {
+		return nil, &Error{Code: "no_bids", Msg: "该候选人没有任何部门出价"}
+	}
+	winner := bids[0]
+	for _, b := range bids {
+		status := dsmodel.AdmissionWithdrawn
+		if b.ID == winner.ID {
+			status = dsmodel.AdmissionAdmitted
+		}
+		var rec dsmodel.CandidateAdmission
+		err := s.db.WithContext(ctx).
+			Where("candidate_id = ? AND department_id = ?", candidateID, b.DepartmentID).
+			First(&rec).Error
+		if err == nil {
+			if err := s.db.WithContext(ctx).Model(&rec).Update("status", status).Error; err != nil {
+				return nil, err
+			}
+		} else if errors.Is(err, gorm.ErrRecordNotFound) {
+			rec = dsmodel.CandidateAdmission{CandidateID: candidateID, DepartmentID: b.DepartmentID, Status: status}
+			if err := s.db.WithContext(ctx).Create(&rec).Error; err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
+	}
+	// 仲裁收尾：未参与出价但曾手动录取该候选人的部门（争议来源）一并改为 withdrawn。
+	if err := s.db.WithContext(ctx).Model(&dsmodel.CandidateAdmission{}).
+		Where("candidate_id = ? AND department_id <> ? AND status = ?",
+			candidateID, winner.DepartmentID, dsmodel.AdmissionAdmitted).
+		Update("status", dsmodel.AdmissionWithdrawn).Error; err != nil {
+		return nil, err
+	}
+	// 结算成交 → 候选人推进到已录取（仅对处于录取档/面试已结束的候选人生效）。
+	if err := s.db.WithContext(ctx).Model(&dsmodel.Candidate{}).
+		Where("id = ? AND status IN (?, ?)", candidateID,
+			dsmodel.StatusAdmissionPending, dsmodel.StatusCompleted).
+		Update("status", dsmodel.StatusAdmitted).Error; err != nil {
+		return nil, err
+	}
+	ev := &Event{Type: EventLeftoverResolved, Data: LeftoverRef{CandidateID: candidateID, DepartmentID: winner.DepartmentID, Amount: winner.Amount}}
+	s.emit(0, ev)
+	return ev, nil
+}
+
+// candidateAdmittedCount 统计候选人的 admitted 录取记录数（封盘/争议判定用）。
+func (s *MemStateStore) candidateAdmittedCount(ctx context.Context, candidateID uint64) (int64, error) {
+	var n int64
+	if err := s.db.WithContext(ctx).Model(&dsmodel.CandidateAdmission{}).
+		Where("candidate_id = ? AND status = ?", candidateID, dsmodel.AdmissionAdmitted).
+		Count(&n).Error; err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// LeftoverFinalResults 只读计算各候选人的最终录取结果（不落库）：
+// 每个有出价的候选人取赢家 = 最高出价部门，同额取先出价者（bid id 更小）。
+// 保密语义与出价一致：默认仅返回已成交（Resolved，公开结果）或赢家为本部门的行；
+// exposeAll（candidates.browse_all）才返回全部部门的进行中结果。
+func (s *MemStateStore) LeftoverFinalResults(ctx context.Context, myDepartmentID *uint64, exposeAll bool) ([]*dsmodel.LeftoverFinalResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	bids := []*dsmodel.Bid{}
+	if err := s.db.WithContext(ctx).Order("id asc").Find(&bids).Error; err != nil {
+		return nil, err
+	}
+	winner := map[uint64]*dsmodel.Bid{} // candidate → 当前赢家（金额最高，同额取先出价者）
+	for _, b := range bids {
+		if w, ok := winner[b.CandidateID]; !ok || b.Amount > w.Amount {
+			winner[b.CandidateID] = b
+		}
+	}
+	out := make([]*dsmodel.LeftoverFinalResult, 0, len(winner))
+	for _, w := range winner {
+		row := &dsmodel.LeftoverFinalResult{CandidateID: w.CandidateID, DepartmentID: w.DepartmentID, Amount: w.Amount}
+		// Resolved = 候选人已唯一确定录取且赢家正是该部门（争议候选人未经仲裁不算）
+		total, err := s.candidateAdmittedCount(ctx, w.CandidateID)
+		if err != nil {
+			return nil, err
+		}
+		var own int64
+		if total == 1 {
+			if err := s.db.WithContext(ctx).Model(&dsmodel.CandidateAdmission{}).
+				Where("candidate_id = ? AND department_id = ? AND status = ?",
+					w.CandidateID, w.DepartmentID, dsmodel.AdmissionAdmitted).
+				Count(&own).Error; err != nil {
+				return nil, err
+			}
+		}
+		row.Resolved = own > 0
+		// 保密过滤：未成交且赢家非本部门 → 不返回（金额对他部门保密）
+		if !exposeAll && !row.Resolved &&
+			(myDepartmentID == nil || w.DepartmentID != *myDepartmentID) {
+			continue
+		}
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CandidateID < out[j].CandidateID })
+	return out, nil
+}
+
+// ListLeftoverResults 返回已结算候选人的赢家与成交金额。
+// 已结算 = 恰好一家部门 admitted（录取唯一确定）；多家录取的争议候选人不在此列，
+// 需经捡漏出价仲裁（ResolveLeftoverCandidate）后才产生结果。
+func (s *MemStateStore) ListLeftoverResults(ctx context.Context) ([]*dsmodel.LeftoverResult, error) {
+	admissions := []*dsmodel.CandidateAdmission{}
+	if err := s.db.WithContext(ctx).
+		Where("status = ?", dsmodel.AdmissionAdmitted).
+		Order("candidate_id asc").Find(&admissions).Error; err != nil {
+		return nil, err
+	}
+	counts := map[uint64]int{} // candidate → admitted 部门数
+	for _, a := range admissions {
+		counts[a.CandidateID]++
+	}
+	out := []*dsmodel.LeftoverResult{}
+	for _, a := range admissions {
+		if counts[a.CandidateID] != 1 {
+			continue // 争议（≥2 家录取）：进捡漏，不算已结算
+		}
+		var bid dsmodel.Bid
+		amount := 0
+		err := s.db.WithContext(ctx).
+			Where("candidate_id = ? AND department_id = ?", a.CandidateID, a.DepartmentID).
+			First(&bid).Error
+		if err == nil {
+			amount = bid.Amount
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		out = append(out, &dsmodel.LeftoverResult{
+			CandidateID: a.CandidateID, DepartmentID: a.DepartmentID,
+			Amount: amount, UpdatedAt: a.UpdatedAt,
+		})
+	}
+	return out, nil
 }
 
 //---- 房间管理 ----

@@ -6,7 +6,7 @@ import "time"
 const (
 	PermUsersManage         = "users.manage"          // 面试官/角色管理
 	PermCandidatesManage    = "candidates.manage"     // 编辑/删除候选人、重置状态
-	PermCandidatesBrowseAll = "candidates.browse_all" // 跨部门浏览候选人录取状态
+	PermCandidatesBrowseAll = "candidates.browse_all" // 跨部门浏览候选人录取状态与捡漏出价
 	PermCandidatesCreate    = "candidates.create"     // 新建候选人
 	PermCandidatesCheckin   = "candidates.checkin"    // 候选人签到
 	PermCandidatesAssign    = "candidates.assign"     // 拉取候选人进房

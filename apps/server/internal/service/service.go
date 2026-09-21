@@ -145,6 +145,11 @@ func (s *InterviewService) SetSystemStatus(ctx context.Context, phase dsmodel.Sy
 	return s.store.SetSystemStatus(ctx, phase)
 }
 
+// SetBidStep 设置出价步长（管理面板）。
+func (s *InterviewService) SetBidStep(ctx context.Context, step int) error {
+	return s.store.SetBidStep(ctx, step)
+}
+
 // ---- 候选人管理 ----
 
 // UpdateCandidate 编辑候选人姓名/简介。先落库后广播。
@@ -239,4 +244,46 @@ func (s *InterviewService) RemoveRoomMember(ctx context.Context, roomID, userID 
 	}
 	s.broad.Publish(ev)
 	return nil
+}
+
+// ---- 捡漏竞拍 ----
+
+// LeftoverFinalResults 结算阶段最终录取结果（只读计算；默认仅本部门/已成交可见，exposeAll 全量）。
+func (s *InterviewService) LeftoverFinalResults(ctx context.Context, myDepartmentID *uint64, exposeAll bool) ([]*dsmodel.LeftoverFinalResult, error) {
+	return s.store.LeftoverFinalResults(ctx, myDepartmentID, exposeAll)
+}
+
+// LeftoverOverview 捡漏总览（exposeAll=true 时全部门 spent/remaining 公开，管理端用）。
+func (s *InterviewService) LeftoverOverview(ctx context.Context, myDepartmentID *uint64, exposeAll bool) (*dsmodel.LeftoverOverview, error) {
+	return s.store.LeftoverOverview(ctx, myDepartmentID, exposeAll)
+}
+
+// ListLeftoverBids 返回出价列表（departmentID 为 nil 时跨部门，管理端查看；否则仅本部门）。
+func (s *InterviewService) ListLeftoverBids(ctx context.Context, departmentID *uint64) ([]*dsmodel.Bid, error) {
+	return s.store.ListLeftoverBids(ctx, departmentID)
+}
+
+// UpsertLeftoverBid 记录/覆盖本部门出价。先落库后广播。
+func (s *InterviewService) UpsertLeftoverBid(ctx context.Context, candidateID, departmentID uint64, amount int) error {
+	ev, err := s.store.UpsertLeftoverBid(ctx, candidateID, departmentID, amount)
+	if err != nil {
+		return err
+	}
+	s.broad.Publish(ev)
+	return nil
+}
+
+// ResolveLeftoverCandidate 结算候选人：最高出价部门录取。先落库后广播。
+func (s *InterviewService) ResolveLeftoverCandidate(ctx context.Context, candidateID uint64) (*state.Event, error) {
+	ev, err := s.store.ResolveLeftoverCandidate(ctx, candidateID)
+	if err != nil {
+		return nil, err
+	}
+	s.broad.Publish(ev)
+	return ev, nil
+}
+
+// ListLeftoverResults 返回已结算候选人的赢家与成交金额。
+func (s *InterviewService) ListLeftoverResults(ctx context.Context) ([]*dsmodel.LeftoverResult, error) {
+	return s.store.ListLeftoverResults(ctx)
 }

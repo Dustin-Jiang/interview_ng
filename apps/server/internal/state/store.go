@@ -87,8 +87,10 @@ type StateStore interface {
 
 	// GetSystemStatus 返回当前系统阶段（面试/录取/捡漏）。
 	GetSystemStatus(ctx context.Context) (*dsmodel.SystemStatus, error)
-	// SetSystemStatus 切换系统阶段（仅面试/录取/捡漏三档）。
+	// SetSystemStatus 切换系统阶段（仅面试/录取/捡漏/结算四档）。
 	SetSystemStatus(ctx context.Context, phase dsmodel.SystemPhase) error
+	// SetBidStep 设置出价步长（≥1）。
+	SetBidStep(ctx context.Context, step int) error
 
 	// ---- 候选人管理 ----
 
@@ -106,6 +108,29 @@ type StateStore interface {
 	ListCandidateAdmissions(ctx context.Context, departmentID *uint64) ([]*dsmodel.CandidateAdmission, error)
 	// UpsertCandidateAdmission 记录/更新某部门对候选人的录取决定（按 candidate+department upsert）。
 	UpsertCandidateAdmission(ctx context.Context, candidateID, departmentID uint64, status dsmodel.AdmissionStatus) error
+
+	// ---- 捡漏阶段（按预算竞拍） ----
+
+	// LeftoverOverview 返回捡漏总览：各部门预算。
+	// myDepartmentID 为当前用户部门（nil 表示无部门，my 返回 nil）；
+	// exposeAll 为 true 时所有部门的 spent/remaining 公开（持 candidates.browse_all 的管理端），
+	// 否则仅本部门可见（出价保密）。
+	LeftoverOverview(ctx context.Context, myDepartmentID *uint64, exposeAll bool) (*dsmodel.LeftoverOverview, error)
+	// ListLeftoverBids 返回出价列表：departmentID 为 nil 时返回全部部门（管理端跨部门查看），
+	// 否则仅返回指定部门。
+	ListLeftoverBids(ctx context.Context, departmentID *uint64) ([]*dsmodel.Bid, error)
+	// UpsertLeftoverBid 记录/覆盖本部门对候选人的出价（仅捡漏阶段、受剩余预算约束）。
+	// 返回事件（载荷 LeftoverRef，不含金额）。
+	UpsertLeftoverBid(ctx context.Context, candidateID, departmentID uint64, amount int) (*Event, error)
+	// ResolveLeftoverCandidate 结算候选人：最高出价部门录取（admitted），其余出价部门 withdrawn。
+	// 返回结算事件（载荷 LeftoverRef：赢家部门与成交金额）。
+	ResolveLeftoverCandidate(ctx context.Context, candidateID uint64) (*Event, error)
+	// LeftoverFinalResults 只读计算各候选人的最终录取结果（赢家 = 最高出价部门，
+	// 同额取先出价者；Resolved 标记是否已正式落库）。
+	// 保密语义与出价一致：默认仅返回已成交或赢家为本部门的行；exposeAll 全量。
+	LeftoverFinalResults(ctx context.Context, myDepartmentID *uint64, exposeAll bool) ([]*dsmodel.LeftoverFinalResult, error)
+	// ListLeftoverResults 返回全部已结算候选人的赢家与成交金额（全员可见）。
+	ListLeftoverResults(ctx context.Context) ([]*dsmodel.LeftoverResult, error)
 
 	// ---- 房间管理 ----
 

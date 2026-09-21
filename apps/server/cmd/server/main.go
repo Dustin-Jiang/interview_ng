@@ -35,7 +35,7 @@ func main() {
 		&dsmodel.User{}, &dsmodel.Candidate{}, &dsmodel.Room{},
 		&dsmodel.RoomMember{}, &dsmodel.Message{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
-		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{},
+		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
 	); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}

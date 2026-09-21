@@ -93,10 +93,19 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 | `rooms` | id, candidate_id(可空) | 房间 = 独立物理会议室记录，`candidate_id` 可空；无状态机、无主持人，"状态"= 候选人状态的查询投影 |
 | `room_members` | room_id, user_id（`idx_room_user` 唯一） | 房间成员，一次一活跃房间 |
 | `messages` | id, candidate_id, sender_id(可空), content | 群聊记录（长存），**按候选人归属**，`id` 即候选人维度续传游标 |
-| `system_status` | id=1(单行), phase(interview/admission) | 系统状态：当前面试阶段 / 录取阶段，管理端可切换 |
+| `system_status` | id=1(单行), phase(interview/admission/leftover/settlement) | 系统状态：当前面试 / 录取 / 捡漏 / 结算阶段，管理端可切换 |
 | `candidate_admissions` | candidate_id + department_id（联合唯一）, status(pending/admitted/withdrawn) | 各部门对候选人的录取决定（候选人无固定部门，按部门分别记） |
+| `bids` | candidate_id + department_id（联合唯一）, amount | 捡漏阶段部门出价（candidate+department 唯一；金额对其他部门保密、事件不带金额，持 `candidates.browse_all` 的管理端跨部门可见） |
 
-权限目录（10 枚）：`users.manage`、`candidates.manage`、`candidates.browse_all`（跨部门浏览录取状态）、`candidates.create`、`candidates.checkin`、`candidates.assign`、`rooms.view`、`rooms.chat`、`rooms.move_phase`、`rooms.manage`。预置角色：`admin`（全部）、`interviewer`（6 枚流程权限，不含录取状态浏览/记录）。
+权限目录（11 枚）：`users.manage`、`candidates.manage`、`candidates.browse_all`（跨部门浏览录取状态与捡漏出价）、`candidates.create`、`candidates.checkin`、`candidates.assign`、`rooms.view`、`rooms.chat`、`rooms.move_phase`、`rooms.manage`、`admissions.record`（记录本部门录取决定/捡漏出价）。预置角色：`admin`（全部）、`interviewer`（6 枚流程权限，不含录取状态浏览/记录）。
+
+**捡漏阶段**（`phase=leftover`）：各部门按预算竞拍补录候选人。预算 = `max(500, (预期人数 − 已确认录取人数) × 100)`（已结算赢家的出价随录取释放，不重复占用）；出价受剩余预算约束（`PUT /api/leftover/bids`），各部门间出价金额互不可见、持 `candidates.browse_all` 的管理端可见全部门出价与各部门预算占用；管理端 `POST /api/leftover/candidates/:id/resolve` 结算：最高出价部门录取（admitted），其余出价部门 withdrawn，结果经 `GET /api/leftover/results` 公开。
+
+**结算阶段**（`phase=settlement`）：竞拍数据只读——出价（`PUT /api/leftover/bids`）与逐个结算（`resolve`）均被拒绝（`not_leftover_phase`）；最终录取结果由出价只读计算（`GET /api/leftover/final`）：每个有出价的候选人取赢家 = 最高出价部门、同额取先出价者，`resolved` 标记该结果是否已正式落库（正式结算须回捡漏阶段执行）。
+
+**录取争议仲裁**：已结算 = 恰好一家部门 admitted（唯一录取确定，封盘）；0 家未定可竞拍；≥2 家同时录取属争议——该候选人不算已结算、自动进入捡漏竞拍，`POST /api/leftover/candidates/:id/resolve` 结算时最高出价部门录取，其余部门（含未出价的手动录取记录）一律改 withdrawn。
+
+**阶段切换同步**：切换到 捡漏/结算 阶段时批量同步录取档状态——恰好一家 admitted（唯一录取确定）→ `ADMITTED`（已录取）；其余（未定/争议/无决定）→ `ADMISSION_PENDING`（待录取）；未完成候选人不动。捡漏逐个结算成交后，该候选人也推进到 `ADMITTED`。
 
 ---
 
@@ -126,6 +135,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 ```
 
 > `seq` 全局单调事件序；`msg_id` 为**候选人维度**续传游标——消息按候选人归属，候选人换房后历史随人走。空房间（无候选人）可入房但 `send_msg` 会被拒。
+> 捡漏类事件：`leftover_bid`（出价变更，载荷 `{CandidateID, DepartmentID}`，**不含金额**）、`leftover_resolved`（结算，载荷 `{CandidateID, DepartmentID, Amount}`）——均全局扇出。
 >
 > 事件类型：`candidate_signed_in`（全局）、`candidate_assigned`、`room_phase_changed`、`message_appended`、`member_joined/left`（以上带 room_id）、`candidate_created/updated/deleted` 与 `room_created/deleted`（全局，载荷 `{CandidateID}` / `{RoomID}`）。
 
@@ -177,6 +187,10 @@ pnpm dev                      # http://localhost:8000 （vite 已把 /api 与 /w
 - `POST /api/rooms/:id/pull_candidate` `{candidate_id}`（**拉取式分配**：候选人从待分配池被拉入房间，取代旧的 `POST /api/candidates/:id/assign`）
 - `GET/POST /api/users`、`PUT/DELETE /api/users/:id`、`POST /api/users/:id/reset_password`（`users.manage`）
 - `GET/POST /api/roles`、`PUT/DELETE /api/roles/:id`（`users.manage`，角色管理）
+- `GET /api/leftover/overview`（捡漏总览：各部门预算，spent/remaining 默认仅本部门可见、`browse_all` 全可见）、`GET /api/leftover/bids`（默认本部门出价，`browse_all` 返回全部门）
+- `PUT /api/leftover/bids` `{candidate_id, amount}`（出价/改价，`admissions.record`，仅捡漏阶段、受剩余预算约束）
+- `GET /api/leftover/results`（已结算赢家与成交金额，全员可见）、`POST /api/leftover/candidates/:id/resolve`（结算，`candidates.manage`）
+- `GET /api/leftover/final`（由出价只读计算的最终录取结果；保密语义与出价一致——默认仅已成交或本部门的进行中出价可见，`candidates.browse_all` 全量）
 - `GET  /ws/room/:roomId`（房间通道，连接后首条 `auth` 消息）
 - `GET  /ws/board`（看板通道，扇出全部业务事件供列表页实时刷新）
 

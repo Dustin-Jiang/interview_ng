@@ -413,7 +413,7 @@ func TestUpdateUserUsername(t *testing.T) {
 	_ = uidB
 }
 
-// TestSystemStatusPhaseSwitch 系统状态：默认面试阶段，可在面试/录取/捡漏三档间切换，非法阶段拒绝。
+// TestSystemStatusPhaseSwitch 系统状态：默认面试阶段，可在面试/录取/捡漏/结算四档间切换，非法阶段拒绝。
 func TestSystemStatusPhaseSwitch(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
@@ -457,6 +457,29 @@ func TestSystemStatusPhaseSwitch(t *testing.T) {
 	// 非法阶段拒绝
 	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhase("bogus")); err == nil {
 		t.Fatalf("expected invalid_phase error")
+	}
+}
+
+func TestBidStepSetting(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	st0, err := st.GetSystemStatus(ctx)
+	if err != nil {
+		t.Fatalf("get status: %v", err)
+	}
+	if st0.BidStep != dsmodel.DefaultBidStep {
+		t.Fatalf("default bid step=%d, want %d", st0.BidStep, dsmodel.DefaultBidStep)
+	}
+	if err := st.SetBidStep(ctx, 50); err != nil {
+		t.Fatalf("set bid step: %v", err)
+	}
+	st1, _ := st.GetSystemStatus(ctx)
+	if st1.BidStep != 50 {
+		t.Fatalf("bid step=%d, want 50", st1.BidStep)
+	}
+	if err := st.SetBidStep(ctx, 0); err == nil {
+		t.Fatalf("expected invalid_bid_step")
 	}
 }
 

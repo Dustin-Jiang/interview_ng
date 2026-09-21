@@ -38,7 +38,7 @@ func newTestApp(t *testing.T) *gin.Engine {
 		&dsmodel.User{}, &dsmodel.Candidate{}, &dsmodel.Room{},
 		&dsmodel.RoomMember{}, &dsmodel.Message{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
-		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{},
+		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -918,4 +918,123 @@ func TestBoardChannelAuthAndEvents(t *testing.T) {
 	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID), `{"name":"张三丰","profile":""}`, token)
 	doJSON(t, r, "DELETE", "/api/candidates/"+itoa(candID), "", token)
 	readEventsUntil(t, conn, "candidate_updated", "candidate_deleted")
+}
+
+// TestLeftoverBiddingEndpoints 捡漏竞拍 HTTP 契约：
+// 出价需 admissions.record 且仅捡漏阶段；预算约束；出价保密为本部门；结算需 candidates.manage。
+func TestLeftoverBiddingEndpoints(t *testing.T) {
+	r := newTestApp(t)
+
+	_, out := doJSON(t, r, "POST", "/api/auth/login", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	// 两个部门：A 预期 20 人（预算 2000），B 预期 0（预算下限 500）
+	_, out = doJSON(t, r, "POST", "/api/departments", `{"name":"A组","expected_count":20}`, token)
+	deptA := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/departments", `{"name":"B组","expected_count":0}`, token)
+	deptB := int(out["id"].(float64))
+
+	// 出价角色 + 两名分属两部门的出价人
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"bidder","description":"","permissions":["admissions.record","rooms.view"]}`, token)
+	roleBid := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"bidA","name":"bidA","password":"pass","role_ids":[`+itoa(roleBid)+`],"department_id":`+itoa(deptA)+`}`, token)
+	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"bidB","name":"bidB","password":"pass","role_ids":[`+itoa(roleBid)+`],"department_id":`+itoa(deptB)+`}`, token)
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"bidA","password":"pass"}`, "")
+	tokenA := out["token"].(string)
+	_, out = doJSON(t, r, "POST", "/api/auth/login", `{"username":"bidB","password":"pass"}`, "")
+	tokenB := out["token"].(string)
+
+	// 候选人 + 切到捡漏阶段
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"name":"张三"}`, token)
+	cand := int(out["id"].(float64))
+	if code, _ := doJSON(t, r, "PUT", "/api/system/status", `{"phase":"leftover"}`, token); code != http.StatusOK {
+		t.Fatalf("set phase failed")
+	}
+
+	// A 出 800 → 200；B 预算 500 出 600 → 400 budget_exceeded
+	if code, out := doJSON(t, r, "PUT", "/api/leftover/bids", `{"candidate_id":`+itoa(cand)+`,"amount":800}`, tokenA); code != http.StatusOK {
+		t.Fatalf("bidA: got %d %v", code, out)
+	}
+	if code, _ := doJSON(t, r, "PUT", "/api/leftover/bids", `{"candidate_id":`+itoa(cand)+`,"amount":600}`, tokenB); code != http.StatusBadRequest {
+		t.Fatalf("bidB over budget: got %d", code)
+	}
+
+	// 出价保密：B 只能看到自己的出价（此处为空）
+	code, out := doJSON(t, r, "GET", "/api/leftover/bids", "", tokenB)
+	if code != http.StatusOK {
+		t.Fatalf("bids B: got %d", code)
+	}
+	if items, _ := out["items"].([]any); len(items) != 0 {
+		t.Fatalf("B must not see A's bid: %v", out)
+	}
+
+	// 总览：A 的 my 预算 2000/已出 800/剩 1200；B 部门 spent 保密为 null
+	code, out = doJSON(t, r, "GET", "/api/leftover/overview", "", tokenA)
+	if code != http.StatusOK {
+		t.Fatalf("overview: got %d", code)
+	}
+	my := out["my"].(map[string]any)
+	if my["budget"].(float64) != 2000 || my["spent"].(float64) != 800 || my["remaining"].(float64) != 1200 {
+		t.Fatalf("my=%v", my)
+	}
+	for _, d := range out["departments"].([]any) {
+		dm := d.(map[string]any)
+		if int(dm["id"].(float64)) == deptB && dm["spent"] != nil {
+			t.Fatalf("deptB spent leaked: %v", dm)
+		}
+	}
+
+	// 管理端（browse_all）：跨部门出价与全部部门 spent 可见
+	code, out = doJSON(t, r, "GET", "/api/leftover/bids", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("admin bids: got %d", code)
+	}
+	all := out["items"].([]any)
+	if len(all) != 1 {
+		t.Fatalf("admin should see all dept bids: %v", out)
+	}
+	if b := all[0].(map[string]any); int(b["department_id"].(float64)) != deptA || b["amount"].(float64) != 800 {
+		t.Fatalf("admin bids[0]=%v", b)
+	}
+	code, out = doJSON(t, r, "GET", "/api/leftover/overview", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("admin overview: got %d", code)
+	}
+	if out["my"] != nil {
+		t.Fatalf("admin has no dept, my must be nil: %v", out["my"])
+	}
+	for _, d := range out["departments"].([]any) {
+		dm := d.(map[string]any)
+		if dm["spent"] == nil {
+			t.Fatalf("admin must see spent for all depts: %v", dm)
+		}
+		if int(dm["id"].(float64)) == deptA && dm["spent"].(float64) != 800 {
+			t.Fatalf("deptA spent=%v", dm["spent"])
+		}
+	}
+
+	// 无 candidates.manage 结算 → 403；admin 结算 → 赢家 A 800
+	if code, _ := doJSON(t, r, "POST", "/api/leftover/candidates/"+itoa(cand)+"/resolve", "", tokenA); code != http.StatusForbidden {
+		t.Fatalf("bidder resolve: got %d", code)
+	}
+	code, out = doJSON(t, r, "POST", "/api/leftover/candidates/"+itoa(cand)+"/resolve", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("resolve: got %d %v", code, out)
+	}
+	if out["department_id"].(float64) != float64(deptA) || out["amount"].(float64) != 800 {
+		t.Fatalf("resolve result=%v", out)
+	}
+
+	// 结算后封盘；结果公开
+	if code, _ := doJSON(t, r, "PUT", "/api/leftover/bids", `{"candidate_id":`+itoa(cand)+`,"amount":100}`, tokenB); code != http.StatusBadRequest {
+		t.Fatalf("bid after resolve: got %d", code)
+	}
+	code, out = doJSON(t, r, "GET", "/api/leftover/results", "", tokenB)
+	if code != http.StatusOK {
+		t.Fatalf("results: got %d", code)
+	}
+	items, _ := out["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("results=%v", out)
+	}
 }
