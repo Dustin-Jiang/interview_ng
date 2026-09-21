@@ -1,7 +1,8 @@
 /**
  * useLeftover —— 捡漏竞拍的 ViewModel 组合式函数（函数式）。
  * 自管理四份异步资源（总览 / 本部门出价 / 结算结果 / 候选人池）＋ 派生的索引映射，
- * 以及出价行内草稿、结算确认流程与阶段/权限判定；视图只做渲染与筛选展示。
+ * 以及出价行内草稿与阶段/权限判定；视图只做渲染与筛选展示。
+ * 结算不在本页触发：进入「结算阶段」时后端按出价自动结算全部竞拍。
  */
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { toast } from 'vue-sonner'
@@ -51,18 +52,14 @@ export interface UseLeftover {
   // 阶段与权限
   readonly phaseLabel: ComputedRef<string>
   readonly isLeftoverPhase: ComputedRef<boolean>
-  readonly canManage: ComputedRef<boolean>
   readonly canBrowseAll: ComputedRef<boolean>
   readonly canBid: ComputedRef<boolean>
-  // 出价
   /** 出价步长（系统状态，默认 10）。 */
   readonly bidStep: Ref<number>
   /** 出价草稿（candidate_id → 金额）。 */
   readonly drafts: Ref<Record<number, number | null>>
   readonly savingId: Ref<number | null>
   saveBid: (candidate: Candidate) => Promise<void>
-  /** 结算某候选人（最高出价成交 + 重拉全页）。 */
-  resolveCandidate: (target: Candidate) => Promise<void>
 }
 
 export function useLeftover(): UseLeftover {
@@ -144,7 +141,6 @@ export function useLeftover(): UseLeftover {
   const phase = computed(() => overview.value?.phase)
   const phaseLabel = computed(() => (phase.value ? PHASE_PRESENTATION[phase.value].label : '-'))
   const isLeftoverPhase = computed(() => phase.value === 'leftover')
-  const canManage = computed(() => hasPermission(PERMISSIONS.CANDIDATES_MANAGE))
   /** 可出价：持 admissions.record + 已分配部门 + 处于捡漏阶段（与后端前置校验一致）。 */
   const canBid = computed(
     () => hasPermission(PERMISSIONS.ADMISSIONS_RECORD) && !!overview.value?.my && isLeftoverPhase.value,
@@ -184,13 +180,6 @@ export function useLeftover(): UseLeftover {
     }
   }
 
-  // ---- 结算（candidates.manage，仅捡漏阶段）：取最高出价成交 ----
-  async function resolveCandidate(target: Candidate): Promise<void> {
-    const r = await leftoverApi.resolve(target.id)
-    toast.success(`「${target.name}」已结算：${deptName(r.department_id)} · ${r.amount}`)
-    await reloadAll()
-  }
-
   return {
     overview,
     overviewError: overviewAsync.error,
@@ -206,13 +195,11 @@ export function useLeftover(): UseLeftover {
     reloadAll,
     phaseLabel,
     isLeftoverPhase,
-    canManage,
     canBrowseAll,
     canBid,
     bidStep,
     drafts,
     savingId,
     saveBid,
-    resolveCandidate,
   }
 }

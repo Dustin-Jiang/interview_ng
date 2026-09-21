@@ -83,13 +83,12 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	authed.GET("/admissions", h.listAdmissions)
 	authed.PUT("/admissions/:candidateId", h.require(dsmodel.PermAdmissionRecord), h.upsertCandidateAdmission)
 
-	// 捡漏竞拍（浏览任意登录；出价需 admissions.record 且仅本部门可见；结算需 candidates.manage）
+	// 捡漏竞拍（浏览任意登录；出价需 admissions.record 且仅本部门可见；结算由「进入结算阶段」自动触发）
 	authed.GET("/leftover", h.leftoverOverview)
 	authed.GET("/leftover/bids", h.listLeftoverBids)
 	authed.GET("/leftover/projections", h.leftoverFinal)
 	authed.PUT("/leftover/bids/:candidateId", h.require(dsmodel.PermAdmissionRecord), h.upsertLeftoverBid)
 	authed.GET("/leftover/results", h.leftoverResults)
-	authed.POST("/leftover/results", h.require(dsmodel.PermCandidatesManage), h.resolveLeftover)
 }
 
 //---- 认证 ----
@@ -829,27 +828,6 @@ func (h *HTTPServer) upsertLeftoverBid(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-type resolveLeftoverReq struct {
-	CandidateID uint64 `json:"candidate_id"`
-}
-
-// resolveLeftover 结算候选人：最高出价部门录取（需 candidates.manage）。
-func (h *HTTPServer) resolveLeftover(c *gin.Context) {
-	var req resolveLeftoverReq
-	if err := c.ShouldBindJSON(&req); err != nil || req.CandidateID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
-		return
-	}
-	ev, err := h.svc.ResolveLeftoverCandidate(c.Request.Context(), req.CandidateID)
-	if err != nil {
-		status, msg := stateErr(err)
-		c.JSON(status, gin.H{"error": msg})
-		return
-	}
-	ref, _ := ev.Data.(state.LeftoverRef)
-	c.JSON(http.StatusOK, gin.H{"candidate_id": ref.CandidateID, "department_id": ref.DepartmentID, "amount": ref.Amount})
 }
 
 // leftoverResults 已结算候选人的赢家与成交金额（全员可见）。

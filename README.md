@@ -99,13 +99,13 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 权限目录（11 枚）：`users.manage`、`candidates.manage`、`candidates.browse_all`（跨部门浏览录取状态与捡漏出价）、`candidates.create`、`candidates.checkin`、`candidates.assign`、`rooms.view`、`rooms.chat`、`rooms.move_phase`、`rooms.manage`、`admissions.record`（记录本部门录取决定/捡漏出价）。预置角色：`admin`（全部）、`interviewer`（6 枚流程权限，不含录取状态浏览/记录）。
 
-**捡漏阶段**（`phase=leftover`）：各部门按预算竞拍补录候选人。预算 = `max(500, (预期人数 − 已确认录取人数) × 100)`（已结算赢家的出价随录取释放，不重复占用）；出价受剩余预算约束（`PUT /api/leftover/bids/:candidateId`），各部门间出价金额互不可见、持 `candidates.browse_all` 的管理端可见全部门出价与各部门预算占用；管理端 `POST /api/leftover/results` `{candidate_id}` 结算：最高出价部门录取（admitted），其余出价部门 withdrawn，结果经 `GET /api/leftover/results` 公开。
+**捡漏阶段**（`phase=leftover`）：各部门按预算竞拍补录候选人。预算 = `max(500, (预期人数 − 已确认录取人数) × 100)`（已结算赢家的出价随录取释放，不重复占用）；出价受剩余预算约束（`PUT /api/leftover/bids/:candidateId`），各部门间出价金额互不可见、持 `candidates.browse_all` 的管理端可见全部门出价与各部门预算占用；`GET /api/leftover/results` 公开已结算的赢家与成交金额。
 
-**结算阶段**（`phase=settlement`）：竞拍数据只读——出价（`PUT /api/leftover/bids/:candidateId`）与逐个结算（`POST /api/leftover/results`）均被拒绝（`not_leftover_phase`）；最终录取结果由出价只读计算（`GET /api/leftover/projections`）：每个有出价的候选人取赢家 = 最高出价部门、同额取先出价者，`resolved` 标记该结果是否已正式落库（正式结算须回捡漏阶段执行）。
+**结算阶段**（`phase=settlement`，进入即自动结算）：切换到结算阶段时后端自动把**全部有出价的竞拍按出价结算落库**——每个候选人最高出价部门录取（admitted）、其余出价部门 withdrawn，随后**归一化候选人状态**（唯一录取确定 → `ADMITTED`，其余录取档 → `ADMISSION_PENDING`），并 emit `leftover_resolved`。该过程**幂等**（已在库的唯一录取封盘 / 无出价者跳过，不重复成交、不重复广播）；结算时可逆地切回捡漏阶段继续出价/改价，再进结算阶段按最新出价重算。结算阶段竞拍数据只读——出价（`PUT /api/leftover/bids/:candidateId`）被拒绝（`not_leftover_phase`），手动逐个结算入口**已移除**（`POST /api/leftover/results` 不再存在）。`GET /api/leftover/projections` 保留为**未结算前的只读预演/校验**：由当前出价计算每个候选人的赢家与成交额，`resolved` 标记该结果是否已正式落库（与结算结果对照可用于自检）。
 
-**录取争议仲裁**：已结算 = 恰好一家部门 admitted（唯一录取确定，封盘）；0 家未定可竞拍；≥2 家同时录取属争议——该候选人不算已结算、自动进入捡漏竞拍，`POST /api/leftover/results` 结算时最高出价部门录取，其余部门（含未出价的手动录取记录）一律改 withdrawn。
+**录取争议仲裁**：已结算 = 恰好一家部门 admitted（唯一录取确定，封盘）；0 家未定可竞拍；≥2 家同时录取属争议——该候选人不算已结算、自动进入捡漏竞拍，进入结算阶段按出价自动仲裁：最高出价部门录取（admitted），其余部门（含未出价的手动录取记录）一律改 withdrawn。
 
-**阶段切换同步**：切换到 捡漏/结算 阶段时批量同步录取档状态——恰好一家 admitted（唯一录取确定）→ `ADMITTED`（已录取）；其余（未定/争议/无决定）→ `ADMISSION_PENDING`（待录取）；未完成候选人不动。捡漏逐个结算成交后，该候选人也推进到 `ADMITTED`。
+**阶段切换同步**：切换到 捡漏/结算 阶段时批量同步录取档状态——恰好一家 admitted（唯一录取确定）→ `ADMITTED`（已录取）；其余（未定/争议/无决定）→ `ADMISSION_PENDING`（待录取）；未完成候选人不动。切换到结算阶段时**先按出价结算全部竞拍落库、再同步状态**，故自动成交的候选人随之推进到 `ADMITTED`。
 
 ---
 
@@ -193,8 +193,8 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 - `GET /api/system/status`（读取当前阶段，任意登录）、`PATCH /api/system/status` `{phase?, bid_step?}`（切换阶段 / 出价步长，`users.manage`，两项至少给一项）
 - `GET /api/leftover`（捡漏总览：各部门预算，spent/remaining 默认仅本部门可见、`browse_all` 全可见）、`GET /api/leftover/bids`（默认本部门出价，`browse_all` 返回全部门）
 - `PUT /api/leftover/bids/:candidateId` `{amount}`（出价/改价，`admissions.record`，仅捡漏阶段、受剩余预算约束）
-- `GET /api/leftover/results`（已结算赢家与成交金额，全员可见）、`POST /api/leftover/results` `{candidate_id}`（结算，`candidates.manage`）
-- `GET /api/leftover/projections`（由出价只读计算的最终录取结果；保密语义与出价一致——默认仅已成交或本部门的进行中出价可见，`candidates.browse_all` 全量）
+- `GET /api/leftover/results`（已结算赢家与成交金额，全员可见；结算由切换到结算阶段自动触发）
+- `GET /api/leftover/projections`（未结算前的只读预演：由出价计算的最终录取结果；保密语义与出价一致——默认仅已成交或本部门的进行中出价可见，`candidates.browse_all` 全量）
 - `GET  /ws/rooms/:roomId`（房间通道，连接后首条 `auth` 消息）
 - `GET  /ws/board`（看板通道，扇出全部业务事件供列表页实时刷新）
 

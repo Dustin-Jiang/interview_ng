@@ -702,12 +702,20 @@ func (s *MemStateStore) SetSystemStatus(ctx context.Context, phase dsmodel.Syste
 	if !phase.Valid() {
 		return &Error{Code: "invalid_phase", Msg: "非法系统阶段"}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, err := s.ensureSystemStatus(ctx); err != nil {
 		return err
 	}
 	if err := s.db.WithContext(ctx).Model(&dsmodel.SystemStatus{}).Where("id = ?", systemStatusID).
 		Update("phase", phase).Error; err != nil {
 		return err
+	}
+	// 进入结算阶段：先按出价批量结算全部竞拍（幂等，先落库），再归一化候选人状态。
+	if phase == dsmodel.SystemPhaseSettlement {
+		if err := s.settleLeftoverAllLocked(ctx); err != nil {
+			return err
+		}
 	}
 	// 切换到捡漏/结算阶段时，批量同步录取档状态（唯一录取确定 → 已录取，其余 → 待录取）。
 	if phase == dsmodel.SystemPhaseLeftover || phase == dsmodel.SystemPhaseSettlement {
@@ -1065,29 +1073,33 @@ func (s *MemStateStore) UpsertLeftoverBid(ctx context.Context, candidateID, depa
 	return ev, nil
 }
 
-// ResolveLeftoverCandidate 结算候选人：最高出价部门录取，其余出价部门放弃。
-// 同额取先出价者（bid id 更小）。幂等保护：已存在 admitted 记录则拒绝。
-func (s *MemStateStore) ResolveLeftoverCandidate(ctx context.Context, candidateID uint64) (*Event, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := s.ensureCandidate(ctx, candidateID); err != nil {
-		return nil, err
+// settleLeftoverAllLocked 结算当前全部有出价的候选人（进入结算阶段时调用，幂等）。
+// 按 candidate_id 升序保证事件顺序稳定；任一错误立即返回。调用方须持 s.mu。
+func (s *MemStateStore) settleLeftoverAllLocked(ctx context.Context) error {
+	var ids []uint64
+	if err := s.db.WithContext(ctx).Model(&dsmodel.Bid{}).
+		Distinct().Order("candidate_id asc").Pluck("candidate_id", &ids).Error; err != nil {
+		return err
 	}
-	// 逐个结算仅限捡漏阶段：结算阶段竞拍数据只读，最终结果由 LeftoverFinalResults 计算。
-	st, err := s.ensureSystemStatus(ctx)
-	if err != nil {
-		return nil, err
+	for _, id := range ids {
+		if _, err := s.settleLeftoverCandidateLocked(ctx, id); err != nil {
+			return err
+		}
 	}
-	if st.Phase != dsmodel.SystemPhaseLeftover {
-		return nil, &Error{Code: "not_leftover_phase", Msg: "当前不在捡漏阶段，无法结算"}
-	}
+	return nil
+}
+
+// settleLeftoverCandidateLocked 按出价结算单个候选人：最高价部门录取、其余出价部门放弃，
+// 未出价但曾手动录取的部门一并改放弃；成交则候选人推进到已录取并 emit EventLeftoverResolved。
+// 无可结算内容（无出价 / 已存在唯一录取封盘）返回 (nil, nil)。调用方须持 s.mu。
+func (s *MemStateStore) settleLeftoverCandidateLocked(ctx context.Context, candidateID uint64) (*Event, error) {
 	// 封盘判定与出价一致：恰好一家 admitted 才视为已确定；多家录取属争议，允许竞拍仲裁。
 	settled, err := s.candidateAdmittedCount(ctx, candidateID)
 	if err != nil {
 		return nil, err
 	}
 	if settled == 1 {
-		return nil, &Error{Code: "already_resolved", Msg: "候选人已确定唯一录取部门"}
+		return nil, nil
 	}
 	bids := []*dsmodel.Bid{}
 	if err := s.db.WithContext(ctx).
@@ -1096,7 +1108,7 @@ func (s *MemStateStore) ResolveLeftoverCandidate(ctx context.Context, candidateI
 		return nil, err
 	}
 	if len(bids) == 0 {
-		return nil, &Error{Code: "no_bids", Msg: "该候选人没有任何部门出价"}
+		return nil, nil
 	}
 	winner := bids[0]
 	for _, b := range bids {
@@ -1199,7 +1211,7 @@ func (s *MemStateStore) LeftoverFinalResults(ctx context.Context, myDepartmentID
 
 // ListLeftoverResults 返回已结算候选人的赢家与成交金额。
 // 已结算 = 恰好一家部门 admitted（录取唯一确定）；多家录取的争议候选人不在此列，
-// 需经捡漏出价仲裁（ResolveLeftoverCandidate）后才产生结果。
+// 需进入结算阶段自动按出价仲裁（settleLeftoverCandidateLocked）后才产生结果。
 func (s *MemStateStore) ListLeftoverResults(ctx context.Context) ([]*dsmodel.LeftoverResult, error) {
 	admissions := []*dsmodel.CandidateAdmission{}
 	if err := s.db.WithContext(ctx).

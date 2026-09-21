@@ -23,7 +23,7 @@ cmd/server/main.go（装配：AutoMigrate 12 表 → seed → rbac → auth → 
 - **事件流（出站）**：state 写操作在同一临界区内「先落库成功、后 `s.emit`」→ service 经 `broadcast.Manager.Publish` → handler 注册的 Sink → WS 客户端。事件带全局单调 `Seq`；消息带候选人维度 `msg_id` 作续传游标。事件类型与载荷见 `internal/state/event.go`。
 - **RBAC 旁路**：`internal/auth`（JWT + `RequireAuth`/`RequirePerm` 中间件）读 `internal/rbac/cache.go` 内存缓存（DB 权威 + 内存加速）；改密 bump `token_version` 踢旧 token。
 - **候选人七档状态机**（`internal/model/candidate.go`）：`NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED（面试已结束）→ ADMISSION_PENDING（待录取）→ ADMITTED（已录取）`，`StatusTransitions` 严格转移图 + `guardTransition`。
-- **系统四阶段**（`internal/model/system_status.go`）：`interview / admission / leftover / settlement`。切到捡漏/结算时批量同步录取档（唯一 admitted → 已录取，其余 → 待录取）；捡漏结算成交 → 候选人已录取。
+- **系统四阶段**（`internal/model/system_status.go`）：`interview / admission / leftover / settlement`。**进入结算阶段即按出价自动结算全部竞拍**（最高价部门录取、其余出价部门放弃、争议一并仲裁；幂等封盘），并批量同步录取档（唯一 admitted → 已录取，其余 → 待录取）；结算不提供逐个手动入口。
 - **捡漏竞拍**（`internal/model/bid.go`）：预算 `max(500, (预期人数−已录取)×100)`；出价跨部门保密（事件不带金额）；唯一 admitted 才算已结算封盘，多家录取属争议进捡漏仲裁；出价步长 `bid_step`（默认 10）存于系统状态单行。
 
 前端（`apps/web/src`）为 MVVM 函数式，无 Pinia：
@@ -72,7 +72,7 @@ just db               # docker compose up -d（或 podman compose up -d）
   - 状态变更必须经 `guardTransition` / `validStatus` 校验；房间是独立物理记录，绑定的唯一权威在 `rooms.candidate_id`，候选人 `room_id` 是只读投影；候选人完成即自动清房；消息按候选人归属、删除候选人级联删消息。
 - **前端**
   - 列表页模式：多个独立 `useAsync` 资源 + `useBoardRefresh([...事件], reloadAll)` + `RefreshButton`；筛选态同步 URL query、选中条目同步路径参数（`router.replace`，均可深链）。
-  - **URL 一律 RESTful**：集合用复数名词 + 条目 `/:id`（页面 `/candidates`、`/candidates/:candidateId`、`/rooms`、`/rooms/:roomId`、`/leftover`、`/leftover/candidates/:candidateId`；接口 `/api/candidates`、`/api/rooms/:id/candidate`），路径段 kebab-case，**禁止动词路径**（如 login/checkin/resolve/pull 这类动词改为资源：`POST /api/sessions`、`PUT /api/candidates/:id/check-in`、`POST /api/leftover/results`）；集合项用 POST/GET/DELETE，单例子资源用 PUT，部分更新用 PATCH（`PATCH /api/system/status`）。旧页面路径保留重定向，接口不留别名。
+  - **URL 一律 RESTful**：集合用复数名词 + 条目 `/:id`（页面 `/candidates`、`/candidates/:candidateId`、`/rooms`、`/rooms/:roomId`、`/leftover`、`/leftover/candidates/:candidateId`；接口 `/api/candidates`、`/api/rooms/:id/candidate`），路径段 kebab-case，**禁止动词路径**（如 login/checkin/pull 这类动词改为资源：`POST /api/sessions`、`PUT /api/candidates/:id/check-in`、`PUT /api/rooms/:id/candidate`）；集合项用 POST/GET/DELETE，单例子资源用 PUT，部分更新用 PATCH（`PATCH /api/system/status`）。旧页面路径保留重定向，接口不留别名。
   - **先复用后新写**：「左名册 + 右详情」用 `MasterDetailSplit` + `RosterList` + `RosterPager`（选中/键盘/深链状态在 `useRosterSelection`）；管理列表用 `DataTableSection`（骨架→空态→表格）；增改表单用 `FormDialog`；二次确认用 `useConfirmAction` + `ConfirmDialog`；加载/错误/刷新用 `ListSkeleton` / `ErrorAlert` / `RefreshButton`；异常提示用 `lib/toast.ts` 的 `toastError`。视图层只保留筛选与展示派生。
   - **单文件行数**：视图/组件/组合式函数尽量 ≤ 400 行；超标即按上述原语拆分，避免超长文件难以维护。
   - WS 消息经 `domain/` 纯函数不可变更新（如 `mergeMessages` 按 id 去重升序）。

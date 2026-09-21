@@ -273,16 +273,6 @@ func (s *InterviewService) UpsertLeftoverBid(ctx context.Context, candidateID, d
 	return nil
 }
 
-// ResolveLeftoverCandidate 结算候选人：最高出价部门录取。先落库后广播。
-func (s *InterviewService) ResolveLeftoverCandidate(ctx context.Context, candidateID uint64) (*state.Event, error) {
-	ev, err := s.store.ResolveLeftoverCandidate(ctx, candidateID)
-	if err != nil {
-		return nil, err
-	}
-	s.broad.Publish(ev)
-	return ev, nil
-}
-
 // ListLeftoverResults 返回已结算候选人的赢家与成交金额。
 func (s *InterviewService) ListLeftoverResults(ctx context.Context) ([]*dsmodel.LeftoverResult, error) {
 	return s.store.ListLeftoverResults(ctx)

@@ -4,7 +4,7 @@
  * 鉴权：请求拦截器自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
  */
 import axios, { type AxiosRequestConfig } from 'axios'
-import type { AdmissionStatus, Bid, Candidate, CandidateAdmission, CandidateStatus, Department, LeftoverOverview, LeftoverResolveResult, LeftoverResult, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
+import type { AdmissionStatus, Bid, Candidate, CandidateAdmission, CandidateStatus, Department, LeftoverOverview, LeftoverResult, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
 
 /** 401 处理器：由 useAuth 注册（登出 + 跳登录页），避免循环依赖。 */
 let onUnauthorized: (() => void) | null = null
@@ -246,12 +246,7 @@ export const leftoverApi = {
     return put(`/leftover/bids/${candidateId}`, { amount })
   },
 
-  /** 结算候选人：出价最高部门赢得该候选人（需 candidates.manage）；结算即创建成交结果。 */
-  resolve(candidateId: number): Promise<LeftoverResolveResult> {
-    return post('/leftover/results', { candidate_id: candidateId })
-  },
-
-  /** 已结算赢家列表（全员可见）。 */
+  /** 已结算赢家列表（全员可见；进入结算阶段时由后端按出价自动结算）。 */
   results(): Promise<{ items: LeftoverResult[] }> {
     return request('/leftover/results')
   },

@@ -49,6 +49,38 @@ func mustCreateRoom(ctx context.Context, st state.StateStore) uint64 {
 	return state.RoomIDOf(ev)
 }
 
+// mustCompleteCandidate 把候选人推进到 COMPLETED（签到 → 拉房 → 完成），测试辅助。
+func mustCompleteCandidate(ctx context.Context, st state.StateStore, id uint64) {
+	if _, err := st.CheckIn(ctx, id); err != nil {
+		panic(err)
+	}
+	if _, err := st.PullCandidate(ctx, mustCreateRoom(ctx, st), id); err != nil {
+		panic(err)
+	}
+	if _, err := st.ResetCandidateStatus(ctx, id, dsmodel.StatusCompleted); err != nil {
+		panic(err)
+	}
+}
+
+// drainResolved 排空订阅通道中已投递的 leftover_resolved 事件（按候选人归集）。
+// 事件在持锁路径内同步投递，触发结算后即可立即排空。
+func drainResolved(ch <-chan *state.Event) map[uint64]state.LeftoverRef {
+	out := map[uint64]state.LeftoverRef{}
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type != state.EventLeftoverResolved {
+				continue
+			}
+			if ref, ok := ev.Data.(state.LeftoverRef); ok {
+				out[ref.CandidateID] = ref
+			}
+		default:
+			return out
+		}
+	}
+}
+
 func TestStateMachineTransitions(t *testing.T) {
 	cases := []struct {
 		from, to dsmodel.CandidateStatus
@@ -194,6 +226,8 @@ func TestLeftoverBiddingAndResolve(t *testing.T) {
 	}
 	c1 := mustCreateCandidate(ctx, st, "甲", "")
 	c2 := mustCreateCandidate(ctx, st, "乙", "")
+	c3 := mustCreateCandidate(ctx, st, "丙", "") // 无任何出价：进入结算阶段不成交
+	mustCompleteCandidate(ctx, st, c3)
 
 	// 非捡漏阶段禁止出价
 	if _, err := st.UpsertLeftoverBid(ctx, c1, deptA, 100); err == nil {
@@ -249,28 +283,29 @@ func TestLeftoverBiddingAndResolve(t *testing.T) {
 		t.Fatalf("bidsB=%+v", bidsB)
 	}
 
-	// 结算 c1：最高价 A 800 胜出；事件带成交金额
-	ev, err = st.ResolveLeftoverCandidate(ctx, c1)
-	if err != nil {
-		t.Fatalf("resolve c1: %v", err)
+	// 进入结算阶段：自动按出价结算全部竞拍（最高价部门录取），成交事件带金额
+	ch, cancel := st.Subscribe(0, 0)
+	defer cancel()
+	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseSettlement); err != nil {
+		t.Fatalf("set settlement: %v", err)
 	}
-	if ev.Type != state.EventLeftoverResolved {
-		t.Fatalf("event type=%s", ev.Type)
+	resolved := drainResolved(ch)
+	if ref := resolved[c1]; ref.DepartmentID != deptA || ref.Amount != 800 {
+		t.Fatalf("c1 resolved=%+v", ref)
 	}
-	if ref, ok := ev.Data.(state.LeftoverRef); !ok || ref.DepartmentID != deptA || ref.Amount != 800 {
-		t.Fatalf("resolve payload=%+v", ev.Data)
+	if ref := resolved[c2]; ref.DepartmentID != deptB || ref.Amount != 150 {
+		t.Fatalf("c2 resolved=%+v", ref)
 	}
-	// 幂等保护：已结算不能再出价/再结算
+	// 幂等：重复进入结算阶段不产生新的成交事件
+	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseSettlement); err != nil {
+		t.Fatalf("re-enter settlement: %v", err)
+	}
+	if again := drainResolved(ch); len(again) != 0 {
+		t.Fatalf("re-settlement must be a no-op: %+v", again)
+	}
+	// 结算阶段竞拍只读：已成交候选人不能再出价
 	if _, err := st.UpsertLeftoverBid(ctx, c1, deptA, 100); err == nil {
-		t.Fatalf("expected already_resolved on bid")
-	}
-	if _, err := st.ResolveLeftoverCandidate(ctx, c1); err == nil {
-		t.Fatalf("expected already_resolved on re-resolve")
-	}
-
-	// 结算 c2：B 唯一出价者胜出
-	if _, err := st.ResolveLeftoverCandidate(ctx, c2); err != nil {
-		t.Fatalf("resolve c2: %v", err)
+		t.Fatalf("expected not_leftover_phase on bid")
 	}
 
 	// 录取决定：c1 → A admitted、B withdrawn
@@ -292,12 +327,6 @@ func TestLeftoverBiddingAndResolve(t *testing.T) {
 		t.Fatalf("c2 admissions=%+v", byDept[c2])
 	}
 
-	// 无出价候选人结算拒绝
-	c3 := mustCreateCandidate(ctx, st, "丙", "")
-	if _, err := st.ResolveLeftoverCandidate(ctx, c3); err == nil {
-		t.Fatalf("expected no_bids")
-	}
-
 	// 结果公开：c1 赢家 A 800
 	results, err := st.ListLeftoverResults(ctx)
 	if err != nil {
@@ -313,6 +342,14 @@ func TestLeftoverBiddingAndResolve(t *testing.T) {
 	if got[c2].DepartmentID != deptB || got[c2].Amount != 150 {
 		t.Fatalf("c2 result=%+v", got[c2])
 	}
+	// 无出价候选人 c3：不成交（无结果记录），录取档状态保持待录取
+	if _, ok := got[c3]; ok {
+		t.Fatalf("c3 must have no leftover result: %+v", got[c3])
+	}
+	c3got, err := st.GetCandidate(ctx, c3)
+	if err != nil || c3got.Status != dsmodel.StatusAdmissionPending {
+		t.Fatalf("c3 status=%+v err=%v", c3got, err)
+	}
 
 	// 总览：A 已录取 1 人 → 预算 (20-1)*100=1900，已出 800，剩 1100
 	ov, err := st.LeftoverOverview(ctx, &deptA, false)
@@ -324,7 +361,7 @@ func TestLeftoverBiddingAndResolve(t *testing.T) {
 	if ov.My == nil || ov.My.Budget != 1900 || ov.My.Spent != 0 || ov.My.Remaining != 1900 {
 		t.Fatalf("my=%+v", ov.My)
 	}
-	if ov.Phase != dsmodel.SystemPhaseLeftover {
+	if ov.Phase != dsmodel.SystemPhaseSettlement {
 		t.Fatalf("phase=%s", ov.Phase)
 	}
 	// 其他部门的 spent/remaining 必须保密（nil）
@@ -365,8 +402,8 @@ func TestLeftoverBiddingAndResolve(t *testing.T) {
 	}
 }
 
-// TestLeftoverSettlementPhase 结算阶段：竞拍数据只读（禁止出价/结算），
-// 最终录取结果由出价只读计算（赢家 = 最高出价，同额先出价者）。
+// TestLeftoverSettlementPhase 进入结算阶段自动按出价结算全部竞拍（幂等）：
+// 赢家 = 最高出价部门、同额取先出价者；结算阶段竞拍数据只读（禁止出价）。
 func TestLeftoverSettlementPhase(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
@@ -396,7 +433,7 @@ func TestLeftoverSettlementPhase(t *testing.T) {
 		t.Fatalf("bid B c2: %v", err)
 	}
 
-	// 结算阶段前：结果未落库，仅计算。
+	// 结算前：结果未落库，仅只读计算。
 	// 部门 A 视角：本部门出价的 c1 可见（未成交）；他部门出价的 c2 保密不可见。
 	finals, err := st.LeftoverFinalResults(ctx, &deptA, false)
 	if err != nil {
@@ -422,52 +459,70 @@ func TestLeftoverSettlementPhase(t *testing.T) {
 		t.Fatalf("c2 final=%+v", byCand[c2])
 	}
 
+	// 进入结算阶段：自动结算全部竞拍 —— c1 同额取先出价的 A、c2 唯一出价者 B
+	ch, cancel := st.Subscribe(0, 0)
+	defer cancel()
 	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseSettlement); err != nil {
 		t.Fatalf("set settlement: %v", err)
 	}
-	// 结算阶段只读：出价与逐个结算均拒绝
+	resolved := drainResolved(ch)
+	if ref := resolved[c1]; ref.DepartmentID != deptA || ref.Amount != 500 {
+		t.Fatalf("c1 resolved=%+v", ref)
+	}
+	if ref := resolved[c2]; ref.DepartmentID != deptB || ref.Amount != 300 {
+		t.Fatalf("c2 resolved=%+v", ref)
+	}
+
+	// 结算阶段竞拍只读：禁止出价
 	if _, err := st.UpsertLeftoverBid(ctx, c2, deptA, 100); err == nil {
 		t.Fatalf("expected not_leftover_phase on bid")
 	}
-	if _, err := st.ResolveLeftoverCandidate(ctx, c1); err == nil {
-		t.Fatalf("expected not_leftover_phase on resolve")
+
+	// 结果落库：c1 A 500、c2 B 300
+	results, err := st.ListLeftoverResults(ctx)
+	if err != nil {
+		t.Fatalf("results: %v", err)
+	}
+	got := map[uint64]dsmodel.LeftoverResult{}
+	for _, r := range results {
+		got[r.CandidateID] = *r
+	}
+	if got[c1].DepartmentID != deptA || got[c1].Amount != 500 {
+		t.Fatalf("c1 result=%+v", got[c1])
+	}
+	if got[c2].DepartmentID != deptB || got[c2].Amount != 300 {
+		t.Fatalf("c2 result=%+v", got[c2])
 	}
 
-	// 回到捡漏阶段正式结算 c1，再进结算阶段：结果带 Resolved 标记
+	// 幂等：回捡漏阶段再进结算阶段 → 不重复成交、结果不变
 	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseLeftover); err != nil {
 		t.Fatalf("back to leftover: %v", err)
-	}
-	if _, err := st.ResolveLeftoverCandidate(ctx, c1); err != nil {
-		t.Fatalf("resolve c1: %v", err)
 	}
 	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseSettlement); err != nil {
 		t.Fatalf("set settlement again: %v", err)
 	}
-	// c1 已成交（公开结果）；c2 未成交且赢家是他部门 → A 视角不可见
+	if again := drainResolved(ch); len(again) != 0 {
+		t.Fatalf("re-settlement must be a no-op: %+v", again)
+	}
+	results, err = st.ListLeftoverResults(ctx)
+	if err != nil || len(results) != 2 {
+		t.Fatalf("results after re-settlement=%+v err=%v", results, err)
+	}
+
+	// 最终投影：两人均已成交（Resolved），成交部门/金额与落库一致（已成交结果对全员公开）
 	finals, err = st.LeftoverFinalResults(ctx, &deptA, false)
 	if err != nil {
-		t.Fatalf("final results after resolve: %v", err)
+		t.Fatalf("final results after settle: %v", err)
 	}
+	byCand = map[uint64]dsmodel.LeftoverFinalResult{}
 	for _, f := range finals {
-		if f.CandidateID == c1 && (!f.Resolved || f.DepartmentID != deptA || f.Amount != 500) {
-			t.Fatalf("c1 final=%+v", f)
-		}
-		if f.CandidateID == c2 {
-			t.Fatalf("c2 must be hidden for deptA: %+v", f)
-		}
+		byCand[f.CandidateID] = *f
 	}
-	// 管理端视角：c1 Resolved、c2 未成交
-	finalsAll, err = st.LeftoverFinalResults(ctx, nil, true)
-	if err != nil {
-		t.Fatalf("final results all after resolve: %v", err)
+	if !byCand[c1].Resolved || byCand[c1].DepartmentID != deptA || byCand[c1].Amount != 500 {
+		t.Fatalf("c1 final=%+v", byCand[c1])
 	}
-	for _, f := range finalsAll {
-		if f.CandidateID == c1 && !f.Resolved {
-			t.Fatalf("c1 final=%+v", f)
-		}
-		if f.CandidateID == c2 && f.Resolved {
-			t.Fatalf("c2 must be unresolved: %+v", f)
-		}
+	if !byCand[c2].Resolved || byCand[c2].DepartmentID != deptB || byCand[c2].Amount != 300 {
+		t.Fatalf("c2 final=%+v", byCand[c2])
 	}
 }
 
@@ -562,9 +617,9 @@ func TestLeftoverContestedAdmissions(t *testing.T) {
 		t.Fatalf("bid on contested candidate: %v", err)
 	}
 
-	// 结算：A 出价唯一最高 → A 录取；B 的手动录取改 withdrawn
-	if _, err := st.ResolveLeftoverCandidate(ctx, c); err != nil {
-		t.Fatalf("resolve: %v", err)
+	// 进入结算阶段：自动按出价仲裁 → A 唯一最高价录取；B 的手动录取改 withdrawn
+	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseSettlement); err != nil {
+		t.Fatalf("set settlement: %v", err)
 	}
 	all, err := st.ListCandidateAdmissions(ctx, nil)
 	if err != nil {
@@ -587,7 +642,7 @@ func TestLeftoverContestedAdmissions(t *testing.T) {
 		t.Fatalf("results=%+v err=%v", results, err)
 	}
 	if _, err := st.UpsertLeftoverBid(ctx, c, deptB, 100); err == nil {
-		t.Fatalf("expected already_resolved after arbitration")
+		t.Fatalf("expected not_leftover_phase after arbitration")
 	}
 }
 
@@ -666,15 +721,15 @@ func TestPhaseSwitchSyncsAdmissionStatuses(t *testing.T) {
 		t.Fatalf("inProgress=%s, want untouched", statusOf[inProgress])
 	}
 
-	// 争议候选人在捡漏阶段结算成交 → 推进到已录取
+	// 争议候选人在捡漏阶段获最高出价：进入结算阶段自动成交 → 推进到已录取
 	if _, err := st.UpsertLeftoverBid(ctx, contested, deptA, 100); err != nil {
 		t.Fatalf("bid: %v", err)
 	}
-	if _, err := st.ResolveLeftoverCandidate(ctx, contested); err != nil {
-		t.Fatalf("resolve: %v", err)
+	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseSettlement); err != nil {
+		t.Fatalf("set settlement: %v", err)
 	}
 	got, err := st.GetCandidate(ctx, contested)
 	if err != nil || got.Status != dsmodel.StatusAdmitted {
-		t.Fatalf("contested after resolve=%+v err=%v", got, err)
+		t.Fatalf("contested after settle=%+v err=%v", got, err)
 	}
 }

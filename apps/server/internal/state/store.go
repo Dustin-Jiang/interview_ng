@@ -122,9 +122,6 @@ type StateStore interface {
 	// UpsertLeftoverBid 记录/覆盖本部门对候选人的出价（仅捡漏阶段、受剩余预算约束）。
 	// 返回事件（载荷 LeftoverRef，不含金额）。
 	UpsertLeftoverBid(ctx context.Context, candidateID, departmentID uint64, amount int) (*Event, error)
-	// ResolveLeftoverCandidate 结算候选人：最高出价部门录取（admitted），其余出价部门 withdrawn。
-	// 返回结算事件（载荷 LeftoverRef：赢家部门与成交金额）。
-	ResolveLeftoverCandidate(ctx context.Context, candidateID uint64) (*Event, error)
 	// LeftoverFinalResults 只读计算各候选人的最终录取结果（赢家 = 最高出价部门，
 	// 同额取先出价者；Resolved 标记是否已正式落库）。
 	// 保密语义与出价一致：默认仅返回已成交或赢家为本部门的行；exposeAll 全量。

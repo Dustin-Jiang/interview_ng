@@ -34,6 +34,7 @@ import {
   StepperTrigger,
 } from '@/components/ui/stepper'
 import EmptyState from '@/components/app/EmptyState.vue'
+import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import ListSkeleton from '@/components/app/ListSkeleton.vue'
 import PageShell from '@/components/app/PageShell.vue'
 import RefreshButton from '@/components/app/RefreshButton.vue'
@@ -46,6 +47,9 @@ const phaseSteps = SYSTEM_PHASES.map((phase, i) => ({ phase, step: i + 1 }))
 
 /** 当前档位（受控于 :model-value，不直接响应用户点击）。 */
 const activeStep = ref(1)
+
+/** 进入结算阶段的二次确认（该切换会按出价结算全部竞拍）。 */
+const settlementConfirmOpen = ref(false)
 
 function stepToPhase(step: number | undefined): SystemPhase | null {
   return phaseSteps.find((it) => it.step === step)?.phase ?? null
@@ -63,7 +67,18 @@ watch(() => status.value?.phase, syncStep, { immediate: true })
 
 function onStepChange(step: number | undefined) {
   const phase = stepToPhase(step)
-  if (phase) void switchTo(phase)
+  if (!phase) return
+  // 进入结算阶段会按出价结算全部竞拍（封盘，不可回到未结算状态），故先二次确认。
+  if (phase === 'settlement' && status.value?.phase !== 'settlement') {
+    settlementConfirmOpen.value = true
+    return
+  }
+  void switchTo(phase)
+}
+
+async function confirmSettlement() {
+  settlementConfirmOpen.value = false
+  await switchTo('settlement')
 }
 
 async function switchTo(phase: SystemPhase) {
@@ -288,5 +303,15 @@ onMounted(() => void load())
         <DataTable v-else :columns="previewColumns" :data="previewRows" />
       </div>
     </template>
+
+    <!-- 进入结算阶段：按出价结算全部竞拍（封盘） -->
+    <ConfirmDialog
+      :open="settlementConfirmOpen"
+      title="进入结算阶段并按出价结算全部竞拍"
+      confirm-text="结算并切换"
+      :loading="switching"
+      @update:open="settlementConfirmOpen = $event"
+      @confirm="confirmSettlement"
+    />
   </PageShell>
 </template>

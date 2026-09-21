@@ -185,17 +185,10 @@ export interface LeftoverOverview {
   my: LeftoverMyBudget | null
 }
 
-/** 已结算的捡漏赢家记录（全员可见）。 */
+/** 已结算的捡漏赢家记录（全员可见；进入结算阶段时由后端按出价结算落库）。 */
 export interface LeftoverResult {
   candidate_id: number
   department_id: number
   amount: number
   created_at: string
-}
-
-/** POST /leftover/results 响应：赢家部门与成交金额。 */
-export interface LeftoverResolveResult {
-  candidate_id: number
-  department_id: number
-  amount: number
 }

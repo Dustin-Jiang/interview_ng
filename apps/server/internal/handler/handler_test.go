@@ -936,7 +936,8 @@ func TestBoardChannelAuthAndEvents(t *testing.T) {
 }
 
 // TestLeftoverBiddingEndpoints 捡漏竞拍 HTTP 契约：
-// 出价需 admissions.record 且仅捡漏阶段；预算约束；出价保密为本部门；结算需 candidates.manage。
+// 出价需 admissions.record 且仅捡漏阶段；预算约束；出价保密为本部门；
+// 手动结算入口已移除（404），改由 users.manage 切到结算阶段自动结算。
 func TestLeftoverBiddingEndpoints(t *testing.T) {
 	r := newTestApp(t)
 
@@ -1028,21 +1029,22 @@ func TestLeftoverBiddingEndpoints(t *testing.T) {
 		}
 	}
 
-	// 无 candidates.manage 结算 → 403；admin 结算 → 赢家 A 800
-	if code, _ := doJSON(t, r, "POST", "/api/leftover/results", `{"candidate_id":`+itoa(cand)+`}`, tokenA); code != http.StatusForbidden {
-		t.Fatalf("bidder resolve: got %d", code)
+	// 手动结算入口已移除 → 404
+	if code, _ := doJSON(t, r, "POST", "/api/leftover/results", `{"candidate_id":`+itoa(cand)+`}`, token); code != http.StatusNotFound {
+		t.Fatalf("manual resolve route must be gone: got %d", code)
 	}
-	code, out = doJSON(t, r, "POST", "/api/leftover/results", `{"candidate_id":`+itoa(cand)+`}`, token)
-	if code != http.StatusOK {
-		t.Fatalf("resolve: got %d %v", code, out)
+	// 非 users.manage 切到结算阶段 → 403
+	if code, _ := doJSON(t, r, "PATCH", "/api/system/status", `{"phase":"settlement"}`, tokenA); code != http.StatusForbidden {
+		t.Fatalf("bidder settlement switch: got %d", code)
 	}
-	if out["department_id"].(float64) != float64(deptA) || out["amount"].(float64) != 800 {
-		t.Fatalf("resolve result=%v", out)
+	// admin 切到结算阶段 → 自动按出价结算（A 800 胜出）
+	if code, out := doJSON(t, r, "PATCH", "/api/system/status", `{"phase":"settlement"}`, token); code != http.StatusOK {
+		t.Fatalf("set settlement: got %d %v", code, out)
 	}
 
-	// 结算后封盘；结果公开
+	// 结算后封盘（竞拍只读）；结果公开
 	if code, _ := doJSON(t, r, "PUT", "/api/leftover/bids/"+itoa(cand), `{"amount":100}`, tokenB); code != http.StatusBadRequest {
-		t.Fatalf("bid after resolve: got %d", code)
+		t.Fatalf("bid after settlement: got %d", code)
 	}
 	code, out = doJSON(t, r, "GET", "/api/leftover/results", "", tokenB)
 	if code != http.StatusOK {
@@ -1051,5 +1053,8 @@ func TestLeftoverBiddingEndpoints(t *testing.T) {
 	items, _ := out["items"].([]any)
 	if len(items) != 1 {
 		t.Fatalf("results=%v", out)
+	}
+	if it := items[0].(map[string]any); int(it["department_id"].(float64)) != deptA || it["amount"].(float64) != 800 {
+		t.Fatalf("results[0]=%v", it)
 	}
 }
