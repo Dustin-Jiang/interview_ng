@@ -39,7 +39,7 @@ Model Domain Types（与后端 JSON 契约一一对应）
 - **函数组合**：`useAsync` 作为通用异步原语被 `useCandidates`/`useRoomList` 复用；`useRoomChat` 内部用 `domain` 纯函数转换 WS 事件。
 - **实时刷新**：房间内数据走房间通道（`/ws/rooms/:id`，重连后按续传游标自动补拉增量）；列表页走看板通道（`useBoardRefresh(events, cb)`：事件到达 → 防抖 300ms 整表重拉），覆盖候场大屏、房间列表与候选人记录。
 - **视图弱耦合**：视图在 setup 顶层解构 `useXXX()` 的 refs 与函数，模板直接引用（refs 自动解包）。
-- **RESTful 路由**：页面 URL 与后端资源同构——集合 `/candidates`、`/rooms`、`/leftover`，条目 `/candidates/:candidateId`、`/rooms/:roomId`、`/leftover/candidates/:candidateId`；选中条目走路径参数（`useRosterRouteSync`），筛选/搜索态留在 query，旧路径保留重定向。
+- **RESTful 路由**：页面 URL 与后端资源同构——集合 `/candidates`、`/rooms`、`/leftover`，条目 `/candidates/:candidateId`、`/rooms/:roomId`、`/leftover/candidates/:candidateId`，单例看板 `/board`（候场大屏，与看板 WS 通道 `/ws/board` 同构），管理分区 `/settings/{candidates,imports,users,roles,departments,system/status}`；路径段一律资源名词（无动词/动名词段），选中条目走路径参数（`useRosterRouteSync`），筛选/搜索态留在 query，旧路径保留重定向。
 
 
 ---

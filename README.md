@@ -47,7 +47,7 @@ interview_ng/
 
 | 需求 | 落点 |
 |---|---|
-| 1. 多客户端 WS 长连接同步状态 | `internal/handler/ws.go` + `internal/broadcast`；房间通道按房间扇出，看板通道（`/ws/board`）扇出全部业务事件，列表页（候场大屏/房间列表/候选人记录）据此防抖重拉实时刷新 |
+| 1. 多客户端 WS 长连接同步状态 | `internal/handler/ws.go` + `internal/broadcast`；房间通道按房间扇出，看板通道（`/ws/board`）扇出全部业务事件，列表页（候场大屏 `/board`、房间列表、候选人记录）据此防抖重拉实时刷新 |
 | 2. 系统内部状态唯一 | `internal/state`；单 director 进程内存为权威，所有写经 `StateStore` 原子操作 + 五档状态机，非法转移拒绝 |
 | 3. 良好的状态恢复 | 房间内消息 `id` 作续传游标；重连拉"房间快照 + 消息增量"；事件带稳定 `Seq` 幂等对齐；「先落库后广播」杜绝"客户端看到但库没有" |
 

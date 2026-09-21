@@ -30,7 +30,7 @@ const quickLinks = computed(() => {
     },
     {
       name: '候场大屏',
-      to: { name: 'candidates-waiting' },
+      to: { name: 'board' },
       visible: true,
     },
     {

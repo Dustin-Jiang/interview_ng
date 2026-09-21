@@ -28,9 +28,9 @@ export const router = createRouter({
       component: () => import('@/views/CandidateRecordsView.vue'),
     },
     {
-      // 候场大屏：候选人的候场视图（须声明在 /candidates/:candidateId 之前）。
-      path: '/candidates/waiting',
-      name: 'candidates-waiting',
+      // 候场大屏（单例看板资源，与看板 WS 通道 /ws/board 同构）。
+      path: '/board',
+      name: 'board',
       component: () => import('@/views/WaitingBoardView.vue'),
     },
     {
@@ -103,7 +103,8 @@ export const router = createRouter({
       ],
     },
     // ---- 旧路径重定向（书签/分享兼容；新路径见上方路由） ----
-    { path: '/waiting', redirect: { name: 'candidates-waiting' } },
+    { path: '/candidates/waiting', redirect: { name: 'board' } },
+    { path: '/waiting', redirect: { name: 'board' } },
     { path: '/room', redirect: { name: 'rooms' } },
     { path: '/room/:roomId', redirect: (to) => `/rooms/${to.params.roomId}` },
     { path: '/settings/system-status', redirect: { name: 'settings-system-status' } },
