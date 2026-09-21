@@ -4,7 +4,7 @@
  * 鉴权：请求拦截器自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
  */
 import axios, { type AxiosRequestConfig } from 'axios'
-import type { AdmissionStatus, Bid, Candidate, CandidateAdmission, CandidateStatus, Department, LeftoverOverview, LeftoverResult, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
+import type { AdmissionStatus, Bid, Candidate, CandidateAdmission, CandidateImportReport, CandidateImportRow, CandidateStatus, Department, LeftoverOverview, LeftoverResult, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
 
 /** 401 处理器：由 useAuth 注册（登出 + 跳登录页），避免循环依赖。 */
 let onUnauthorized: (() => void) | null = null
@@ -37,6 +37,23 @@ client.interceptors.request.use((config) => {
   return config
 })
 
+/**
+ * ApiError —— 带 HTTP 状态与响应体的请求错误。
+ * 除统一的中文 message 外，保留结构化响应体（如批量导入整批被拒时的行级报告 rows），
+ * 供调用方按字段消费。
+ */
+export class ApiError extends Error {
+  readonly status: number
+  readonly data: unknown
+
+  constructor(message: string, status: number, data: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.data = data
+  }
+}
+
 client.interceptors.response.use(
   (res) => res,
   (error) => {
@@ -45,7 +62,7 @@ client.interceptors.response.use(
     }
     const data = error.response?.data as { error?: string } | undefined
     const msg = data?.error ?? (axios.isAxiosError(error) ? error.message : String(error))
-    return Promise.reject(new Error(msg))
+    return Promise.reject(new ApiError(msg, error.response?.status ?? 0, error.response?.data))
   },
 )
 
@@ -98,15 +115,20 @@ export const candidateApi = {
     return request(`/candidates/${id}`)
   },
 
-  create(body: { name: string; profile?: string }): Promise<{ id: number }> {
+  create(body: { student_no: string; name: string; profile?: string }): Promise<{ id: number }> {
     return post('/candidates', body)
+  },
+
+  /** 批量导入候选人（服务端单事务全或无；整批被拒时抛 ApiError，其 data.rows 为行级报告）。 */
+  import(rows: CandidateImportRow[]): Promise<CandidateImportReport> {
+    return post('/candidates/imports', { rows })
   },
 
   checkin(id: number): Promise<{ ok: boolean }> {
     return put(`/candidates/${id}/check-in`)
   },
 
-  update(id: number, body: { name: string; profile?: string }): Promise<{ ok: boolean }> {
+  update(id: number, body: { student_no: string; name: string; profile?: string }): Promise<{ ok: boolean }> {
     return put(`/candidates/${id}`, body)
   },
 

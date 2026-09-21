@@ -1,13 +1,13 @@
 <!--
   SettingsView —— 设置页外壳：左右分栏。
-  左侧：分区导航（候选人管理 / 面试官 / 角色 / 部门 / 系统状态，按权限显隐）；
+  左侧：分区导航（候选人管理 / 数据导入 / 面试官 / 角色 / 部门 / 系统状态，按权限显隐）；
   右侧：嵌套路由渲染当前分区内容。
   无任一管理权限时重定向回首页；直接访问无权分区时跳到首个可见分区。
 -->
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { Building2, Gauge, ShieldCheck, UserCog, UsersRound } from 'lucide-vue-next'
+import { Building2, FileSpreadsheet, Gauge, ShieldCheck, UserCog, UsersRound } from 'lucide-vue-next'
 
 import { useAuth } from '@/composables/useAuth'
 import { PERMISSIONS } from '@/models'
@@ -27,6 +27,10 @@ const sections = computed(() => {
     hasPermission(PERMISSIONS.CANDIDATES_CHECKIN)
   if (canManageCandidates) {
     items.push({ name: 'settings-candidates', label: '候选人管理', icon: UsersRound })
+  }
+  if (hasPermission(PERMISSIONS.CANDIDATES_MANAGE)) {
+    // 导入会覆盖既有候选人资料，故与「编辑候选人」同权限门槛。
+    items.push({ name: 'settings-imports', label: '数据导入', icon: FileSpreadsheet })
   }
   if (hasPermission(PERMISSIONS.USERS_MANAGE)) {
     items.push({ name: 'settings-users', label: '面试官', icon: UserCog })

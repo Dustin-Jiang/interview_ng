@@ -75,6 +75,12 @@ export const router = createRouter({
           component: () => import('@/views/SettingsCandidatesView.vue'),
         },
         {
+          // 数据导入（Excel → 行 JSON → JMESPath 映射 → 实时预览 → 全或无落库）。
+          path: 'imports',
+          name: 'settings-imports',
+          component: () => import('@/views/SettingsImportsView.vue'),
+        },
+        {
           path: 'users',
           name: 'settings-users',
           component: () => import('@/views/SettingsUsersView.vue'),

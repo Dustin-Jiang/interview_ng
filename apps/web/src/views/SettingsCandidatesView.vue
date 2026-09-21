@@ -10,18 +10,18 @@ import { useAuth } from '@/composables/useAuth'
 import { useConfirmAction } from '@/composables/useConfirmAction'
 import { CANDIDATE_STATUSES, PERMISSIONS, type Candidate, type CandidateStatus } from '@/models'
 import { STATUS_PRESENTATION } from '@/presenters/status'
+import { normalizeStudentNo } from '@/domain/studentNo'
 import { formatDateTime } from '@/lib/format'
 import { toastError } from '@/lib/toast'
 
 // --- shadcn-vue UI ---
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DataTableColumnHeader from '@/components/ui/table/data-table-column-header.vue'
 import type { DataTableFeatures } from '@/components/ui/table/features'
+import CandidateFormFields from '@/components/app/CandidateFormFields.vue'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import DataTableSection from '@/components/app/DataTableSection.vue'
 import FormDialog from '@/components/app/FormDialog.vue'
@@ -38,12 +38,14 @@ const emptyText = computed(() => (keyword.value ? '没有匹配的候选人' : '
 
 // 创建候选人对话框状态
 const createOpen = ref(false)
+const newStudentNo = ref('')
 const newName = ref('')
 const newProfile = ref('')
 const creating = ref(false)
 
 // 编辑对话框状态
 const editTarget = ref<Candidate | null>(null)
+const editStudentNo = ref('')
 const editName = ref('')
 const editProfile = ref('')
 const editing = ref(false)
@@ -54,6 +56,7 @@ const resetStatusValue = ref<CandidateStatus>('NOT_CHECKED_IN')
 const resetting = ref(false)
 
 function openCreate() {
+  newStudentNo.value = ''
   newName.value = ''
   newProfile.value = ''
   creating.value = false
@@ -61,6 +64,11 @@ function openCreate() {
 }
 
 async function submitCreate() {
+  const studentNo = normalizeStudentNo(newStudentNo.value)
+  if ('error' in studentNo) {
+    toast.error(studentNo.error)
+    return
+  }
   if (!newName.value.trim()) {
     toast.error('请输入候选人姓名')
     return
@@ -68,7 +76,7 @@ async function submitCreate() {
   if (creating.value) return
   creating.value = true
   try {
-    await create(newName.value.trim(), newProfile.value.trim())
+    await create(studentNo.value, newName.value.trim(), newProfile.value.trim())
     createOpen.value = false
     toast.success('候选人已创建')
   } catch (e) {
@@ -80,6 +88,7 @@ async function submitCreate() {
 
 function openEdit(c: Candidate) {
   editTarget.value = c
+  editStudentNo.value = c.student_no
   editName.value = c.name
   editProfile.value = c.profile ?? ''
   editing.value = false
@@ -87,13 +96,18 @@ function openEdit(c: Candidate) {
 
 async function submitEdit() {
   if (!editTarget.value || editing.value) return
+  const studentNo = normalizeStudentNo(editStudentNo.value)
+  if ('error' in studentNo) {
+    toast.error(studentNo.error)
+    return
+  }
   if (!editName.value.trim()) {
     toast.error('请输入候选人姓名')
     return
   }
   editing.value = true
   try {
-    await update(editTarget.value.id, editName.value.trim(), editProfile.value.trim())
+    await update(editTarget.value.id, studentNo.value, editName.value.trim(), editProfile.value.trim())
     editTarget.value = null
     toast.success('已保存')
   } catch (e) {
@@ -173,6 +187,10 @@ const columns: ColumnDef<DataTableFeatures, Candidate>[] = columnHelper.columns(
   columnHelper.accessor('id', {
     header: 'ID',
     enableSorting: false,
+    cell: ({ getValue }) => h('div', { class: 'font-mono text-xs' }, String(getValue())),
+  }),
+  columnHelper.accessor('student_no', {
+    header: ({ column }) => h(DataTableColumnHeader, { column: column as any, title: '学号' }),
     cell: ({ getValue }) => h('div', { class: 'font-mono text-xs' }, String(getValue())),
   }),
   columnHelper.accessor('name', {
@@ -256,14 +274,13 @@ onMounted(() => {
           </Button>
         </template>
 
-        <div class="grid gap-2">
-          <Label for="cand-name">姓名</Label>
-          <Input id="cand-name" v-model="newName" placeholder="候选人姓名" @keydown.enter="submitCreate" />
-        </div>
-        <div class="grid gap-2">
-          <Label for="cand-profile">个人简介</Label>
-          <Textarea id="cand-profile" v-model="newProfile" rows="3" placeholder="技术栈 / 背景（可选）" />
-        </div>
+        <CandidateFormFields
+          v-model:student-no="newStudentNo"
+          v-model:name="newName"
+          v-model:profile="newProfile"
+          id-prefix="cand-create"
+          @submit="submitCreate"
+        />
       </FormDialog>
     </template>
 
@@ -281,7 +298,7 @@ onMounted(() => {
           <!-- 搜索框：图标 + 可清空（Enter / 清空均触发检索）。 -->
           <SearchInput
             v-model="keyword"
-            placeholder="搜索姓名 / 简介…"
+            placeholder="搜索学号 / 姓名 / 简介…"
             @search="setKeyword"
           />
           <Select :model-value="statusFilter || 'ALL'" @update:model-value="setStatusFilter($event === 'ALL' ? '' : ($event as CandidateStatus))">
@@ -307,14 +324,13 @@ onMounted(() => {
       @update:open="editTarget = $event ? editTarget : null"
       @submit="submitEdit"
     >
-      <div class="grid gap-2">
-        <Label for="edit-name">姓名</Label>
-        <Input id="edit-name" v-model="editName" @keydown.enter="submitEdit" />
-      </div>
-      <div class="grid gap-2">
-        <Label for="edit-profile">个人简介</Label>
-        <Textarea id="edit-profile" v-model="editProfile" rows="3" placeholder="技术栈 / 背景（可选）" />
-      </div>
+      <CandidateFormFields
+        v-model:student-no="editStudentNo"
+        v-model:name="editName"
+        v-model:profile="editProfile"
+        id-prefix="cand-edit"
+        @submit="submitEdit"
+      />
     </FormDialog>
 
     <!-- 重置状态对话框 -->

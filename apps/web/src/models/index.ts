@@ -43,6 +43,8 @@ export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS]
 export interface Candidate {
   id: number
   room_id?: number
+  /** 学号：候选人的身份键（纯数字、唯一，前导零有意义）。 */
+  student_no: string
   name: string
   profile: string
   status: CandidateStatus
@@ -191,4 +193,26 @@ export interface LeftoverResult {
   department_id: number
   amount: number
   created_at: string
+}
+
+// ---- 候选人批量导入（POST /candidates/imports） ----
+
+/** 导入行：解析 + JMESPath 映射后的规范化字段（服务端不解析表格）。 */
+export interface CandidateImportRow {
+  student_no: string
+  name: string
+  profile: string
+}
+
+/** 导入行级错误（整批拒绝时给出；index 为请求体中的行下标）。 */
+export interface CandidateImportRowError {
+  index: number
+  error: string
+}
+
+/** 导入落库报告（单事务全或无：返回即整批已落库）。 */
+export interface CandidateImportReport {
+  created: number
+  updated: number
+  rows: { index: number; status: 'created' | 'updated'; candidate_id: number }[]
 }

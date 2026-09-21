@@ -54,7 +54,7 @@ const { user } = useAuth()
 // ---- 名册数据（一次拉取，客户端筛选） ----
 const { candidates, loading: poolLoading, error: poolError, load } = useCandidatePool()
 
-/** 搜索关键词（姓名 / 简介包含匹配，大小写不敏感）。 */
+/** 搜索关键词（学号 / 姓名 / 简介包含匹配）。 */
 const keyword = ref('')
 /** 状态筛选：'' = 全部。 */
 const statusFilter = ref<'' | CandidateStatus>('')
@@ -70,7 +70,11 @@ const filtered = computed(() => {
   return candidates.value.filter((c) => {
     if (statusFilter.value && c.status !== statusFilter.value) return false
     if (!kw) return true
-    return c.name.toLowerCase().includes(kw) || (c.profile ?? '').toLowerCase().includes(kw)
+    return (
+      c.student_no.includes(kw) ||
+      c.name.toLowerCase().includes(kw) ||
+      (c.profile ?? '').toLowerCase().includes(kw)
+    )
   })
 })
 
@@ -224,7 +228,7 @@ function goRoom(c: Candidate) {
             </PopoverTrigger>
             <PopoverContent class="w-72">
               <div class="space-y-3">
-                <SearchInput v-model="keyword" full placeholder="搜索姓名 / 简介…" />
+                <SearchInput v-model="keyword" full placeholder="搜索学号 / 姓名 / 简介…" />
                 <Select
                   :model-value="statusFilter || 'ALL'"
                   @update:model-value="statusFilter = $event === 'ALL' ? '' : ($event as CandidateStatus)"
@@ -312,6 +316,10 @@ function goRoom(c: Candidate) {
           </template>
 
           <div class="space-y-2 pt-4 text-sm">
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-muted-foreground">学号</span>
+              <span class="font-mono">{{ selected.student_no }}</span>
+            </div>
             <div class="flex items-center justify-between gap-3">
               <span class="text-muted-foreground">房间</span>
               <span v-if="selected.room_id" class="font-mono">

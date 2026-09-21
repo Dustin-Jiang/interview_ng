@@ -74,7 +74,7 @@ const filtered = computed(() => {
   return candidates.value.filter((c) => {
     if (!showSettled.value && settledIds.value.has(c.id)) return false
     if (!kw) return true
-    return c.name.toLowerCase().includes(kw)
+    return c.student_no.includes(kw) || c.name.toLowerCase().includes(kw)
   })
 })
 
@@ -181,7 +181,7 @@ function searchQuery(): Record<string, string> {
       </div>
 
       <div class="px-3 pb-2">
-        <SearchInput v-model="keyword" full placeholder="搜索姓名…" />
+        <SearchInput v-model="keyword" full placeholder="搜索学号 / 姓名…" />
       </div>
 
       <RosterList

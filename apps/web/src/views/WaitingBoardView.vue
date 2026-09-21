@@ -1,7 +1,7 @@
 <!--
   WaitingBoardView —— 候场大屏（DataTable 版）：未完成名单 + 签到操作。
   与候选人管理界面共用 DataTable 视觉；差异：名单按状态排序
-  （正在面试 > 等待开始 > 等待分配 > 其他，COMPLETED 不上屏），仅展示姓名与房间，
+  （正在面试 > 等待开始 > 等待分配 > 其他，COMPLETED 不上屏），仅展示学号、姓名与房间，
   操作列只保留签到。签到仅对持有 candidates.checkin 权限的用户可见，名单对任意登录用户可见。
 -->
 <script setup lang="ts">
@@ -47,6 +47,11 @@ async function handleCheckin(c: Candidate) {
 // ---- DataTable 列定义（h() 渲染，闭包捕获视图处理函数） ----
 const columnHelper = createColumnHelper<DataTableFeatures, Candidate>()
 const columns: ColumnDef<DataTableFeatures, Candidate>[] = columnHelper.columns([
+  columnHelper.accessor('student_no', {
+    header: '学号',
+    enableSorting: false,
+    cell: ({ getValue }) => h('span', { class: 'font-mono' }, String(getValue())),
+  }),
   columnHelper.accessor('name', {
     header: '姓名',
     enableSorting: false,
@@ -107,7 +112,7 @@ onMounted(() => void load())
     >
       <!-- 搜索框：图标 + 可清空（Enter / 清空均触发检索）。 -->
       <template #toolbar>
-        <SearchInput v-model="keyword" placeholder="搜索姓名…" @search="setKeyword" />
+        <SearchInput v-model="keyword" placeholder="搜索学号 / 姓名…" @search="setKeyword" />
       </template>
     </DataTableSection>
   </PageShell>

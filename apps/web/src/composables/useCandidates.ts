@@ -1,6 +1,7 @@
 /**
  * useCandidates —— 候选人列表组合式函数（函数式 ViewModel）。
  * 组合 useAsync 完成"加载候选人"；增/签/编辑/删除/重置等 action 以 promise 形式向下游组合。
+ * 关键词检索（由后端执行）覆盖学号 / 姓名 / 简介。
  * 分配已改为"房间内拉取"（PUT /api/rooms/:id/candidate），本组合式不再提供 assign。
  */
 import { computed, ref, type Ref } from 'vue'
@@ -23,12 +24,12 @@ export interface UseCandidates {
   setStatusFilter: (value: CandidateStatus | '') => void
   /** 更新关键词并重新加载。 */
   setKeyword: (value: string) => void
-  /** 创建候选人并插入列表头部。 */
-  create: (name: string, profile: string) => Promise<Candidate | null>
+  /** 创建候选人并插入列表头部（学号为身份键，必填且唯一）。 */
+  create: (studentNo: string, name: string, profile: string) => Promise<Candidate | null>
   /** 签到（NOT_CHECKED_IN → 已签到待分配）。 */
   checkin: (id: number) => Promise<void>
-  /** 编辑姓名/简介。 */
-  update: (id: number, name: string, profile: string) => Promise<void>
+  /** 编辑学号/姓名/简介（学号可改，撞号由服务端拒绝）。 */
+  update: (id: number, studentNo: string, name: string, profile: string) => Promise<void>
   /** 删除候选人（级联删消息、解绑房间）。 */
   remove: (id: number) => Promise<void>
   /** 重置状态到任意档（表单约束在视图层，后端校验为准）。 */
@@ -61,8 +62,8 @@ export function useCandidates(): UseCandidates {
     void load()
   }
 
-  async function create(name: string, profile: string): Promise<Candidate | null> {
-    const { id } = await candidateApi.create({ name, profile: profile || undefined })
+  async function create(studentNo: string, name: string, profile: string): Promise<Candidate | null> {
+    const { id } = await candidateApi.create({ student_no: studentNo, name, profile: profile || undefined })
     const created = await candidateApi.get(id)
     // 不可变更新：返回新数组，插入头部。
     async.data.value = { items: [created, ...candidates.value] }
@@ -74,8 +75,8 @@ export function useCandidates(): UseCandidates {
     await load()
   }
 
-  async function update(id: number, name: string, profile: string): Promise<void> {
-    await candidateApi.update(id, { name, profile: profile || undefined })
+  async function update(id: number, studentNo: string, name: string, profile: string): Promise<void> {
+    await candidateApi.update(id, { student_no: studentNo, name, profile: profile || undefined })
     await load()
   }
 
