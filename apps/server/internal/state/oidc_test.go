@@ -113,7 +113,7 @@ func TestSetOidcConfigValidation(t *testing.T) {
 	ctx := context.Background()
 	valid := &dsmodel.OidcConfig{
 		Enabled: true, Issuer: "https://sso.example.com", ClientID: "interview-ng",
-		Scopes: dsmodel.DefaultOidcScopes, RedirectURL: "http://app.example/api/oidc/callback",
+		Scopes: dsmodel.DefaultOidcScopes, RedirectURL: "http://app.example/api/oidc/sessions",
 		AutoProvision: true,
 	}
 

@@ -4,13 +4,16 @@
   + 「组 → 角色」JMESPath 规则表（自上而下首个命中生效）
   + 规则验证（粘贴 ID token 声明试算命中结果）。
   客户端密钥只写不读：界面只显示「是否已配置」，不回收明文。
+  回调地址只让改**主机**：路径固定为后端回调端点（OIDC_CALLBACK_PATH），管理员无从改错。
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
+import { OIDC_CALLBACK_PATH } from '@/api/http'
 import { useConfirmAction } from '@/composables/useConfirmAction'
 import { useOidcSettings } from '@/composables/useOidcSettings'
+import { callbackOriginOf, normalizeCallbackOrigin, unusableCallbackURL } from '@/domain/oidc'
 import { toastError } from '@/lib/toast'
 import type { OidcConfigPayload, OidcRulePayload } from '@/models'
 
@@ -32,9 +35,9 @@ const { config, roles, loading, error, saving, probing, probeResult, load, save,
 
 onMounted(() => void load())
 
-/** 默认回调地址：与后端同源（开发期经 vite 代理到 :8080）。 */
-function defaultRedirectURL(): string {
-  return `${window.location.origin}/api/oidc/callback`
+/** 回调主机默认值：控制台自身来源（后端用回调地址的主机推导登录页来源，二者必须同源）。 */
+function defaultOrigin(): string {
+  return window.location.origin
 }
 
 const form = ref({
@@ -44,12 +47,13 @@ const form = ref({
   /** 草稿态密钥：空串 = 不修改（清除走单独按钮）。 */
   client_secret: '',
   scopes: 'openid profile email',
-  redirect_url: '',
+  /** 回调地址的**主机部分**（scheme://host[:port]）；路径固定为 OIDC_CALLBACK_PATH。 */
+  callback_origin: '',
   auto_provision: true,
   rules: [] as OidcRulePayload[],
 })
 
-// 服务端配置为准：加载/保存后重填草稿（首次回调地址为空时给出默认值）。
+// 服务端配置为准：加载/保存后重填草稿（主机取自已存回调地址，路径不参与编辑）。
 watch(
   config,
   (c) => {
@@ -60,7 +64,7 @@ watch(
       client_id: c.client_id,
       client_secret: '',
       scopes: c.scopes || 'openid profile email',
-      redirect_url: c.redirect_url || defaultRedirectURL(),
+      callback_origin: callbackOriginOf(c.redirect_url) || defaultOrigin(),
       auto_provision: c.auto_provision,
       rules: c.rules.map((r) => ({ expression: r.expression, role_id: r.role_id })),
     }
@@ -72,13 +76,24 @@ const secretPlaceholder = computed(() =>
   config.value?.client_secret_set ? '已配置（留空则不修改）' : '客户端密钥（公开客户端可留空）',
 )
 
+/** 已存回调地址不可用时返回原值（登录回调会打到不存在的路径，保存一次即修正）。 */
+const unusableSavedCallback = computed(() =>
+  unusableCallbackURL(config.value?.redirect_url ?? '', OIDC_CALLBACK_PATH),
+)
+
 async function submit(): Promise<void> {
+  const origin = normalizeCallbackOrigin(form.value.callback_origin)
+  if (!origin) {
+    toast.error('回调地址需以 http:// 或 https:// 开头，例如 https://interview.example.com')
+    return
+  }
   const payload: OidcConfigPayload = {
     enabled: form.value.enabled,
     issuer: form.value.issuer.trim(),
     client_id: form.value.client_id.trim(),
     scopes: form.value.scopes.trim(),
-    redirect_url: form.value.redirect_url.trim(),
+    // 路径固定，只换主机：拼出来的一定是后端真实回调端点。
+    redirect_url: origin + OIDC_CALLBACK_PATH,
     auto_provision: form.value.auto_provision,
     rules: form.value.rules,
   }
@@ -164,8 +179,29 @@ const {
           </div>
 
           <div class="grid gap-2">
-            <Label for="oidc-redirect">回调地址</Label>
-            <Input id="oidc-redirect" v-model="form.redirect_url" :placeholder="defaultRedirectURL()" />
+            <Label for="oidc-callback-origin">回调地址</Label>
+            <!-- 主机可编辑，路径固定（后端回调端点，注册到 IdP 的 redirect_uri 即此完整地址） -->
+            <div class="flex">
+              <Input
+                id="oidc-callback-origin"
+                v-model="form.callback_origin"
+                class="rounded-r-none"
+                placeholder="http://localhost:3000"
+                aria-describedby="oidc-callback-path"
+              />
+              <span
+                id="oidc-callback-path"
+                class="inline-flex shrink-0 items-center rounded-r-md border border-l-0 border-input bg-muted px-3 text-sm whitespace-nowrap text-muted-foreground"
+              >
+                {{ OIDC_CALLBACK_PATH }}
+              </span>
+            </div>
+            <ErrorAlert
+              v-if="unusableSavedCallback"
+              variant="plain"
+              class="p-0"
+              :message="`当前保存的回调地址 ${unusableSavedCallback} 的路径不是 ${OIDC_CALLBACK_PATH}，登录回调会 404；保存一次即修正。`"
+            />
           </div>
 
           <div class="flex items-center gap-2">

@@ -155,6 +155,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 ### 单点登录（OIDC）
 
 - 配置入口：「登录认证」设置分区（`/settings/authentication`，需 `users.manage`）：开关、Issuer、Client ID / Secret、Scopes、回调地址、是否自动开通，以及「组 → 角色」的 **JMESPath 规则表**与规则验证（粘贴 ID token 声明试算）。
+- 回调地址：界面**只填主机**（控制台与 `/api` 必须同源），路径固定为后端回调端点 `/api/oidc/sessions`；**注册到 IdP 的 redirect_uri 必须是该完整地址** `<主机>/api/oidc/sessions`。管理员只改主机的另一个原因：后端从回调地址的主机推导登录页来源（`spaOrigin`），换主机即换站点，路径却只能由本服务提供。
 - 流程：`GET /api/oidc/authorization` 发现文档 → 生成 `state` / `nonce` / PKCE（S256，始终启用）→ 302 到 IdP；IdP 回调 `GET /api/oidc/sessions?code=&state=` → 换 token 并用 go-oidc 校验签名/iss/aud/exp（**nonce 由本服务手工比对**，库不校验）→ 命中规则 → 建号/同步 → 签发同款 JWT → 302 回前端并携带**一次性登录码**（60 秒有效，token 不出现在 URL）；前端 `POST /api/oidc/sessions {code}` 换取会话。`state`（10 分钟有效）与登录码均为**单次使用**。
 - 身份与授权：身份键 = IdP 的 `sub`（`users.oidc_subject`，可空唯一）；显示名与角色**以 IdP 为权威**，每次登录覆盖。**未命中任何规则 → 拒绝登录**（`oidc_role_unmapped`，无默认角色；要兜底就加一条恒真规则 `@`）。首次登录按 `auto_provision` 自动建号（用户名取 `preferred_username` → 邮箱前缀 → `sub`，非法字符剔除并截断 64 字符；重名追加 `-<sub 前 6 位>`）。
 - 密钥：`client_secret` 明文存库，读取接口只回 `client_secret_set`；保存时省略该字段 = 保持原值，`""` = 清除，非空 = 覆盖。

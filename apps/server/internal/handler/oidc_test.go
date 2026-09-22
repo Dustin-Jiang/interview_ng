@@ -181,7 +181,7 @@ func startOidc(t *testing.T, r *gin.Engine, idp *fakeIdp) oidcRedirect {
 // oidcConfigBody 组装启用态配置请求体。
 func oidcConfigBody(issuer, rules string) string {
 	return `{"enabled":true,"issuer":"` + issuer + `","client_id":"interview-ng","client_secret":"s3cret",` +
-		`"scopes":"openid profile email","redirect_url":"http://app.example/api/oidc/callback",` +
+		`"scopes":"openid profile email","redirect_url":"http://app.example/api/oidc/sessions",` +
 		`"auto_provision":true,"rules":[` + rules + `]}`
 }
 
@@ -251,7 +251,7 @@ func TestOidcConfigAdminOnlyAndSecretMasking(t *testing.T) {
 
 	// 省略 client_secret → 保持原密钥
 	keep := `{"enabled":true,"issuer":"https://sso.example.com/realms/interview","client_id":"interview-ng",` +
-		`"scopes":"openid profile email","redirect_url":"http://app.example/api/oidc/callback","auto_provision":true,"rules":[]}`
+		`"scopes":"openid profile email","redirect_url":"http://app.example/api/oidc/sessions","auto_provision":true,"rules":[]}`
 	if code, out := doJSON(t, r, "PUT", "/api/oidc/config", keep, admin); code != http.StatusOK {
 		t.Fatalf("省略密钥保存: %d %v", code, out)
 	}

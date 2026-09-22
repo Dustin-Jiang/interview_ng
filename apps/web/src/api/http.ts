@@ -104,6 +104,13 @@ export const authApi = {
 /** OIDC 授权入口（整页跳转，非 XHR）。 */
 export const OIDC_AUTHORIZATION_PATH = '/api/oidc/authorization'
 
+/**
+ * IdP 回调端点（**路径固定，界面不可编辑**）：必须与后端 `handler/http.go` 的
+ * `GET /api/oidc/sessions` 路由一致。管理员在「登录认证」里只填主机，路径由本常量拼上；
+ * 注册到 IdP 的 redirect_uri 必须是 `<主机><本路径>` 这一完整地址。
+ */
+export const OIDC_CALLBACK_PATH = '/api/oidc/sessions'
+
 export const oidcApi = {
   /** 登录方式开关（公共接口，登录页据此渲染入口）。 */
   options(): Promise<AuthenticationOptions> {

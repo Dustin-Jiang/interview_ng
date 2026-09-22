@@ -19,3 +19,50 @@ export const OIDC_ERROR_MESSAGES: Record<string, string> = {
 export function oidcErrorMessage(code: string): string {
   return OIDC_ERROR_MESSAGES[code] ?? OIDC_ERROR_MESSAGES.oidc_login_failed
 }
+
+// ---- 回调地址（主机可编辑，路径固定） ----
+
+/** 是否 http(s) 来源（其余协议不是合法回调主机）。 */
+function httpOrigin(u: URL): string {
+  return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : ''
+}
+
+/**
+ * 取已保存回调地址的主机部分（`scheme://host[:port]`）；空/脏数据 → `""`。
+ * 路径不参与编辑：`OIDC_CALLBACK_PATH` 固定，管理员只填主机。
+ */
+export function callbackOriginOf(url: string): string {
+  try {
+    return httpOrigin(new URL(url.trim()))
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 归一化管理员输入的回调主机：接受主机（可带端口），粘贴完整 URL 时只取 origin
+ * （路径由固定后缀决定，多余的路径/查询/锚点一律丢弃；协议大小写与默认端口按 URL 规范归一）。
+ * 非法（缺 `http(s)://`、空、非 http 协议）→ `null`，由调用方提示。
+ */
+export function normalizeCallbackOrigin(raw: string): string | null {
+  const text = raw.trim()
+  if (!text) return null
+  try {
+    const u = new URL(text)
+    return u.hostname ? httpOrigin(u) || null : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 已保存的回调地址是否**不可用**（空串表示「已经是对的」）：
+ * 空值不算（首次配置本来就没有）；存在但与 `<主机><固定路径>` 不一致时返回原值，
+ * 供界面提示「登录回调会打到一个不存在的路径」。
+ */
+export function unusableCallbackURL(saved: string, callbackPath: string): string {
+  const text = saved.trim()
+  if (!text) return ''
+  const origin = callbackOriginOf(text)
+  return origin && origin + callbackPath === text ? '' : text
+}
