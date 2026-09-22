@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	dsmodel "interview_ng/internal/model"
+	"interview_ng/internal/oidcauth"
 )
 
 // MemStateStore 是 StateStore 的内存实现（Q1=A）。
@@ -589,6 +590,15 @@ func (s *MemStateStore) CreateUser(ctx context.Context, u *dsmodel.User, roleIDs
 			return 0, err
 		}
 	}
+	// 用户名是登录凭证，唯一（与 UpdateUser 一致：先查重给出明确业务错误码）。
+	var dup int64
+	if err := s.db.WithContext(ctx).Model(&dsmodel.User{}).
+		Where("username = ?", u.Username).Count(&dup).Error; err != nil {
+		return 0, err
+	}
+	if dup > 0 {
+		return 0, &Error{Code: "username_taken", Msg: "用户名已被使用"}
+	}
 	if err := s.db.WithContext(ctx).Create(u).Error; err != nil {
 		return 0, err
 	}
@@ -834,6 +844,140 @@ func (s *MemStateStore) ensureDepartment(ctx context.Context, id uint64) error {
 		return &Error{Code: "department_not_found", Msg: "部门不存在"}
 	}
 	return nil
+}
+
+//---- 单点登录（OIDC） ----
+
+// oidcConfigID OIDC 配置单行记录的固定主键（ID 恒为 1）。
+const oidcConfigID = 1
+
+// ensureOidcConfig 读取 OIDC 配置行，不存在时按默认值落库（幂等初始化），并填充规则。
+func (s *MemStateStore) ensureOidcConfig(ctx context.Context) (*dsmodel.OidcConfig, error) {
+	var cfg dsmodel.OidcConfig
+	err := s.db.WithContext(ctx).First(&cfg, oidcConfigID).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		cfg = dsmodel.OidcConfig{ID: oidcConfigID, Scopes: dsmodel.DefaultOidcScopes, AutoProvision: true}
+		if err := s.db.WithContext(ctx).Create(&cfg).Error; err != nil {
+			return nil, err
+		}
+	}
+	var rules []dsmodel.OidcRoleRule
+	if err := s.db.WithContext(ctx).Order("position asc, id asc").Find(&rules).Error; err != nil {
+		return nil, err
+	}
+	cfg.Rules = rules
+	return &cfg, nil
+}
+
+func (s *MemStateStore) GetOidcConfig(ctx context.Context) (*dsmodel.OidcConfig, error) {
+	return s.ensureOidcConfig(ctx)
+}
+
+// SetOidcConfig 覆盖保存配置与规则：先校验（开关打开的必填/格式 + 规则的表达式与角色），
+// 再单事务写配置行并整体替换规则表。不发事件（与系统状态写入一致，前端写后自拉）。
+func (s *MemStateStore) SetOidcConfig(ctx context.Context, cfg *dsmodel.OidcConfig, clientSecret *string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.ensureOidcConfig(ctx); err != nil {
+		return err
+	}
+	if cfg.Enabled {
+		if !strings.HasPrefix(cfg.Issuer, "http://") && !strings.HasPrefix(cfg.Issuer, "https://") {
+			return &Error{Code: "oidc_issuer_invalid", Msg: "Issuer 必须是 http(s):// 开头的完整地址"}
+		}
+		if cfg.ClientID == "" {
+			return &Error{Code: "oidc_client_id_required", Msg: "Client ID 必填"}
+		}
+		if !strings.HasPrefix(cfg.RedirectURL, "http://") && !strings.HasPrefix(cfg.RedirectURL, "https://") {
+			return &Error{Code: "oidc_redirect_url_invalid", Msg: "回调地址必须是 http(s):// 开头的完整地址"}
+		}
+		hasOpenid := false
+		for _, sc := range dsmodel.ParseScopes(cfg.Scopes) {
+			if sc == "openid" {
+				hasOpenid = true
+				break
+			}
+		}
+		if !hasOpenid {
+			return &Error{Code: "oidc_scopes_invalid", Msg: "Scopes 必须包含 openid"}
+		}
+	}
+	for i := range cfg.Rules {
+		r := &cfg.Rules[i]
+		r.Expression = strings.TrimSpace(r.Expression)
+		if r.Expression == "" {
+			return &Error{Code: "oidc_rule_invalid", Msg: fmt.Sprintf("第 %d 条规则的表达式不能为空", i+1)}
+		}
+		if _, err := oidcauth.Compile(r.Expression); err != nil {
+			return &Error{Code: "oidc_rule_invalid", Msg: fmt.Sprintf("第 %d 条规则的 JMESPath 表达式无效：%v", i+1, err)}
+		}
+		var n int64
+		if err := s.db.WithContext(ctx).Model(&dsmodel.Role{}).Where("id = ?", r.RoleID).Count(&n).Error; err != nil {
+			return err
+		}
+		if n == 0 {
+			return &Error{Code: "oidc_rule_role_missing", Msg: fmt.Sprintf("第 %d 条规则的目标角色不存在", i+1)}
+		}
+	}
+	updates := map[string]any{
+		"enabled":        cfg.Enabled,
+		"issuer":         cfg.Issuer,
+		"client_id":      cfg.ClientID,
+		"scopes":         cfg.Scopes,
+		"redirect_url":   cfg.RedirectURL,
+		"auto_provision": cfg.AutoProvision,
+	}
+	if clientSecret != nil {
+		updates["client_secret"] = *clientSecret
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&dsmodel.OidcConfig{}).Where("id = ?", oidcConfigID).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id > 0").Delete(&dsmodel.OidcRoleRule{}).Error; err != nil {
+			return err
+		}
+		for i := range cfg.Rules {
+			rule := dsmodel.OidcRoleRule{Position: i, Expression: cfg.Rules[i].Expression, RoleID: cfg.Rules[i].RoleID}
+			if err := tx.Create(&rule).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (s *MemStateStore) FindUserByOidcSubject(ctx context.Context, subject string) (*dsmodel.User, error) {
+	var u dsmodel.User
+	if err := s.db.WithContext(ctx).Where("oidc_subject = ?", subject).First(&u).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if err := s.fillRoles(ctx, &u); err != nil {
+		return nil, err
+	}
+	if err := s.fillDepartment(ctx, &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// SyncOidcUser 以 IdP 为准覆盖显示名与角色分配（name 为空串时保留原显示名）。
+func (s *MemStateStore) SyncOidcUser(ctx context.Context, id uint64, name string, roleIDs []uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if name != "" {
+		if err := s.db.WithContext(ctx).Model(&dsmodel.User{}).Where("id = ?", id).
+			UpdateColumn("name", name).Error; err != nil {
+			return err
+		}
+	}
+	return s.setRolesLocked(ctx, id, roleIDs)
 }
 
 //---- 系统状态 ----

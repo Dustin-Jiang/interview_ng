@@ -10,8 +10,10 @@ type User struct {
 	Name         string      `gorm:"size:128" json:"name"`
 	DepartmentID *uint64     `gorm:"index" json:"department_id"` // 所属部门（可空：admin 全局角色无部门，面试官必有部门）
 	Department   *Department `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
-	TokenVersion uint64      `json:"-"` // 改密/重置时递增，使旧 token 即时失效
-	CreatedAt    time.Time   `json:"created_at"`
-	UpdatedAt    time.Time   `json:"updated_at"`
-	Roles        []Role      `gorm:"-" json:"roles,omitempty"` // 由 store 手动填充（user_roles M2M）
+	// OidcSubject 是 IdP 的稳定主体标识（ID token 的 sub）；OIDC 用户唯一，密码用户为 NULL。
+	OidcSubject  *string   `gorm:"size:255;uniqueIndex" json:"-"`
+	TokenVersion uint64    `json:"-"` // 改密/重置时递增，使旧 token 即时失效
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Roles        []Role    `gorm:"-" json:"roles,omitempty"` // 由 store 手动填充（user_roles M2M）
 }

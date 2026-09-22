@@ -78,6 +78,20 @@ type StateStore interface {
 	// DeleteRole 删除角色（被用户引用时拒绝）。
 	DeleteRole(ctx context.Context, id uint64) error
 
+	// ---- 单点登录（OIDC）配置 ----
+
+	// GetOidcConfig 返回 OIDC 单行配置（不存在时按默认值懒建）。Rules 按 position 升序填充。
+	GetOidcConfig(ctx context.Context) (*dsmodel.OidcConfig, error)
+	// SetOidcConfig 覆盖保存 OIDC 配置与规则（单事务，先落库成功）。
+	// clientSecret 为 nil 表示保持原密钥不变，"" 表示清除，非空表示覆盖。
+	// 校验失败返回 *Error：oidc_issuer_invalid / oidc_client_id_required /
+	// oidc_redirect_url_invalid / oidc_scopes_invalid / oidc_rule_invalid / oidc_rule_role_missing。
+	SetOidcConfig(ctx context.Context, cfg *dsmodel.OidcConfig, clientSecret *string) error
+	// FindUserByOidcSubject 按 IdP 主体标识查用户；不存在 → ErrNotFound。
+	FindUserByOidcSubject(ctx context.Context, subject string) (*dsmodel.User, error)
+	// SyncOidcUser 同步 OIDC 用户的显示名与角色分配（IdP 为权威，每次登录覆盖）。
+	SyncOidcUser(ctx context.Context, id uint64, name string, roleIDs []uint64) error
+
 	// ---- 部门管理 ----
 
 	// ListDepartments 列出全部部门（含预期人数与面试官数）。

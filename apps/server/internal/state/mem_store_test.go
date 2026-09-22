@@ -28,6 +28,7 @@ func newTestStore(t *testing.T) state.StateStore {
 		&dsmodel.RoomMember{}, &dsmodel.Message{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
 		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
+		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

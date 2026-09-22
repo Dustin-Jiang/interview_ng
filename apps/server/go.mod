@@ -3,9 +3,13 @@ module interview_ng
 go 1.26.5
 
 require (
+	github.com/coreos/go-oidc/v3 v3.16.0
 	github.com/gin-gonic/gin v1.12.0
+	github.com/go-jose/go-jose/v4 v4.1.3
 	github.com/gorilla/websocket v1.5.3
+	github.com/jmespath/go-jmespath v0.4.0
 	golang.org/x/crypto v0.48.0
+	golang.org/x/oauth2 v0.28.0
 	gorm.io/driver/postgres v1.6.2
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
