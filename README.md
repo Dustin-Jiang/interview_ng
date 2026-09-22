@@ -78,7 +78,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 - **service**：`InterviewService` 业务编排；强制「先落库后广播」顺序。
 - **state**：`StateStore` 接口 + `MemStateStore` 实现。状态唯一性权威、原子写、转移动图、内存快照读；内部经 Gorm 落库。
 - **broadcast**：`Manager` 订阅事件流，按房间扇出到该房间所有 WS 写队列；`BindGlobal` 注册的全局订阅者（看板通道）接收所有事件。
-- **model**：`User / Department / Candidate / Room / RoomMember / Message / SystemStatus / CandidateAdmission` + 状态枚举/转移动图。
+- **model**：`User / Department / Candidate / Room / RoomMember / Message / SystemStatus / CandidateAdmission / Bid / OidcConfig / OidcRoleRule` + 状态枚举/转移动图。
 
 ---
 
@@ -86,7 +86,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 | 表 | 关键列 | 角色 |
 |---|---|---|
-| `users` | id, username(唯一), password_hash, name, department_id, token_version | 面试官（登录用户，登录名唯一，管理端可改） |
+| `users` | id, username(唯一), password_hash, name, department_id, **oidc_subject(可空唯一)**, token_version | 面试官（登录用户，登录名唯一，管理端可改）；`oidc_subject` = 单点登录身份键（ID token 的 `sub`），密码用户为 NULL（Postgres 唯一索引允许多个 NULL） |
 | `departments` | id, name(唯一), description | 部门（面试官所属组织单元） |
 | `roles` | id, name(唯一), description | 角色（权限组，RBAC） |
 | `role_permissions` | role_id, permission（联合唯一） | 角色↔权限关联 |
@@ -98,6 +98,8 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 | `system_status` | id=1(单行), phase(interview/admission/leftover/settlement) | 系统状态：当前面试 / 录取 / 捡漏 / 结算阶段，管理端可切换 |
 | `candidate_admissions` | candidate_id + department_id（联合唯一）, status(pending/admitted/withdrawn) | 各部门对候选人的录取决定（候选人无固定部门，按部门分别记） |
 | `bids` | candidate_id + department_id（联合唯一）, amount | 捡漏阶段部门出价（candidate+department 唯一；金额对其他部门保密、事件不带金额，持 `candidates.browse_all` 的管理端跨部门可见） |
+| `oidc_configs` | id=1(单行), enabled, issuer, client_id, client_secret, scopes, redirect_url, auto_provision | 单点登录（OIDC）配置（单行懒建，同 `system_status` 范式）；`client_secret` 明文存库但**读取接口只回 `client_secret_set` 布尔**，明文永不下发 |
+| `oidc_role_rules` | id, position, expression, role_id | 「组 → 角色」映射规则：对 ID token 声明求值 JMESPath 表达式，命中即赋予该角色；**自上而下、首个命中生效**（`position` 即界面行序，保存时整体替换） |
 
 权限目录（12 枚）：`users.manage`、`candidates.manage`、`candidates.preferences`（修改候选人志愿与调剂）、`candidates.browse_all`（跨部门浏览录取状态与捡漏出价）、`candidates.create`、`candidates.checkin`、`candidates.assign`、`rooms.view`、`rooms.chat`、`rooms.move_phase`、`rooms.manage`、`admissions.record`（记录本部门录取决定/捡漏出价）。预置角色：`admin`（全部）、`interviewer`（8 枚流程权限：候选人创建/签到/拉取、志愿与调剂、房间浏览/聊天/推进阶段、本部门录取记录；不含资料与房间管理、跨部门浏览）。
 
@@ -150,6 +152,15 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 - 错误语义：未登录/无效 token → **401**；有身份但缺权限 → **403**。
 - 种子：启动时若无用户则创建 `admin`（全权限）+ `interviewer` 角色与默认账号 `admin/admin`（可用 `ADMIN_INIT_PASSWORD` 覆盖）。**不预置任何部门**——部门与用户归属由管理员在设置页显式创建/分配（admin 不隶属任何部门）。
 
+### 单点登录（OIDC）
+
+- 配置入口：「登录认证」设置分区（`/settings/authentication`，需 `users.manage`）：开关、Issuer、Client ID / Secret、Scopes、回调地址、是否自动开通，以及「组 → 角色」的 **JMESPath 规则表**与规则验证（粘贴 ID token 声明试算）。
+- 流程：`GET /api/oidc/authorization` 发现文档 → 生成 `state` / `nonce` / PKCE（S256，始终启用）→ 302 到 IdP；IdP 回调 `GET /api/oidc/sessions?code=&state=` → 换 token 并用 go-oidc 校验签名/iss/aud/exp（**nonce 由本服务手工比对**，库不校验）→ 命中规则 → 建号/同步 → 签发同款 JWT → 302 回前端并携带**一次性登录码**（60 秒有效，token 不出现在 URL）；前端 `POST /api/oidc/sessions {code}` 换取会话。`state`（10 分钟有效）与登录码均为**单次使用**。
+- 身份与授权：身份键 = IdP 的 `sub`（`users.oidc_subject`，可空唯一）；显示名与角色**以 IdP 为权威**，每次登录覆盖。**未命中任何规则 → 拒绝登录**（`oidc_role_unmapped`，无默认角色；要兜底就加一条恒真规则 `@`）。首次登录按 `auto_provision` 自动建号（用户名取 `preferred_username` → 邮箱前缀 → `sub`，非法字符剔除并截断 64 字符；重名追加 `-<sub 前 6 位>`）。
+- 密钥：`client_secret` 明文存库，读取接口只回 `client_secret_set`；保存时省略该字段 = 保持原值，`""` = 清除，非空 = 覆盖。
+- 失败一律 302 回 `<前端源>/login?oidc_error=<码>`（`oidc_not_configured` / `oidc_discovery_failed` / `oidc_state_invalid` / `oidc_exchange_failed` / `oidc_nonce_invalid` / `oidc_claims_invalid` / `oidc_role_unmapped` / `oidc_user_unknown` / `oidc_username_taken` / `oidc_login_failed`），登录页映射为中文提示。
+- 流程与一次性登录码是**单进程内存态**：后端重启后在途登录失效，用户重新点按钮即可。本地密码登录**保留**，登录页同时展示两种方式；同名密码账号不会被 OIDC 接管（避免冒名）。规则只映射**角色**，不映射部门；不使用 userinfo 端点（只用 ID token 声明）。
+
 ---
 
 ## 本地运行
@@ -176,6 +187,13 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 - `GET  /api/health`
 - `POST /api/sessions` `{username, password}`（登录，签发 JWT）
 - `GET  /api/me`（当前用户 + 角色 + 权限并集）
+- `GET  /api/authentication`（**公共**：可用登录方式 `{password, oidc:{enabled}}`；配置读取失败一律按 `enabled=false` 返回）
+- `GET  /api/oidc/authorization`（**公共**：302 跳到 IdP 授权端点；未配置完整 → 302 回登录页 `oidc_error=oidc_not_configured`）
+- `GET  /api/oidc/sessions?code=&state=`（**公共**：IdP 回调，成功后 302 回 `<前端源>/login?oidc_code=<一次性登录码>`，失败 302 `?oidc_error=<码>`）
+- `POST /api/oidc/sessions` `{code}`（**公共**：用一次性登录码换会话，响应与 `POST /api/sessions` 一致；失效 → 401）
+- `GET  /api/oidc/config`（`users.manage`：OIDC 配置 + 规则；`client_secret` 明文**不下发**，只回 `client_secret_set`）
+- `PUT  /api/oidc/config` `{enabled, issuer, client_id, client_secret?, scopes, redirect_url, auto_provision, rules:[{expression, role_id}]}`（`users.manage`：整体覆盖保存；`client_secret` 省略 = 保持、`""` = 清除、非空 = 覆盖；校验失败 → 400 `oidc_issuer_invalid` / `oidc_client_id_required` / `oidc_redirect_url_invalid` / `oidc_scopes_invalid` / `oidc_rule_invalid` / `oidc_rule_role_missing`）
+- `POST /api/oidc/probes` `{issuer}`（`users.manage`：拉取发现文档做连通性自检，返回 `issuer` / `authorization_endpoint` / `token_endpoint` / `jwks_uri`）
 - `PUT  /api/me/password` `{old_password, new_password}`（自助改密）
 - `GET  /api/candidates?status=&q=&limit=&offset=`
 - `POST /api/candidates` `{student_no, name, profile?, first_choice?, second_choice?, accept_adjust?, phone?, qq?, email?}`（学号必填唯一；重复 → 409；文本字段服务端裁剪首尾空白）
@@ -210,8 +228,9 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 ## 依赖说明
 
 - 前端 `xlsx`（SheetJS，Apache-2.0）取自**官方 CDN tarball**（非 npm registry）：`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`，导入子路径 `xlsx/dist/xlsx.mini.min.js`（mini 构建，仅读 `.xlsx`，体积约为 full 的 1/3）。
-- 前端 `@jmespath-community/jmespath`（MPL-2.0）用于导入页的字段映射表达式求值。
-- 后端**零新增依赖**：导入的行解析、映射与校验都在浏览器完成，服务端只做校验与事务落库。
+- 前端 `@jmespath-community/jmespath`（MPL-2.0）用于导入页的字段映射表达式求值，以及设置页「登录认证」的规则验证试算（两处均在懒加载 chunk 内，不进入口包）。
+- 后端导入功能**零新增依赖**：导入的行解析、映射与校验都在浏览器完成，服务端只做校验与事务落库。
+- 后端 OIDC 依赖：`github.com/coreos/go-oidc/v3`（发现文档 + ID token 验签）、`golang.org/x/oauth2`（授权码 + PKCE）、`github.com/jmespath/go-jmespath`（规则表达式，保存时编译校验 + 回调时求值）。
 
 ---
 
@@ -225,6 +244,9 @@ internal/state/manage_test.go       # 拉取并发、重置联动、级联删除
 internal/handler/handler_test.go    # 登录/me/401/403/权限矩阵 + WS(auth 消息→sync) 端到端
 internal/state/import_test.go       # 学号校验/唯一冲突/导入 upsert（含批内覆盖、全或无回滚、量级上限）/关键词检索
 internal/handler/import_test.go     # 导入端点端到端（行级报告、整批回滚、403、409）
+internal/oidcauth/mapping_test.go   # JMESPath 命中语义/首个命中、用户名派生、声明取值
+internal/state/oidc_test.go         # OIDC 配置懒建/密钥三段语义/规则校验/用户按 sub 查号与同步
+internal/handler/oidc_test.go       # OIDC 端到端（假 IdP + 真 RS256 ID token：PKCE+nonce、登录码换会话、state 一次性、未映射拒绝、探测）
 tests/
 └── concurrency/                    # 仅文档、尚未实现
 ```
