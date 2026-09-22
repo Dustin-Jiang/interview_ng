@@ -77,8 +77,9 @@ watch(
       </nav>
     </aside>
 
-    <!-- 右侧：当前分区内容 -->
-    <main class="min-h-0 flex-1">
+    <!-- 右侧：当前分区内容（min-w-0：允许主区收缩到可用宽度，超宽表格由自身容器横向滚动，
+         否则 flex 项的自动最小宽度会把外壳撑宽、被 overflow-hidden 直接裁掉）。 -->
+    <main class="min-h-0 min-w-0 flex-1">
       <RouterView />
     </main>
   </div>

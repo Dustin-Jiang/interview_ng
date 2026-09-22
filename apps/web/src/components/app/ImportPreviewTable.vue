@@ -46,7 +46,11 @@ const rows = computed<PreviewRow[]>(() =>
   })),
 )
 
-/** 空值统一以 `-` 占位（不区分「映射为空」与「未映射」）。 */
+/**
+ * 单元格文本：空值统一以 `-` 占位（不区分「映射为空」与「未映射」）。
+ * 除个人简介（可换行、给最小宽度以保持可读）外，各列一律 nowrap —— 内容不折行，
+ * 放不下时由表格容器横向滚动。
+ */
 function textCell(value: string, classNames: string) {
   return value ? h('div', { class: classNames }, value) : h('span', { class: 'text-muted-foreground' }, '-')
 }
@@ -56,29 +60,30 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
   columnHelper.accessor('line', {
     header: '行号',
     enableSorting: false,
-    cell: ({ getValue }) => h('div', { class: 'font-mono text-xs text-muted-foreground' }, String(getValue())),
+    cell: ({ getValue }) =>
+      h('div', { class: 'whitespace-nowrap font-mono text-xs text-muted-foreground' }, String(getValue())),
   }),
   columnHelper.accessor('studentNo', {
     header: '学号',
     enableSorting: false,
-    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'font-mono text-xs'),
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap font-mono text-xs'),
   }),
   columnHelper.accessor('name', {
     header: '姓名',
     enableSorting: false,
-    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'break-words'),
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap'),
   }),
   columnHelper.accessor('profile', {
     header: '个人简介',
     enableSorting: false,
-    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'break-words text-muted-foreground'),
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'min-w-56 break-words text-muted-foreground'),
   }),
   columnHelper.display({
     id: 'status',
     header: '校验状态',
     enableHiding: false,
     cell: ({ row }) =>
-      h('div', { class: 'space-y-1' }, [
+      h('div', { class: 'space-y-1 whitespace-nowrap' }, [
         h(
           Badge,
           { variant: row.original.status === 'error' ? 'destructive' : 'secondary' },

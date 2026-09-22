@@ -72,25 +72,35 @@ const resultColumns: ColumnDef<DataTableFeatures, ResultRow>[] = columnHelper.co
   columnHelper.accessor('line', {
     header: '行号',
     enableSorting: false,
-    cell: ({ getValue }) => h('div', { class: 'font-mono text-xs text-muted-foreground' }, String(getValue())),
+    cell: ({ getValue }) =>
+      h('div', { class: 'whitespace-nowrap font-mono text-xs text-muted-foreground' }, String(getValue())),
   }),
   columnHelper.accessor('studentNo', {
     header: '学号',
     enableSorting: false,
-    cell: ({ getValue }) => h('div', { class: 'font-mono text-xs' }, String(getValue())),
+    cell: ({ getValue }) => h('div', { class: 'whitespace-nowrap font-mono text-xs' }, String(getValue())),
   }),
   columnHelper.accessor('created', {
     header: '结果',
     enableSorting: false,
     cell: ({ getValue }) =>
-      h(Badge, { variant: getValue() ? 'secondary' : 'outline' }, () => (getValue() ? '新建' : '更新')),
+      h('div', { class: 'whitespace-nowrap' }, [
+        h(Badge, { variant: getValue() ? 'secondary' : 'outline' }, () => (getValue() ? '新建' : '更新')),
+      ]),
   }),
   columnHelper.display({
     id: 'candidate',
     header: '候选人',
     enableHiding: false,
     cell: ({ row }) =>
-      h(RouterLink, { class: 'text-primary underline-offset-4 hover:underline', to: { name: 'candidate', params: { candidateId: String(row.original.candidateId) } } }, () => `#${row.original.candidateId}`),
+      h(
+        RouterLink,
+        {
+          class: 'whitespace-nowrap text-primary underline-offset-4 hover:underline',
+          to: { name: 'candidate', params: { candidateId: String(row.original.candidateId) } },
+        },
+        () => `#${row.original.candidateId}`,
+      ),
   }),
 ])
 
@@ -99,20 +109,23 @@ const problemColumns: ColumnDef<DataTableFeatures, ProblemRow>[] = problemColumn
   problemColumnHelper.accessor('line', {
     header: '行号',
     enableSorting: false,
-    cell: ({ getValue }) => h('div', { class: 'font-mono text-xs text-muted-foreground' }, String(getValue())),
+    cell: ({ getValue }) =>
+      h('div', { class: 'whitespace-nowrap font-mono text-xs text-muted-foreground' }, String(getValue())),
   }),
   problemColumnHelper.accessor('studentNo', {
     header: '学号',
     enableSorting: false,
     cell: ({ getValue }) => {
       const value = String(getValue() ?? '')
-      return value ? h('div', { class: 'font-mono text-xs' }, value) : h('span', { class: 'text-muted-foreground' }, '-')
+      return value
+        ? h('div', { class: 'whitespace-nowrap font-mono text-xs' }, value)
+        : h('span', { class: 'text-muted-foreground' }, '-')
     },
   }),
   problemColumnHelper.accessor('reason', {
     header: '原因',
     enableSorting: false,
-    cell: ({ getValue }) => h('div', { class: 'text-destructive' }, String(getValue())),
+    cell: ({ getValue }) => h('div', { class: 'min-w-56 break-words text-destructive' }, String(getValue())),
   }),
 ])
 </script>
