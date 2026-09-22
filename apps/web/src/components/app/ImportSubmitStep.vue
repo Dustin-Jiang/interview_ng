@@ -125,7 +125,8 @@ const problemColumns: ColumnDef<DataTableFeatures, ProblemRow>[] = problemColumn
   problemColumnHelper.accessor('reason', {
     header: '原因',
     enableSorting: false,
-    cell: ({ getValue }) => h('div', { class: 'min-w-56 break-words text-destructive' }, String(getValue())),
+    cell: ({ getValue }) =>
+      h('div', { class: 'min-w-56 whitespace-pre-line break-words text-destructive' }, String(getValue())),
   }),
 ])
 </script>

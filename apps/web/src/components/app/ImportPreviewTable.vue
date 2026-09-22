@@ -69,8 +69,8 @@ const allRows = computed<PreviewRow[]>(() =>
 
 /**
  * 单元格文本：空值统一以 `-` 占位（不区分「映射为空」与「未映射」）。
- * 除个人简介（可换行、给最小宽度以保持可读）外，各列一律 nowrap —— 内容不折行，
- * 放不下时由表格容器横向滚动。
+ * 除个人简介（whitespace-pre-line：**保留单元格内的换行**、过长再折行，并给最小宽度以保持可读）
+ * 外，各列一律 nowrap —— 内容不折行，放不下时由表格容器横向滚动。
  */
 function textCell(value: string, classNames: string) {
   return value ? h('div', { class: classNames }, value) : h('span', { class: 'text-muted-foreground' }, '-')
@@ -106,7 +106,8 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
   columnHelper.accessor('profile', {
     header: '个人简介',
     enableSorting: false,
-    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'min-w-56 break-words text-muted-foreground'),
+    cell: ({ getValue }) =>
+      textCell(String(getValue() ?? ''), 'min-w-56 whitespace-pre-line break-words text-muted-foreground'),
   }),
   columnHelper.display({
     id: 'status',

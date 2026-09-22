@@ -33,7 +33,7 @@ const props = withDefaults(
           <CardTitle class="truncate text-xl">{{ props.candidate.name }}</CardTitle>
           <Badge v-if="props.badge" :variant="props.badge.variant">{{ props.badge.label }}</Badge>
         </div>
-        <p class="text-sm text-muted-foreground">
+        <p class="whitespace-pre-line text-sm text-muted-foreground">
           {{ props.candidate.profile || props.profileFallback }}
         </p>
       </div>

@@ -225,7 +225,7 @@ const phaseIndex = computed(() =>
                 </div>
                 <div v-if="room?.candidate?.profile" class="flex justify-between gap-3">
                   <span class="shrink-0 text-muted-foreground">简介</span>
-                  <span class="break-words text-right">{{ room.candidate.profile }}</span>
+                  <span class="whitespace-pre-line break-words text-right">{{ room.candidate.profile }}</span>
                 </div>
               </div>
             </CardContent>
