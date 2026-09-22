@@ -13,7 +13,7 @@ import { toast } from 'vue-sonner'
 import { OIDC_CALLBACK_PATH } from '@/api/http'
 import { useConfirmAction } from '@/composables/useConfirmAction'
 import { useOidcSettings } from '@/composables/useOidcSettings'
-import { callbackOriginOf, normalizeCallbackOrigin, unusableCallbackURL } from '@/domain/oidc'
+import { callbackOriginOf, normalizeCallbackOrigin } from '@/domain/oidc'
 import { toastError } from '@/lib/toast'
 import type { OidcConfigPayload, OidcRulePayload } from '@/models'
 
@@ -74,11 +74,6 @@ watch(
 
 const secretPlaceholder = computed(() =>
   config.value?.client_secret_set ? '已配置（留空则不修改）' : '客户端密钥（公开客户端可留空）',
-)
-
-/** 已存回调地址不可用时返回原值（登录回调会打到不存在的路径，保存一次即修正）。 */
-const unusableSavedCallback = computed(() =>
-  unusableCallbackURL(config.value?.redirect_url ?? '', OIDC_CALLBACK_PATH),
 )
 
 async function submit(): Promise<void> {
@@ -196,12 +191,6 @@ const {
                 {{ OIDC_CALLBACK_PATH }}
               </span>
             </div>
-            <ErrorAlert
-              v-if="unusableSavedCallback"
-              variant="plain"
-              class="p-0"
-              :message="`当前保存的回调地址 ${unusableSavedCallback} 的路径不是 ${OIDC_CALLBACK_PATH}，登录回调会 404；保存一次即修正。`"
-            />
           </div>
 
           <div class="flex items-center gap-2">

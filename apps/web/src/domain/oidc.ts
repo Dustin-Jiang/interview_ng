@@ -54,15 +54,3 @@ export function normalizeCallbackOrigin(raw: string): string | null {
     return null
   }
 }
-
-/**
- * 已保存的回调地址是否**不可用**（空串表示「已经是对的」）：
- * 空值不算（首次配置本来就没有）；存在但与 `<主机><固定路径>` 不一致时返回原值，
- * 供界面提示「登录回调会打到一个不存在的路径」。
- */
-export function unusableCallbackURL(saved: string, callbackPath: string): string {
-  const text = saved.trim()
-  if (!text) return ''
-  const origin = callbackOriginOf(text)
-  return origin && origin + callbackPath === text ? '' : text
-}
