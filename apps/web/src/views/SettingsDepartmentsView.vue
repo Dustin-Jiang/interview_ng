@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
-import { toast } from 'vue-sonner'
 import { Building2, Plus } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useUsers } from '@/composables/useUsers'
+import { useEntityDialog } from '@/composables/useEntityDialog'
 import { useConfirmAction } from '@/composables/useConfirmAction'
 import { useAuth } from '@/composables/useAuth'
 import { admissionApi, candidateApi } from '@/api/http'
 import { PERMISSIONS, type AdmissionStatus, type Department } from '@/models'
-import { toastError } from '@/lib/toast'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -82,10 +81,46 @@ async function reloadAll(): Promise<void> {
 onMounted(() => void reloadAll())
 
 // ---- 部门操作 ----
-const deptDialogOpen = ref(false)
-const editingDept = ref<Department | null>(null)
-const savingDept = ref(false)
-const deptForm = ref({ name: '', description: '', expected_count: 0 })
+/** 部门表单草稿（新增与编辑共用）。 */
+interface DepartmentForm {
+  name: string
+  description: string
+  expected_count: number
+}
+
+/** 预期人数归一化：非负整数以外返回 null（校验失败）。 */
+function normalizeExpectedCount(form: DepartmentForm): number | null {
+  const n = Math.floor(Number(form.expected_count))
+  if (!Number.isFinite(n) || n < 0) return null
+  return n
+}
+
+// 新增 / 编辑部门对话框（target 为空即新增）
+const {
+  open: deptDialogOpen,
+  editing: editingDept,
+  form: deptForm,
+  saving: savingDept,
+  openCreate: openCreateDept,
+  openEdit: openEditDept,
+  submit: submitDept,
+} = useEntityDialog<Department, DepartmentForm>({
+  blank: () => ({ name: '', description: '', expected_count: 0 }),
+  toForm: (d) => ({ name: d.name, description: d.description ?? '', expected_count: d.expected_count ?? 0 }),
+  validate: (form) => {
+    if (!form.name.trim()) return '请输入部门名称'
+    if (normalizeExpectedCount(form) === null) return '预期人数须为非负整数'
+    return null
+  },
+  action: async (form, target) => {
+    const expectedCount = normalizeExpectedCount(form)
+    if (expectedCount === null) return
+    const body = { name: form.name.trim(), description: form.description, expected_count: expectedCount }
+    if (target) await updateDepartment(target.id, body)
+    else await createDepartment(body)
+  },
+  success: (_form, target) => (target ? '部门已更新' : '部门已创建'),
+})
 
 const {
   target: deleteTarget,
@@ -97,63 +132,6 @@ const {
   action: (d) => deleteDepartment(d.id),
   success: () => '部门已删除',
 })
-
-function openCreateDept() {
-  editingDept.value = null
-  deptForm.value = { name: '', description: '', expected_count: 0 }
-  savingDept.value = false
-  deptDialogOpen.value = true
-}
-
-function openEditDept(d: Department) {
-  editingDept.value = d
-  deptForm.value = { name: d.name, description: d.description ?? '', expected_count: d.expected_count ?? 0 }
-  savingDept.value = false
-  deptDialogOpen.value = true
-}
-
-/** 预期人数归一化：非负整数以外返回 null（校验失败）。 */
-function normalizeExpectedCount(): number | null {
-  const n = Math.floor(Number(deptForm.value.expected_count))
-  if (!Number.isFinite(n) || n < 0) return null
-  return n
-}
-
-async function submitDept() {
-  if (!deptForm.value.name.trim()) {
-    toast.error('请输入部门名称')
-    return
-  }
-  const expectedCount = normalizeExpectedCount()
-  if (expectedCount === null) {
-    toast.error('预期人数须为非负整数')
-    return
-  }
-  if (savingDept.value) return
-  savingDept.value = true
-  try {
-    if (editingDept.value) {
-      await updateDepartment(editingDept.value.id, {
-        name: deptForm.value.name.trim(),
-        description: deptForm.value.description,
-        expected_count: expectedCount,
-      })
-      toast.success('部门已更新')
-    } else {
-      await createDepartment({
-        name: deptForm.value.name.trim(),
-        description: deptForm.value.description,
-        expected_count: expectedCount,
-      })
-      toast.success('部门已创建')
-    }
-    deptDialogOpen.value = false
-  } catch (e) {
-    toastError(e)
-  } finally {
-    savingDept.value = false
-  }
-}
 
 // ---- DataTable 列定义（数字列 tabular-nums，展示口径同候选人管理表） ----
 
@@ -240,18 +218,17 @@ const deptColumns = computed<ColumnDef<DataTableFeatures, Department>[]>(
     </template>
 
     <!-- 表头不换行（数字列 tabular-nums，放不下由容器横向滚动，同其他管理表） -->
-    <div class="[&_th]:whitespace-nowrap">
-      <DataTableSection
-        :loading="loading"
-        :items="departments"
-        :columns="deptColumns"
-        :data="departments"
-        empty-text="暂无部门，新增部门以划分面试官归属"
-        :empty-icon="Building2"
-        :skeleton-rows="3"
-        skeleton-item-class="h-16 w-full rounded-md"
-      />
-    </div>
+    <DataTableSection
+      nowrap-headers
+      :loading="loading"
+      :items="departments"
+      :columns="deptColumns"
+      :data="departments"
+      empty-text="暂无部门，新增部门以划分面试官归属"
+      :empty-icon="Building2"
+      :skeleton-rows="3"
+      skeleton-item-class="h-16 w-full rounded-md"
+    />
 
     <!-- 部门对话框 -->
     <FormDialog
