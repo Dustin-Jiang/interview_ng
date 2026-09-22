@@ -22,7 +22,7 @@ const table = useTable({
 </script>
 
 <template>
-  <div class="space-y-3">
+  <div class="space-y-3 text-sm">
     <div class="rounded-md border">
       <Table>
         <TableHeader>

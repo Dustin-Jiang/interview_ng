@@ -15,7 +15,7 @@ const props = defineProps<{
     v-if="column.getCanSort()"
     variant="ghost"
     size="sm"
-    class="-ml-3 h-8"
+    class="-ml-3 h-8 text-sm"
     @click="column.toggleSorting(column.getIsSorted() === 'asc')"
   >
     <span>{{ title }}</span>
