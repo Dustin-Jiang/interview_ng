@@ -59,7 +59,7 @@ async function copyColumn(header: string): Promise<void> {
             :model-value="props.mapping[field.key]"
             :aria-invalid="Boolean(props.outcome.expressionErrors[field.key])"
             class="font-mono text-xs"
-            :placeholder="field.key === 'profile' ? '（可选）' : 'JMESPath 表达式'"
+            :placeholder="field.required ? 'JMESPath 表达式' : '（可选）'"
             @update:model-value="emit('expression', field.key, String($event))"
           />
           <p v-if="props.outcome.expressionErrors[field.key]" class="text-sm text-destructive">

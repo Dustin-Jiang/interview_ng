@@ -28,8 +28,6 @@ import type { CandidateImportReport, CandidateImportRowError } from '@/models'
 const MAPPING_KEY = 'interview_ng_import_mapping'
 /** 已移除的命名预设键（历史数据，读到即清理）。 */
 const LEGACY_PRESET_KEY = 'interview_ng_import_presets'
-/** 拉取既有候选人的分页大小（服务端单页上限 200）。 */
-const PAGE_SIZE = 200
 /** 表达式输入防抖（与列表刷新同一档位）。 */
 const DEBOUNCE_MS = 300
 /** 步骤总数（① 选文件 ② 映射+预览 ③ 确认提交）。 */
@@ -131,18 +129,13 @@ export function useCandidateImport(): UseCandidateImport {
     return rows.length > 0 && rows.every((r) => r.status !== 'error')
   })
 
-  /** 拉取全部既有学号（分页直到不足一页）：预览据此区分「新建 / 更新」。 */
+  /** 拉取全部既有学号（listAll 逐页拉全）：预览据此区分「新建 / 更新」。 */
   async function reloadExisting(): Promise<void> {
     existingLoading.value = true
     existingError.value = null
     try {
-      const nos = new Set<string>()
-      for (let offset = 0; ; offset += PAGE_SIZE) {
-        const page = await candidateApi.list({ limit: PAGE_SIZE, offset })
-        page.items.forEach((c) => nos.add(c.student_no))
-        if (page.items.length < PAGE_SIZE) break
-      }
-      existing.value = nos
+      const { items } = await candidateApi.listAll()
+      existing.value = new Set(items.map((c) => c.student_no))
     } catch (e) {
       existingError.value = e instanceof Error ? e.message : String(e)
     } finally {

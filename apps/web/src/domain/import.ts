@@ -15,6 +15,7 @@ import type { JSONValue } from '@jmespath-community/jmespath'
 import * as XLSX from 'xlsx/dist/xlsx.mini.min.js'
 
 import { normalizeStudentNo } from '@/domain/studentNo'
+import type { CandidateImportRow } from '@/models'
 
 /** 单个文件的解析上限：行数与字节数（体积在读取前先量，行数在解析后校验）。 */
 export const IMPORT_MAX_ROWS = 2000
@@ -38,6 +39,12 @@ export interface ImportSheet {
 export const CANDIDATE_IMPORT_FIELDS = [
   { key: 'student_no', label: '学号', required: true },
   { key: 'name', label: '姓名', required: true },
+  { key: 'first_choice', label: '第一志愿', required: false },
+  { key: 'second_choice', label: '第二志愿', required: false },
+  { key: 'accept_adjust', label: '是否接受调剂', required: false },
+  { key: 'phone', label: '手机号', required: false },
+  { key: 'qq', label: 'QQ号', required: false },
+  { key: 'email', label: '邮箱', required: false },
   { key: 'profile', label: '个人简介', required: false },
 ] as const
 
@@ -53,6 +60,14 @@ export interface ImportMappedRow {
   studentNo: string
   name: string
   profile: string
+  firstChoice: string
+  secondChoice: string
+  acceptAdjust: boolean
+  /** 调剂值是否「有提供」（映射结果非空）：未映射 / 空单元格 → false（预览 `-`）；显式假值 → 不接受。 */
+  acceptAdjustProvided: boolean
+  phone: string
+  qq: string
+  email: string
   /** 行级错误（非空即该行不合法；提交为全或无，任一行不合法会被服务端整批拒绝）。 */
   errors: string[]
   /** 行结果：新建 / 命中既有学号（或批内前行）覆盖 / 不合法。 */
@@ -70,7 +85,7 @@ export interface ImportOutcome {
 
 /** 空映射（进入导入页时的初始表达式：按列名必须加引号的规则给出可复制样例）。 */
 export function emptyMapping(): CandidateImportMapping {
-  return { student_no: '', name: '"姓名"', profile: '' }
+  return { student_no: '', name: '"姓名"', first_choice: '', second_choice: '', accept_adjust: '', phone: '', qq: '', email: '', profile: '' }
 }
 
 /** 空映射结果（尚未选文件 / 表达式未通过编译时使用）。 */
@@ -247,6 +262,13 @@ export function mapSheet(
       studentNo: '',
       name: '',
       profile: '',
+      firstChoice: '',
+      secondChoice: '',
+      acceptAdjust: false,
+      acceptAdjustProvided: false,
+      phone: '',
+      qq: '',
+      email: '',
       errors: [],
       status: 'create',
     }
@@ -257,6 +279,14 @@ export function mapSheet(
     out.name = interpretEscapes(evaluate('name', row.values)).trim()
     if (!out.name) out.errors.push('姓名不能为空')
     out.profile = interpretEscapes(evaluate('profile', row.values))
+    out.firstChoice = interpretEscapes(evaluate('first_choice', row.values)).trim()
+    out.secondChoice = interpretEscapes(evaluate('second_choice', row.values)).trim()
+    const adjustText = interpretEscapes(evaluate('accept_adjust', row.values)).trim()
+    out.acceptAdjust = parseAcceptAdjust(adjustText)
+    out.acceptAdjustProvided = adjustText !== ''
+    out.phone = interpretEscapes(evaluate('phone', row.values)).trim()
+    out.qq = interpretEscapes(evaluate('qq', row.values)).trim()
+    out.email = interpretEscapes(evaluate('email', row.values)).trim()
 
     if (out.errors.length > 0) {
       out.status = 'error'
@@ -287,8 +317,28 @@ export function mapSheet(
 }
 
 /** 映射结果 → 提交载荷（与 POST /candidates/imports 契约一致）。 */
-export function toImportPayload(
-  mapped: readonly ImportMappedRow[],
-): { student_no: string; name: string; profile: string }[] {
-  return mapped.map((r) => ({ student_no: r.studentNo, name: r.name, profile: r.profile }))
+export function toImportPayload(mapped: readonly ImportMappedRow[]): CandidateImportRow[] {
+  return mapped.map((r) => ({
+    student_no: r.studentNo,
+    name: r.name,
+    profile: r.profile,
+    first_choice: r.firstChoice,
+    second_choice: r.secondChoice,
+    accept_adjust: r.acceptAdjust,
+    phone: r.phone,
+    qq: r.qq,
+    email: r.email,
+  }))
+}
+
+/** 「是否接受调剂」真值集：兼容直接取列（是/接受/接受调剂/是，接受调剂…）与比较表达式（true）。 */
+const ADJUST_TRUE = ['是', '接受', '接受调剂', '是，接受调剂', '是,接受调剂', 'y', 'yes', 'true', '1']
+
+/**
+ * 文本 → 布尔：真值集为真，其余（false / 否 / 未识别 / 空）一律为假。
+ * JMESPath 比较表达式（如 `"是否接受调剂"=='是，接受调剂'`）产出布尔，
+ * 单元格取值字符串化后即 'true' / 'false'；「是否显式给出」由调用方按文本非空判定。
+ */
+export function parseAcceptAdjust(text: string): boolean {
+  return ADJUST_TRUE.includes(text.trim().toLowerCase())
 }

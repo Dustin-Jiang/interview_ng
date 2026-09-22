@@ -8,8 +8,10 @@
 import { computed, h, ref } from 'vue'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
+import ClampText from '@/components/app/ClampText.vue'
 import DataTableSection from '@/components/app/DataTableSection.vue'
 import { Badge } from '@/components/ui/badge'
+import { textCell } from '@/components/ui/table/cells'
 import type { DataTableFeatures } from '@/components/ui/table/features'
 import type { ImportOutcome } from '@/domain/import'
 import { cn } from '@/lib/utils'
@@ -41,6 +43,13 @@ interface PreviewRow {
   line: number
   studentNo: string
   name: string
+  firstChoice: string
+  secondChoice: string
+  /** 「是否接受调剂」展示文本：接受 / 不接受；未映射或空单元格为 `-`。 */
+  acceptAdjust: string
+  phone: string
+  qq: string
+  email: string
   profile: string
   status: 'create' | 'update' | 'error'
   /** 状态标签：新建 / 更新 / 覆盖第 N 行 / 不合法。 */
@@ -53,6 +62,12 @@ const allRows = computed<PreviewRow[]>(() =>
     line: row.line,
     studentNo: row.studentNo,
     name: row.name,
+    firstChoice: row.firstChoice,
+    secondChoice: row.secondChoice,
+    acceptAdjust: row.acceptAdjustProvided ? (row.acceptAdjust ? '接受' : '不接受') : '',
+    phone: row.phone,
+    qq: row.qq,
+    email: row.email,
     profile: row.profile,
     status: row.status,
     label:
@@ -66,15 +81,6 @@ const allRows = computed<PreviewRow[]>(() =>
     errors: row.errors,
   })),
 )
-
-/**
- * 单元格文本：空值统一以 `-` 占位（不区分「映射为空」与「未映射」）。
- * 除个人简介（whitespace-pre-line：**保留单元格内的换行**、过长再折行，并给最小宽度以保持可读）
- * 外，各列一律 nowrap —— 内容不折行，放不下时由表格容器横向滚动。
- */
-function textCell(value: string, classNames: string) {
-  return value ? h('div', { class: classNames }, value) : h('span', { class: 'text-muted-foreground' }, '-')
-}
 
 /**
  * 当前筛选下的行（分页作用于筛选后的集合）。
@@ -91,23 +97,57 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
     header: '行号',
     enableSorting: false,
     cell: ({ getValue }) =>
-      h('div', { class: 'whitespace-nowrap font-mono text-xs text-muted-foreground' }, String(getValue())),
+      h('div', { class: 'whitespace-nowrap tabular-nums text-muted-foreground' }, String(getValue())),
   }),
   columnHelper.accessor('studentNo', {
     header: '学号',
     enableSorting: false,
-    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap font-mono text-xs'),
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap tabular-nums'),
   }),
   columnHelper.accessor('name', {
     header: '姓名',
     enableSorting: false,
     cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap'),
   }),
+  columnHelper.accessor('firstChoice', {
+    header: '第一志愿',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap'),
+  }),
+  columnHelper.accessor('secondChoice', {
+    header: '第二志愿',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap'),
+  }),
+  columnHelper.accessor('acceptAdjust', {
+    header: '接受调剂',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap'),
+  }),
+  columnHelper.accessor('phone', {
+    header: '手机号',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap tabular-nums'),
+  }),
+  columnHelper.accessor('qq', {
+    header: 'QQ号',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap tabular-nums'),
+  }),
+  columnHelper.accessor('email', {
+    header: '邮箱',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap tabular-nums'),
+  }),
   columnHelper.accessor('profile', {
     header: '个人简介',
     enableSorting: false,
-    cell: ({ getValue }) =>
-      textCell(String(getValue() ?? ''), 'min-w-56 whitespace-pre-line break-words text-muted-foreground'),
+    cell: ({ getValue }) => {
+      const value = String(getValue() ?? '')
+      if (!value) return h('span', { class: 'text-muted-foreground' }, '-')
+      // 最多 3 行 + 省略号，溢出时点击用 Popover 看全文。
+      return h(ClampText, { text: value, lines: 3, class: 'min-w-56 text-muted-foreground' })
+    },
   }),
   columnHelper.display({
     id: 'status',
@@ -117,10 +157,10 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
       h('div', { class: 'space-y-1 whitespace-nowrap' }, [
         h(
           Badge,
-          { variant: row.original.status === 'error' ? 'destructive' : 'secondary' },
+          { variant: row.original.status === 'error' ? 'destructive' : 'secondary', class: 'text-sm' },
           () => row.original.label,
         ),
-        ...row.original.errors.map((message) => h('p', { class: 'text-xs text-destructive' }, message)),
+        ...row.original.errors.map((message) => h('p', { class: 'text-destructive' }, message)),
       ]),
   }),
 ])
@@ -130,7 +170,7 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
   <!-- [&_th]：表头与数据列一致地不换行（个人简介列的数据仍可换行）。 -->
   <div class="[&_th]:whitespace-nowrap">
     <DataTableSection
-      title="实时预览"
+      title="预览"
       :loading="false"
       :items="allRows"
       :columns="columns"
