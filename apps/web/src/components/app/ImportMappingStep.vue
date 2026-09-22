@@ -1,6 +1,6 @@
 <!--
-  ImportMappingStep —— 数据导入第 ② 步：字段映射（左）+ 实时预览（右），窄屏上下堆叠。
-  每个目标字段一条 JMESPath 表达式；中文列名必须加引号，右侧给出可直接复制的列名清单。
+  ImportMappingStep —— 数据导入第 ② 步：上下布局（字段映射在上、实时预览在下）。
+  每个目标字段一条 JMESPath 表达式；中文列名必须加引号，映射卡内给出可直接复制的列名清单。
   表达式输入由调用方防抖（300ms），本组件只负责呈现与收集输入。
 -->
 <script setup lang="ts">
@@ -76,8 +76,8 @@ async function copyColumn(header: string): Promise<void> {
 </script>
 
 <template>
-  <div class="grid gap-4 xl:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]">
-    <Card class="self-start">
+  <div class="space-y-4">
+    <Card>
       <CardHeader>
         <CardTitle>字段映射</CardTitle>
       </CardHeader>
@@ -141,7 +141,7 @@ async function copyColumn(header: string): Promise<void> {
       </CardContent>
     </Card>
 
-    <Card class="self-start">
+    <Card>
       <CardHeader>
         <CardTitle>实时预览</CardTitle>
       </CardHeader>
