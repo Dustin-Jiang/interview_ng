@@ -7,7 +7,7 @@
 import { computed, ref, type Ref } from 'vue'
 import { candidateApi } from '@/api/http'
 import { useAsync } from '@/composables/useAsync'
-import type { Candidate, CandidateStatus } from '@/models'
+import type { Candidate, CandidateInfoPayload, CandidateStatus } from '@/models'
 
 export interface UseCandidates {
   /** 候选人列表（未加载或为空为 []）。 */
@@ -24,12 +24,12 @@ export interface UseCandidates {
   setStatusFilter: (value: CandidateStatus | '') => void
   /** 更新关键词并重新加载。 */
   setKeyword: (value: string) => void
-  /** 创建候选人并插入列表头部（学号为身份键，必填且唯一）。 */
-  create: (studentNo: string, name: string, profile: string) => Promise<Candidate | null>
+  /** 创建候选人并插入列表头部（学号为身份键，必填且唯一；资料字段见 payload）。 */
+  create: (info: CandidateInfoPayload) => Promise<Candidate | null>
   /** 签到（NOT_CHECKED_IN → 已签到待分配）。 */
   checkin: (id: number) => Promise<void>
-  /** 编辑学号/姓名/简介（学号可改，撞号由服务端拒绝）。 */
-  update: (id: number, studentNo: string, name: string, profile: string) => Promise<void>
+  /** 编辑资料字段（全量覆盖；学号可改，撞号由服务端拒绝）。 */
+  update: (id: number, info: CandidateInfoPayload) => Promise<void>
   /** 删除候选人（级联删消息、解绑房间）。 */
   remove: (id: number) => Promise<void>
   /** 重置状态到任意档（表单约束在视图层，后端校验为准）。 */
@@ -40,9 +40,13 @@ export function useCandidates(): UseCandidates {
   const statusFilter = ref<CandidateStatus | ''>('')
   const keyword = ref('')
 
-  // loader 闭包捕获筛选条件 —— 纯函数式地按当前条件查后端。
+  // loader 闭包捕获筛选条件 —— 纯函数式地按当前条件查后端；
+  // listAll 逐页拉全（后端默认只给 50 条），全部行交给 DataTable 客户端分页。
   const async = useAsync(() =>
-    candidateApi.list({ status: statusFilter.value || undefined, q: keyword.value || undefined }),
+    candidateApi.listAll({
+      status: statusFilter.value || undefined,
+      q: keyword.value || undefined,
+    }),
   )
 
   const candidates = computed<readonly Candidate[]>(() => async.data.value?.items ?? [])
@@ -62,8 +66,8 @@ export function useCandidates(): UseCandidates {
     void load()
   }
 
-  async function create(studentNo: string, name: string, profile: string): Promise<Candidate | null> {
-    const { id } = await candidateApi.create({ student_no: studentNo, name, profile: profile || undefined })
+  async function create(info: CandidateInfoPayload): Promise<Candidate | null> {
+    const { id } = await candidateApi.create(info)
     const created = await candidateApi.get(id)
     // 不可变更新：返回新数组，插入头部。
     async.data.value = { items: [created, ...candidates.value] }
@@ -75,8 +79,8 @@ export function useCandidates(): UseCandidates {
     await load()
   }
 
-  async function update(id: number, studentNo: string, name: string, profile: string): Promise<void> {
-    await candidateApi.update(id, { student_no: studentNo, name, profile: profile || undefined })
+  async function update(id: number, info: CandidateInfoPayload): Promise<void> {
+    await candidateApi.update(id, info)
     await load()
   }
 

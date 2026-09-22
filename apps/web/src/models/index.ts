@@ -27,6 +27,7 @@ export const CANDIDATE_STATUSES: CandidateStatus[] = [
 export const PERMISSIONS = {
   USERS_MANAGE: 'users.manage',
   CANDIDATES_MANAGE: 'candidates.manage',
+  CANDIDATES_PREFERENCES: 'candidates.preferences',
   CANDIDATES_BROWSE_ALL: 'candidates.browse_all',
   ADMISSIONS_RECORD: 'admissions.record',
   CANDIDATES_CREATE: 'candidates.create',
@@ -47,9 +48,49 @@ export interface Candidate {
   student_no: string
   name: string
   profile: string
+  /** 第一志愿 */
+  first_choice: string
+  /** 第二志愿 */
+  second_choice: string
+  /** 是否接受调剂 */
+  accept_adjust: boolean
+  /** 手机号 */
+  phone: string
+  /** QQ 号 */
+  qq: string
+  /** 邮箱 */
+  email: string
   status: CandidateStatus
+  /** 进入「面试中」的时刻（null = 当前不在面试中）；面试计时以此为准。 */
+  interview_started_at: string | null
   created_at: string
   updated_at: string
+}
+
+/**
+ * 候选人资料字段全集（新建/编辑请求体，与后端 state.CandidateInfo 对应）。
+ * 编辑为全量覆盖：缺省字段按零值清空。
+ */
+export interface CandidateInfoPayload {
+  student_no: string
+  name: string
+  profile?: string
+  first_choice?: string
+  second_choice?: string
+  accept_adjust?: boolean
+  phone?: string
+  qq?: string
+  email?: string
+}
+
+/**
+ * 志愿与调剂（`PATCH /api/candidates/:id/preferences` 请求体，与后端 state.CandidatePreferences 对应）。
+ * 独立于资料全量编辑：三项必给（bool 无法区分缺省），只覆盖这三列。
+ */
+export interface CandidatePreferencesPayload {
+  first_choice: string
+  second_choice: string
+  accept_adjust: boolean
 }
 
 export interface User {
@@ -135,6 +176,8 @@ export interface Message {
 
 export interface Room {
   id: number
+  /** 房间名：可选别名（空=未命名，UI 回退「房间 #id」）；不要求唯一。 */
+  name: string
   candidate_id?: number
   candidate?: Candidate
   created_at: string
@@ -195,13 +238,33 @@ export interface LeftoverResult {
   created_at: string
 }
 
+/**
+ * 结算预览（`GET /api/leftover/projections`，只读计算，不落库）：
+ * 赢家 = 当前最高出价部门；`resolved` 表示该结果与已落库的录取一致（已正式结算）。
+ */
+export interface LeftoverFinalResult {
+  candidate_id: number
+  department_id: number
+  amount: number
+  resolved: boolean
+}
+
 // ---- 候选人批量导入（POST /candidates/imports） ----
 
-/** 导入行：解析 + JMESPath 映射后的规范化字段（服务端不解析表格）。 */
+/**
+ * 导入行：解析 + JMESPath 映射后的规范化资料字段（服务端不解析表格）。
+ * 与后端 state.CandidateInfo 一一对应（扁平 JSON）。
+ */
 export interface CandidateImportRow {
   student_no: string
   name: string
   profile: string
+  first_choice: string
+  second_choice: string
+  accept_adjust: boolean
+  phone: string
+  qq: string
+  email: string
 }
 
 /** 导入行级错误（整批拒绝时给出；index 为请求体中的行下标）。 */

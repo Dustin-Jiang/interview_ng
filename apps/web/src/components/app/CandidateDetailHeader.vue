@@ -31,7 +31,7 @@ const props = withDefaults(
       <div class="min-w-0 flex-1 space-y-1.5">
         <div class="flex flex-wrap items-center gap-2">
           <CardTitle class="truncate text-xl">{{ props.candidate.name }}</CardTitle>
-          <Badge v-if="props.badge" :variant="props.badge.variant">{{ props.badge.label }}</Badge>
+          <Badge v-if="props.badge" :variant="props.badge.variant" class="text-sm">{{ props.badge.label }}</Badge>
         </div>
         <p class="whitespace-pre-line text-sm text-muted-foreground">
           {{ props.candidate.profile || props.profileFallback }}

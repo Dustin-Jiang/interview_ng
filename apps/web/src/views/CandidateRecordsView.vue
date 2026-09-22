@@ -9,9 +9,9 @@
   数据与交互交给 useCandidatePool / useRosterSelection / useCandidateMessages / useAdmissions。
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ExternalLink, SearchX, SlidersHorizontal, UsersRound, X } from 'lucide-vue-next'
+import { ExternalLink, Pencil, SearchX, SlidersHorizontal, UsersRound, X } from 'lucide-vue-next'
 
 import { useAdmissions } from '@/composables/useAdmissions'
 import { useAuth } from '@/composables/useAuth'
@@ -21,14 +21,17 @@ import { useCandidatePool } from '@/composables/useCandidatePool'
 import { useDebouncedRefresh } from '@/composables/useDebouncedRefresh'
 import { useRosterRouteSync } from '@/composables/useRosterRouteSync'
 import { useRosterSelection } from '@/composables/useRosterSelection'
+import { useRoomNames } from '@/composables/useRoomNames'
 import { ADMISSION_PRESENTATION, STATUS_PRESENTATION } from '@/presenters/status'
 import {
   ADMISSION_STATUSES,
   CANDIDATE_STATUSES,
+  PERMISSIONS,
   type Candidate,
   type CandidateStatus,
 } from '@/models'
 import { formatDateTime } from '@/lib/format'
+import { shouldIgnorePageKey } from '@/lib/dom'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -37,6 +40,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { segmentedItemVariants } from '@/components/ui/tokens'
 import CandidateDetailHeader from '@/components/app/CandidateDetailHeader.vue'
+import CandidatePreferenceDialog from '@/components/app/CandidatePreferenceDialog.vue'
 import EmptyState from '@/components/app/EmptyState.vue'
 import ErrorAlert from '@/components/app/ErrorAlert.vue'
 import ListSkeleton from '@/components/app/ListSkeleton.vue'
@@ -49,7 +53,7 @@ import SearchInput from '@/components/app/SearchInput.vue'
 
 const route = useRoute()
 const router = useRouter()
-const { user } = useAuth()
+const { user, hasPermission } = useAuth()
 
 // ---- 名册数据（一次拉取，客户端筛选） ----
 const { candidates, loading: poolLoading, error: poolError, load } = useCandidatePool()
@@ -88,7 +92,6 @@ const {
   selectedId,
   selected,
   select,
-  highlight,
   canPrev,
   canNext,
   goPrev,
@@ -100,7 +103,6 @@ const {
   items: () => filtered.value,
   lookup: (id) => candidates.value.find((c) => c.id === id) ?? null,
   ready: () => !poolLoading.value,
-  extraKeys: onShortcutKey,
 })
 
 // ---- 深链：挂载恢复筛选（query）与选中条目（路径参数）；变更写回 URL（replace） ----
@@ -142,22 +144,40 @@ const {
   switchAdmission,
 } = useAdmissions(() => selected.value)
 
-/** 全局快捷键：← / → 切换候选人；1/2/3 记录本部门录取决定。 */
-function onShortcutKey(e: KeyboardEvent): boolean {
+// ---- 键盘：↑/↓ 切换候选人（与捡漏页同一套键位）；1/2/3 记录本部门录取决定 ----
+function onGlobalKeydown(e: KeyboardEvent): void {
+  if (shouldIgnorePageKey(e)) return // 输入控件聚焦 / 弹窗打开 / 已被内层处理时不拦截
+  if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    goPrev()
+    return
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    goNext()
+    return
+  }
   const key = Number(e.key)
-  if (!Number.isInteger(key) || key < 1 || key > ADMISSION_STATUSES.length) return false
+  if (!Number.isInteger(key) || key < 1 || key > ADMISSION_STATUSES.length) return
   const candidate = selected.value
-  if (!showControls.value || !canRecord.value || admissionsLoading.value) return true
-  if (!candidate || !user.value?.department_id) return true
+  if (!showControls.value || !canRecord.value || admissionsLoading.value) return
+  if (!candidate || !user.value?.department_id) return
   void switchAdmission(candidate, ADMISSION_STATUSES[key - 1])
-  return true
 }
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
 
 // ---- 面试过程记录 ----
-const { messages, loading: msgsLoading, error: msgsError, load: loadMessages } = useCandidateMessages()
+const { messages, loading: msgsLoading, error: msgsError, load: loadMessages, prefetch: prefetchMessages } = useCandidateMessages()
 
 watch(selectedId, (id) => {
-  if (id) void loadMessages(id)
+  if (!id) return
+  void loadMessages(id)
+  // 预取相邻候选人记录：↑/↓ 连续浏览几乎全程命中缓存，切换零等待。
+  const idx = filtered.value.findIndex((c) => c.id === id)
+  if (idx !== -1) {
+    prefetchMessages([filtered.value[idx - 1]?.id, filtered.value[idx + 1]?.id].filter((v): v is number => typeof v === 'number'))
+  }
 })
 
 function reloadMessages() {
@@ -184,13 +204,24 @@ useBoardChannel().subscribe((ev) => {
 
 // ---- 深链与写回见上方（onMounted 恢复 + useUrlSync） ----
 
-function roomLabel(c: Candidate): string {
-  return c.room_id ? `#${c.room_id}` : '—'
-}
+// ---- 房间展示名：候选人身上只有 room_id，按 id 反查名字（未命名显示「未命名」） ----
+const { roomLabelOf } = useRoomNames()
 
 function goRoom(c: Candidate) {
   if (!c.room_id) return
   void router.push({ name: 'room', params: { roomId: String(c.room_id) } })
+}
+
+// ---- 志愿与调剂：独立小权限（面试官默认持有），改完按 id 重拉名册即刷新详情 ----
+const canEditPreferences = computed(() => hasPermission(PERMISSIONS.CANDIDATES_PREFERENCES))
+const preferenceTarget = ref<Candidate | null>(null)
+
+function openPreferences(): void {
+  if (selected.value) preferenceTarget.value = selected.value
+}
+
+function onPreferencesSaved(): void {
+  void load()
 }
 </script>
 
@@ -270,7 +301,6 @@ function goRoom(c: Candidate) {
         :empty-action-label="hasFilter ? '清除筛选' : ''"
         list-label="候选人列表"
         @select="select"
-        @highlight="highlight"
         @retry="load"
         @empty-action="clearFilters"
       >
@@ -286,7 +316,7 @@ function goRoom(c: Candidate) {
           </Badge>
         </template>
         <template #meta="{ item }">
-          <span v-if="item.room_id" class="shrink-0 font-mono">#{{ item.room_id }}</span>
+          <span v-if="item.room_id" class="shrink-0">{{ roomLabelOf(item.room_id) }}</span>
         </template>
       </RosterList>
     </template>
@@ -304,6 +334,16 @@ function goRoom(c: Candidate) {
         >
           <template #actions>
             <Button
+              v-if="canEditPreferences"
+              size="sm"
+              variant="outline"
+              class="shrink-0"
+              @click="openPreferences"
+            >
+              <Pencil aria-hidden="true" />
+              改志愿
+            </Button>
+            <Button
               v-if="selected.room_id"
               size="sm"
               variant="outline"
@@ -311,27 +351,53 @@ function goRoom(c: Candidate) {
               @click="goRoom(selected)"
             >
               <ExternalLink aria-hidden="true" />
-              进入房间 #{{ selected.room_id }}
+              进入{{ roomLabelOf(selected.room_id) }}
             </Button>
           </template>
 
+          <!-- 信息行：值样式与候选人管理 DataTable 单元格一致——数字类 tabular-nums（非等宽）、
+               接受调剂纯文本、房间链接非等宽、创建时间 muted+nowrap。 -->
           <div class="space-y-2 pt-4 text-sm">
             <div class="flex items-center justify-between gap-3">
               <span class="text-muted-foreground">学号</span>
-              <span class="font-mono">{{ selected.student_no }}</span>
+              <span class="whitespace-nowrap tabular-nums">{{ selected.student_no }}</span>
+            </div>
+            <div v-if="selected.first_choice" class="flex items-center justify-between gap-3">
+              <span class="text-muted-foreground">第一志愿</span>
+              <span>{{ selected.first_choice }}</span>
+            </div>
+            <div v-if="selected.second_choice" class="flex items-center justify-between gap-3">
+              <span class="text-muted-foreground">第二志愿</span>
+              <span>{{ selected.second_choice }}</span>
+            </div>
+            <div v-if="selected.first_choice || selected.second_choice" class="flex items-center justify-between gap-3">
+              <span class="text-muted-foreground">接受调剂</span>
+              <span class="whitespace-nowrap">{{ selected.accept_adjust ? '接受' : '不接受' }}</span>
+            </div>
+            <div v-if="selected.phone" class="flex items-center justify-between gap-3">
+              <span class="text-muted-foreground">手机号</span>
+              <span class="whitespace-nowrap tabular-nums">{{ selected.phone }}</span>
+            </div>
+            <div v-if="selected.qq" class="flex items-center justify-between gap-3">
+              <span class="text-muted-foreground">QQ号</span>
+              <span class="whitespace-nowrap tabular-nums">{{ selected.qq }}</span>
+            </div>
+            <div v-if="selected.email" class="flex items-center justify-between gap-3">
+              <span class="text-muted-foreground">邮箱</span>
+              <span class="break-all tabular-nums text-right">{{ selected.email }}</span>
             </div>
             <div class="flex items-center justify-between gap-3">
               <span class="text-muted-foreground">房间</span>
-              <span v-if="selected.room_id" class="font-mono">
+              <span v-if="selected.room_id">
                 <Button variant="link" class="h-auto p-0" @click="goRoom(selected)">
-                  {{ roomLabel(selected) }}
+                  {{ roomLabelOf(selected.room_id) }}
                 </Button>
               </span>
-              <span v-else class="text-muted-foreground">{{ roomLabel(selected) }}</span>
+              <span v-else class="text-muted-foreground">—</span>
             </div>
             <div class="flex items-center justify-between gap-3">
               <span class="text-muted-foreground">创建时间</span>
-              <time>{{ formatDateTime(selected.created_at) }}</time>
+              <time class="whitespace-nowrap text-muted-foreground">{{ formatDateTime(selected.created_at) }}</time>
             </div>
           </div>
 
@@ -391,13 +457,21 @@ function goRoom(c: Candidate) {
           </CardContent>
         </Card>
 
-        <!-- 记录末尾：上一个 / 下一个候选人（←/→ 键盘可达） -->
+        <!-- 记录末尾：上一个 / 下一个候选人（↑/↓ 键盘可达） -->
         <RosterPager
           v-if="filtered.length > 0"
           :can-prev="canPrev"
           :can-next="canNext"
           @prev="goPrev"
           @next="goNext"
+        />
+
+        <!-- 志愿与调剂编辑（独立小权限） -->
+        <CandidatePreferenceDialog
+          :open="!!preferenceTarget"
+          :candidate="preferenceTarget"
+          @update:open="preferenceTarget = $event ? preferenceTarget : null"
+          @saved="onPreferencesSaved"
         />
       </template>
     </template>

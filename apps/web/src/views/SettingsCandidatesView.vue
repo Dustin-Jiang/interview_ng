@@ -2,13 +2,14 @@
 import { computed, h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import { Plus, UsersRound } from 'lucide-vue-next'
+import { Pencil, Plus, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useCandidates } from '@/composables/useCandidates'
+import { useRoomNames } from '@/composables/useRoomNames'
 import { useAuth } from '@/composables/useAuth'
 import { useConfirmAction } from '@/composables/useConfirmAction'
-import { CANDIDATE_STATUSES, PERMISSIONS, type Candidate, type CandidateStatus } from '@/models'
+import { CANDIDATE_STATUSES, PERMISSIONS, type Candidate, type CandidateInfoPayload, type CandidateStatus } from '@/models'
 import { STATUS_PRESENTATION } from '@/presenters/status'
 import { normalizeStudentNo } from '@/domain/studentNo'
 import { formatDateTime } from '@/lib/format'
@@ -20,8 +21,11 @@ import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DataTableColumnHeader from '@/components/ui/table/data-table-column-header.vue'
+import { textCell } from '@/components/ui/table/cells'
 import type { DataTableFeatures } from '@/components/ui/table/features'
 import CandidateFormFields from '@/components/app/CandidateFormFields.vue'
+import CandidatePreferenceDialog from '@/components/app/CandidatePreferenceDialog.vue'
+import ClampText from '@/components/app/ClampText.vue'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import DataTableSection from '@/components/app/DataTableSection.vue'
 import FormDialog from '@/components/app/FormDialog.vue'
@@ -33,50 +37,68 @@ const router = useRouter()
 const { hasPermission } = useAuth()
 // 组合式函数（函数式 ViewModel）：顶层解构，模板直接引用（ref 自动解包）。
 const { candidates, statusFilter, keyword, loading, load, create, checkin, update, remove, resetStatus, setStatusFilter, setKeyword } = useCandidates()
+// 房间列显示名字（候选人只带 room_id）；未命名显示「未命名」。
+const { roomLabelOf } = useRoomNames()
 
 const emptyText = computed(() => (keyword.value ? '没有匹配的候选人' : '暂无候选人'))
 
 // 创建候选人对话框状态
 const createOpen = ref(false)
-const newStudentNo = ref('')
-const newName = ref('')
-const newProfile = ref('')
+const newInfo = ref<CandidateInfoPayload>(blankInfo())
 const creating = ref(false)
 
 // 编辑对话框状态
 const editTarget = ref<Candidate | null>(null)
-const editStudentNo = ref('')
-const editName = ref('')
-const editProfile = ref('')
+const editInfo = ref<CandidateInfoPayload>(blankInfo())
 const editing = ref(false)
+
+/** 空资料表单（除必填外全部留空）。 */
+function blankInfo(): CandidateInfoPayload {
+  return {
+    student_no: '',
+    name: '',
+    profile: '',
+    first_choice: '',
+    second_choice: '',
+    accept_adjust: false,
+    phone: '',
+    qq: '',
+    email: '',
+  }
+}
 
 // 重置状态对话框状态
 const resetTarget = ref<Candidate | null>(null)
 const resetStatusValue = ref<CandidateStatus>('NOT_CHECKED_IN')
 const resetting = ref(false)
 
+// 志愿与调剂对话框状态（独立小权限：无 candidates.manage 的面试官也可改这三项）
+const preferenceTarget = ref<Candidate | null>(null)
+
+function openPreferences(c: Candidate) {
+  preferenceTarget.value = c
+}
+
 function openCreate() {
-  newStudentNo.value = ''
-  newName.value = ''
-  newProfile.value = ''
+  newInfo.value = blankInfo()
   creating.value = false
   createOpen.value = true
 }
 
 async function submitCreate() {
-  const studentNo = normalizeStudentNo(newStudentNo.value)
+  const studentNo = normalizeStudentNo(newInfo.value.student_no)
   if ('error' in studentNo) {
     toast.error(studentNo.error)
     return
   }
-  if (!newName.value.trim()) {
+  if (!newInfo.value.name?.trim()) {
     toast.error('请输入候选人姓名')
     return
   }
   if (creating.value) return
   creating.value = true
   try {
-    await create(studentNo.value, newName.value.trim(), newProfile.value.trim())
+    await create({ ...newInfo.value, student_no: studentNo.value, name: newInfo.value.name.trim() })
     createOpen.value = false
     toast.success('候选人已创建')
   } catch (e) {
@@ -88,26 +110,38 @@ async function submitCreate() {
 
 function openEdit(c: Candidate) {
   editTarget.value = c
-  editStudentNo.value = c.student_no
-  editName.value = c.name
-  editProfile.value = c.profile ?? ''
+  editInfo.value = {
+    student_no: c.student_no,
+    name: c.name,
+    profile: c.profile ?? '',
+    first_choice: c.first_choice ?? '',
+    second_choice: c.second_choice ?? '',
+    accept_adjust: c.accept_adjust ?? false,
+    phone: c.phone ?? '',
+    qq: c.qq ?? '',
+    email: c.email ?? '',
+  }
   editing.value = false
 }
 
 async function submitEdit() {
   if (!editTarget.value || editing.value) return
-  const studentNo = normalizeStudentNo(editStudentNo.value)
+  const studentNo = normalizeStudentNo(editInfo.value.student_no)
   if ('error' in studentNo) {
     toast.error(studentNo.error)
     return
   }
-  if (!editName.value.trim()) {
+  if (!editInfo.value.name?.trim()) {
     toast.error('请输入候选人姓名')
     return
   }
   editing.value = true
   try {
-    await update(editTarget.value.id, studentNo.value, editName.value.trim(), editProfile.value.trim())
+    await update(editTarget.value.id, {
+      ...editInfo.value,
+      student_no: studentNo.value,
+      name: editInfo.value.name.trim(),
+    })
     editTarget.value = null
     toast.success('已保存')
   } catch (e) {
@@ -182,19 +216,22 @@ function goRoom(roomId?: number) {
 }
 
 // ---- DataTable 列定义（h() 渲染，闭包捕获视图处理函数） ----
+// 展示口径与导入预览一致：空值 `-` 占位、数字类 mono、各列 nowrap（放不下由容器
+// 横向滚动）、个人简介 3 行截断 + Popover 看全文；状态/房间/操作为本页专属列。
 const columnHelper = createColumnHelper<DataTableFeatures, Candidate>()
 const columns: ColumnDef<DataTableFeatures, Candidate>[] = columnHelper.columns([
   columnHelper.accessor('id', {
     header: 'ID',
     enableSorting: false,
-    cell: ({ getValue }) => h('div', { class: 'font-mono text-xs' }, String(getValue())),
+    cell: ({ getValue }) => h('div', { class: 'whitespace-nowrap tabular-nums' }, String(getValue())),
   }),
   columnHelper.accessor('student_no', {
     header: ({ column }) => h(DataTableColumnHeader, { column: column as any, title: '学号' }),
-    cell: ({ getValue }) => h('div', { class: 'font-mono text-xs' }, String(getValue())),
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap tabular-nums'),
   }),
   columnHelper.accessor('name', {
     header: ({ column }) => h(DataTableColumnHeader, { column: column as any, title: '姓名' }),
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap'),
   }),
   columnHelper.accessor('status', {
     header: '状态',
@@ -202,7 +239,7 @@ const columns: ColumnDef<DataTableFeatures, Candidate>[] = columnHelper.columns(
     cell: ({ row }) =>
       h(
         Badge,
-        { variant: STATUS_PRESENTATION[row.original.status].badge },
+        { variant: STATUS_PRESENTATION[row.original.status].badge, class: 'text-sm' },
         () => STATUS_PRESENTATION[row.original.status].label,
       ),
   }),
@@ -212,18 +249,52 @@ const columns: ColumnDef<DataTableFeatures, Candidate>[] = columnHelper.columns(
     cell: ({ row }) => {
       const roomId = row.original.room_id
       if (!roomId) return h('span', { class: 'text-muted-foreground' }, '-')
-      return h(Button, { variant: 'link', class: 'h-auto p-0', onClick: () => goRoom(roomId) }, () => `#${roomId}`)
+      return h(Button, { variant: 'link', class: 'h-auto p-0 whitespace-nowrap', onClick: () => goRoom(roomId) }, () => roomLabelOf(roomId))
     },
   }),
-  columnHelper.accessor('profile', {
-    header: '简介',
+  columnHelper.accessor('first_choice', {
+    header: '第一志愿',
     enableSorting: false,
-    cell: ({ getValue }) =>
-      h('div', { class: 'max-w-[220px] truncate text-muted-foreground' }, getValue() || '-'),
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap'),
+  }),
+  columnHelper.accessor('second_choice', {
+    header: '第二志愿',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap'),
+  }),
+  columnHelper.accessor('accept_adjust', {
+    header: '接受调剂',
+    enableSorting: false,
+    cell: ({ getValue }) => h('div', { class: 'whitespace-nowrap' }, getValue() ? '接受' : '不接受'),
+  }),
+  columnHelper.accessor('phone', {
+    header: '手机号',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap tabular-nums'),
+  }),
+  columnHelper.accessor('qq', {
+    header: 'QQ号',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap tabular-nums'),
+  }),
+  columnHelper.accessor('email', {
+    header: '邮箱',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'whitespace-nowrap tabular-nums'),
+  }),
+  columnHelper.accessor('profile', {
+    header: '个人简介',
+    enableSorting: false,
+    cell: ({ getValue }) => {
+      const value = String(getValue() ?? '')
+      if (!value) return h('span', { class: 'text-muted-foreground' }, '-')
+      return h(ClampText, { text: value, lines: 3, class: 'min-w-56 text-muted-foreground' })
+    },
   }),
   columnHelper.accessor('created_at', {
     header: ({ column }) => h(DataTableColumnHeader, { column: column as any, title: '创建时间' }),
-    cell: ({ getValue }) => h('div', { class: 'text-muted-foreground' }, formatDateTime(String(getValue()))),
+    cell: ({ getValue }) =>
+      h('div', { class: 'whitespace-nowrap text-muted-foreground' }, formatDateTime(String(getValue()))),
   }),
   columnHelper.display({
     id: 'actions',
@@ -237,17 +308,23 @@ const columns: ColumnDef<DataTableFeatures, Candidate>[] = columnHelper.columns(
 function renderActions(c: Candidate) {
   const buttons: ReturnType<typeof h>[] = []
   if (c.status === 'NOT_CHECKED_IN' && hasPermission(PERMISSIONS.CANDIDATES_CHECKIN)) {
-    buttons.push(h(Button, { size: 'sm', variant: 'outline', onClick: () => handleCheckin(c) }, () => '签到'))
+    buttons.push(h(Button, { size: 'sm', class: 'text-sm', variant: 'outline', onClick: () => handleCheckin(c) }, () => '签到'))
+  }
+  if (hasPermission(PERMISSIONS.CANDIDATES_PREFERENCES)) {
+    buttons.push(
+      h(Button, { size: 'sm', class: 'text-sm gap-1', variant: 'outline', onClick: () => openPreferences(c) },
+        () => [h(Pencil, { 'aria-hidden': 'true' }), '改志愿']),
+    )
   }
   if (hasPermission(PERMISSIONS.CANDIDATES_MANAGE)) {
     buttons.push(
-      h(Button, { size: 'sm', variant: 'outline', onClick: () => openEdit(c) }, () => '编辑'),
-      h(Button, { size: 'sm', variant: 'outline', onClick: () => openReset(c) }, () => '重置状态'),
+      h(Button, { size: 'sm', class: 'text-sm', variant: 'outline', onClick: () => openEdit(c) }, () => '编辑'),
+      h(Button, { size: 'sm', class: 'text-sm', variant: 'outline', onClick: () => openReset(c) }, () => '重置状态'),
       // 打开确认对话框（ConfirmDialog），不再使用 window.confirm。
-      h(Button, { size: 'sm', variant: 'destructive', onClick: () => requestDelete(c) }, () => '删除'),
+      h(Button, { size: 'sm', class: 'text-sm', variant: 'destructive', onClick: () => requestDelete(c) }, () => '删除'),
     )
   }
-  return h('div', { class: 'flex gap-2' }, buttons)
+  return h('div', { class: 'flex gap-2 whitespace-nowrap' }, buttons)
 }
 
 onMounted(() => {
@@ -262,6 +339,7 @@ onMounted(() => {
       <FormDialog
         :open="createOpen"
         title="新增候选人"
+        size="lg"
         submit-text="创建"
         :loading="creating"
         @update:open="createOpen = $event"
@@ -275,59 +353,59 @@ onMounted(() => {
         </template>
 
         <CandidateFormFields
-          v-model:student-no="newStudentNo"
-          v-model:name="newName"
-          v-model:profile="newProfile"
+          v-model:info="newInfo"
           id-prefix="cand-create"
           @submit="submitCreate"
         />
       </FormDialog>
     </template>
 
-    <DataTableSection
-      title="候选人列表"
-      :loading="loading"
-      :items="candidates"
-      :columns="columns"
-      :data="candidates"
-      :empty-text="emptyText"
-      :empty-icon="UsersRound"
-    >
-      <template #toolbar>
-        <div class="flex flex-wrap items-center gap-3">
-          <!-- 搜索框：图标 + 可清空（Enter / 清空均触发检索）。 -->
-          <SearchInput
-            v-model="keyword"
-            placeholder="搜索学号 / 姓名 / 简介…"
-            @search="setKeyword"
-          />
-          <Select :model-value="statusFilter || 'ALL'" @update:model-value="setStatusFilter($event === 'ALL' ? '' : ($event as CandidateStatus))">
-            <SelectTrigger class="w-[180px]" aria-label="按状态筛选">
-              <SelectValue placeholder="全部状态" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ALL">全部状态</SelectItem>
-              <SelectItem v-for="s in CANDIDATE_STATUSES" :key="s" :value="s">
-                {{ STATUS_PRESENTATION[s].label }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </template>
-    </DataTableSection>
+    <!-- 表头不换行（各列内容 nowrap + 容器横向滚动，与导入预览一致） -->
+    <div class="[&_th]:whitespace-nowrap">
+      <DataTableSection
+        title="候选人列表"
+        :loading="loading"
+        :items="candidates"
+        :columns="columns"
+        :data="candidates"
+        :empty-text="emptyText"
+        :empty-icon="UsersRound"
+      >
+        <template #toolbar>
+          <div class="flex flex-wrap items-center gap-3">
+            <!-- 搜索框：图标 + 可清空（Enter / 清空均触发检索）。 -->
+            <SearchInput
+              v-model="keyword"
+              placeholder="搜索学号 / 姓名 / 简介…"
+              @search="setKeyword"
+            />
+            <Select :model-value="statusFilter || 'ALL'" @update:model-value="setStatusFilter($event === 'ALL' ? '' : ($event as CandidateStatus))">
+              <SelectTrigger class="w-[180px]" aria-label="按状态筛选">
+                <SelectValue placeholder="全部状态" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">全部状态</SelectItem>
+                <SelectItem v-for="s in CANDIDATE_STATUSES" :key="s" :value="s">
+                  {{ STATUS_PRESENTATION[s].label }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </template>
+      </DataTableSection>
+    </div>
 
     <!-- 编辑对话框 -->
     <FormDialog
       :open="!!editTarget"
       title="编辑候选人"
+      size="lg"
       :loading="editing"
       @update:open="editTarget = $event ? editTarget : null"
       @submit="submitEdit"
     >
       <CandidateFormFields
-        v-model:student-no="editStudentNo"
-        v-model:name="editName"
-        v-model:profile="editProfile"
+        v-model:info="editInfo"
         id-prefix="cand-edit"
         @submit="submitEdit"
       />
@@ -357,6 +435,14 @@ onMounted(() => {
         </Select>
       </div>
     </FormDialog>
+
+    <!-- 志愿与调剂对话框（独立小权限） -->
+    <CandidatePreferenceDialog
+      :open="!!preferenceTarget"
+      :candidate="preferenceTarget"
+      @update:open="preferenceTarget = $event ? preferenceTarget : null"
+      @saved="load"
+    />
 
     <!-- 删除候选人确认 -->
     <ConfirmDialog

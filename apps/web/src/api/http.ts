@@ -4,7 +4,7 @@
  * 鉴权：请求拦截器自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
  */
 import axios, { type AxiosRequestConfig } from 'axios'
-import type { AdmissionStatus, Bid, Candidate, CandidateAdmission, CandidateImportReport, CandidateImportRow, CandidateStatus, Department, LeftoverOverview, LeftoverResult, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
+import type { AdmissionStatus, Bid, Candidate, CandidateAdmission, CandidateImportReport, CandidateImportRow, CandidateInfoPayload, CandidatePreferencesPayload, CandidateStatus, Department, LeftoverFinalResult, LeftoverOverview, LeftoverResult, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
 
 /** 401 处理器：由 useAuth 注册（登出 + 跳登录页），避免循环依赖。 */
 let onUnauthorized: (() => void) | null = null
@@ -111,11 +111,30 @@ export const candidateApi = {
     return request({ url: '/candidates', params })
   },
 
+  /**
+   * 按筛选条件拉取【全部】候选人（逐页 limit=200 直到短页）。
+   * 后端单页上限 200（更大 limit 会被打回 50）、不传默认 50——凡是要把名单
+   * 当全集用的页面（名册 / 拉取池 / 预算统计）都必须走这里，否则会被静默截断。
+   */
+  async listAll(params?: { status?: CandidateStatus; q?: string }): Promise<{ items: Candidate[] }> {
+    const PAGE_SIZE = 200
+    const items: Candidate[] = []
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+      const page = await request<{ items: Candidate[] }>({
+        url: '/candidates',
+        params: { ...params, limit: PAGE_SIZE, offset },
+      })
+      items.push(...page.items)
+      if (page.items.length < PAGE_SIZE) break
+    }
+    return { items }
+  },
+
   get(id: number): Promise<Candidate> {
     return request(`/candidates/${id}`)
   },
 
-  create(body: { student_no: string; name: string; profile?: string }): Promise<{ id: number }> {
+  create(body: CandidateInfoPayload): Promise<{ id: number }> {
     return post('/candidates', body)
   },
 
@@ -128,8 +147,13 @@ export const candidateApi = {
     return put(`/candidates/${id}/check-in`)
   },
 
-  update(id: number, body: { student_no: string; name: string; profile?: string }): Promise<{ ok: boolean }> {
+  update(id: number, body: CandidateInfoPayload): Promise<{ ok: boolean }> {
     return put(`/candidates/${id}`, body)
+  },
+
+  /** 修改志愿与调剂（独立小权限 candidates.preferences：只覆盖这三列，不动其他资料）。 */
+  updatePreferences(id: number, body: CandidatePreferencesPayload): Promise<{ ok: boolean }> {
+    return patch(`/candidates/${id}/preferences`, body)
   },
 
   remove(id: number): Promise<{ ok: boolean }> {
@@ -166,8 +190,14 @@ export const roomApi = {
     return request({ url: '/rooms', params })
   },
 
-  create(): Promise<{ id: number }> {
-    return post('/rooms')
+  /** 创建房间（name 可选，空/缺省=未命名）。 */
+  create(name?: string): Promise<{ id: number }> {
+    return post('/rooms', { name: name ?? '' })
+  },
+
+  /** 修改房间名（空串=清除命名）。 */
+  rename(id: number, name: string): Promise<{ ok: boolean }> {
+    return patch(`/rooms/${id}`, { name })
   },
 
   remove(id: number): Promise<{ ok: boolean }> {
@@ -271,5 +301,10 @@ export const leftoverApi = {
   /** 已结算赢家列表（全员可见；进入结算阶段时由后端按出价自动结算）。 */
   results(): Promise<{ items: LeftoverResult[] }> {
     return request('/leftover/results')
+  },
+
+  /** 结算预览（只读计算：赢家 = 当前最高出价部门；`resolved` 表示已正式落库）。 */
+  projections(): Promise<{ items: LeftoverFinalResult[] }> {
+    return request('/leftover/projections')
   },
 }
