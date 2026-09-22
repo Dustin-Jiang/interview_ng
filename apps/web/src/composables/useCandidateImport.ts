@@ -93,7 +93,7 @@ export function useCandidateImport(): UseCandidateImport {
   const mapping = ref<CandidateImportMapping>(readStoredMapping())
   /** 防抖后的映射（预览只认它，避免每次按键都重算全表），同时持久化为「最后状态」。 */
   const appliedMapping = ref<CandidateImportMapping>({ ...mapping.value })
-  const existing = ref<ReadonlySet<string>>(new Set())
+  const existing = ref<ReadonlyMap<string, string>>(new Map())
   const existingLoading = ref(false)
   const existingError = ref<string | null>(null)
   const submitting = ref(false)
@@ -129,13 +129,13 @@ export function useCandidateImport(): UseCandidateImport {
     return rows.length > 0 && rows.every((r) => r.status !== 'error')
   })
 
-  /** 拉取全部既有学号（listAll 逐页拉全）：预览据此区分「新建 / 更新」。 */
+  /** 拉取全部既有候选人（listAll 逐页拉全）：预览据此区分「新建 / 更新」并预判过期行。 */
   async function reloadExisting(): Promise<void> {
     existingLoading.value = true
     existingError.value = null
     try {
       const { items } = await candidateApi.listAll()
-      existing.value = new Set(items.map((c) => c.student_no))
+      existing.value = new Map(items.map((c) => [c.student_no, c.updated_at]))
     } catch (e) {
       existingError.value = e instanceof Error ? e.message : String(e)
     } finally {
@@ -157,7 +157,7 @@ export function useCandidateImport(): UseCandidateImport {
       step.value = 2
     } catch (e) {
       sheet.value = null
-      existing.value = new Set()
+      existing.value = new Map()
       parseError.value = e instanceof Error ? e.message : String(e)
     } finally {
       parsing.value = false
@@ -169,7 +169,7 @@ export function useCandidateImport(): UseCandidateImport {
     parseError.value = null
     report.value = null
     rowErrors.value = []
-    existing.value = new Set()
+    existing.value = new Map()
     step.value = 1
   }
 
@@ -203,7 +203,8 @@ export function useCandidateImport(): UseCandidateImport {
     try {
       const result = await candidateApi.import(toImportPayload(outcome.value.mapped))
       report.value = result
-      toast.success(`导入完成：新建 ${result.created} 人，更新 ${result.updated} 人`)
+      const skipped = result.skipped ? `，跳过 ${result.skipped} 人` : ''
+      toast.success(`导入完成：新建 ${result.created} 人，更新 ${result.updated} 人${skipped}`)
     } catch (e) {
       // 整批被拒：取出服务端的行级报告（行号 + 原因），界面对照到源表行。
       const rows = e instanceof ApiError ? (e.data as { rows?: CandidateImportRowError[] } | undefined)?.rows : undefined
@@ -224,7 +225,7 @@ export function useCandidateImport(): UseCandidateImport {
     sheet.value = null
     parsing.value = false
     parseError.value = null
-    existing.value = new Set()
+    existing.value = new Map()
     existingError.value = null
     report.value = null
     rowErrors.value = []

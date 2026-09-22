@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	dsmodel "interview_ng/internal/model"
 	"interview_ng/internal/state"
@@ -227,6 +228,110 @@ func TestImportCandidatesAtomicReject(t *testing.T) {
 	}
 	if got, _ := st.ListCandidates(ctx, "", "", 50, 0); len(got) != 0 {
 		t.Fatalf("超限批次不应落库: n=%d", len(got))
+	}
+}
+
+// TestImportCandidatesSkipsStaleRows 过期行保护（更新时间列）：源表该行时间【早于】库中记录时
+// 不覆盖——库里的改动是新的，旧表格不该把它冲回去；不早于（更新或相等）照旧覆盖；
+// 没给这一列则不做任何比较（与历史行为一致）。
+func TestImportCandidatesSkipsStaleRows(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	id := mustCreateCandidateWithNo(ctx, st, "0070", "系统内改名", "系统内改简介")
+	base, err := st.GetCandidate(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	stale := base.UpdatedAt.Add(-time.Minute)
+	fresh := base.UpdatedAt.Add(time.Minute)
+
+	// 过期行：不写库、不广播，报告如实给出跳过与库中时间
+	report, err := st.ImportCandidates(ctx, []state.CandidateImportRow{
+		{CandidateInfo: info3("0070", "旧表名", "旧表简介"), UpdatedAt: &stale},
+	})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if report.Skipped != 1 || report.Updated != 0 || report.Created != 0 || len(report.Events) != 0 {
+		t.Fatalf("report: %+v", report)
+	}
+	row := report.Rows[0]
+	if row.Status != state.ImportStatusSkipped || row.CandidateID != id ||
+		row.StoredUpdatedAt == nil || !row.StoredUpdatedAt.Equal(base.UpdatedAt) {
+		t.Fatalf("row: %+v", row)
+	}
+	got, err := st.GetCandidate(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Name != "系统内改名" || got.Profile != "系统内改简介" {
+		t.Fatalf("过期行不该覆盖资料: %+v", got)
+	}
+	if !got.UpdatedAt.Equal(base.UpdatedAt) {
+		t.Fatalf("跳过不该刷新 updated_at: %v", got.UpdatedAt)
+	}
+
+	// 与库中时间相同 / 更新：都不是「早于」→ 照旧覆盖
+	for _, ts := range []time.Time{base.UpdatedAt, fresh} {
+		report, err := st.ImportCandidates(ctx, []state.CandidateImportRow{
+			{CandidateInfo: info3("0070", "新名", ""), UpdatedAt: &ts},
+		})
+		if err != nil || report.Updated != 1 || report.Skipped != 0 {
+			t.Fatalf("ts=%v: %+v err=%v", ts, report, err)
+		}
+	}
+
+	// 源表没有更新时间列 → 不做比较
+	report, err = st.ImportCandidates(ctx, []state.CandidateImportRow{
+		{CandidateInfo: info3("0070", "无时间列", "")},
+	})
+	if err != nil || report.Updated != 1 || report.Skipped != 0 {
+		t.Fatalf("无时间列: %+v err=%v", report, err)
+	}
+
+	// 新建行没有比较基准 → 一律新建
+	report, err = st.ImportCandidates(ctx, []state.CandidateImportRow{
+		{CandidateInfo: info3("0071", "新人", ""), UpdatedAt: &stale},
+	})
+	if err != nil || report.Created != 1 || report.Skipped != 0 {
+		t.Fatalf("新建行: %+v err=%v", report, err)
+	}
+}
+
+// TestImportCandidatesBatchStaleRowKeepsFresh 批内同学号：过期判定以【导入开始时的库中时间】为基准、
+// 不随同批写回漂移，故后行过期会被跳过，前行刚写入的值不会被它覆盖回去。
+func TestImportCandidatesBatchStaleRowKeepsFresh(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	id := mustCreateCandidateWithNo(ctx, st, "0080", "原名", "")
+	base, err := st.GetCandidate(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	fresh := base.UpdatedAt.Add(time.Minute)
+	stale := base.UpdatedAt.Add(-time.Minute)
+
+	report, err := st.ImportCandidates(ctx, []state.CandidateImportRow{
+		{CandidateInfo: info3("0080", "前行", "p1"), UpdatedAt: &fresh},
+		{CandidateInfo: info3("0080", "后行", "p2"), UpdatedAt: &stale},
+	})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if report.Updated != 1 || report.Skipped != 1 {
+		t.Fatalf("report: %+v", report)
+	}
+	if report.Rows[0].Status != state.ImportStatusUpdated || report.Rows[1].Status != state.ImportStatusSkipped {
+		t.Fatalf("rows: %+v", report.Rows)
+	}
+	got, err := st.GetCandidate(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Name != "前行" || got.Profile != "p1" {
+		t.Fatalf("过期的后行不该覆盖前行: %+v", got)
 	}
 }
 

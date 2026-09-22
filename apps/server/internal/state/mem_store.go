@@ -330,8 +330,13 @@ func (s *MemStateStore) ImportCandidates(ctx context.Context, rows []CandidateIm
 			return err
 		}
 		byNo := make(map[string]uint64, len(existing))
+		// storedAt 是【导入开始那一刻】库中记录的更新时间快照，作为「源表该行是否过期」的比较基准。
+		// 刻意不在写回后更新它：否则批内后行会拿刚写入的 now() 与自己的旧时间比，被误判为过期，
+		// 「批内后者覆盖前者」的既有语义就被破坏了。
+		storedAt := make(map[string]time.Time, len(existing))
 		for i := range existing {
 			byNo[existing[i].StudentNo] = existing[i].ID
+			storedAt[existing[i].StudentNo] = existing[i].UpdatedAt
 		}
 		inBatch := make(map[string]uint64, len(rows))
 		for i := range rows {
@@ -341,6 +346,17 @@ func (s *MemStateStore) ImportCandidates(ctx context.Context, rows []CandidateIm
 				id, hit = byNo[no]
 			}
 			if hit {
+				// 过期行：源表给的更新时间早于库中记录 → 库里这条在导入之后被改过，
+				// 用旧表格覆盖等于回退改动。跳过（不写、不广播），只如实报告。
+				if base, ok := storedAt[no]; ok && rows[i].UpdatedAt != nil && rows[i].UpdatedAt.Before(base) {
+					stored := base
+					report.Skipped++
+					report.Rows = append(report.Rows, ImportOutcome{
+						Index: i, Status: ImportStatusSkipped, CandidateID: id, StoredUpdatedAt: &stored,
+					})
+					inBatch[no] = id
+					continue
+				}
 				if err := tx.Model(&dsmodel.Candidate{}).Where("id = ?", id).
 					Updates(map[string]any{
 						"name":          cols[i].Name,

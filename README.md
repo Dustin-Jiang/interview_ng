@@ -60,7 +60,7 @@ interview_ng/
 - **消息/日志**：全部落库且**按候选人归属**（候选人换房历史随人走）；候选人删除级联删消息；面试官删除后其消息保留（sender 置空）。
 - **房间**：独立于候选人的物理会议室记录（`candidate_id` 可空，可先建房后绑人、重置解绑后房保留）；**无房间状态机**，房间状态 = 候选人状态的查询投影；仅空房可删；不归档。
 - **分配**：候选人被房间内面试官**拉取**（`PUT /api/rooms/:id/candidate`），取代"页面推分配"；并发拉取由状态机原子拒绝。
-- **数据导入**：设置页 `/settings/imports`（需 `candidates.manage`）三步导入候选人——① 选 `.xlsx`（单工作表，≤2000 行 / ≤5MB）② 每行成为 JSON 对象（首行表头为 key、值做类型推断、全空行跳过）并用 JMESPath 逐字段映射（中文列名须写成 `"列名"`，界面提供可复制列名清单）③ 确认提交；**解析与映射全在浏览器**（服务端零依赖、无 multipart），提交只发映射后的行，由 `POST /api/candidates/imports` 单事务全或无落库。学号取单元格**原始值**（格式化文本可能带千分位，会破坏纯数字校验）。映射结果会按 **JSON 字符串转义集**解释字面量转义（`\n`、`\t`、`\uXXXX` 等），因此「单元格内真实换行」与「字面量 `\n`」两种写法都能正确显示；未知转义（如正则里的 `\d`）原样保留，需保留反斜杠请写 `\\`。
+- **数据导入**：设置页 `/settings/imports`（需 `candidates.manage`）三步导入候选人——① 选 `.xlsx`（单工作表，≤2000 行 / ≤5MB）② 每行成为 JSON 对象（首行表头为 key、值做类型推断、全空行跳过）并用 JMESPath 逐字段映射（中文列名须写成 `"列名"`，界面提供可复制列名清单）③ 确认提交；**解析与映射全在浏览器**（服务端零依赖、无 multipart），提交只发映射后的行，由 `POST /api/candidates/imports` 单事务全或无落库。学号取单元格**原始值**（格式化文本可能带千分位，会破坏纯数字校验）。映射结果会按 **JSON 字符串转义集**解释字面量转义（`\n`、`\t`、`\uXXXX` 等），因此「单元格内真实换行」与「字面量 `\n`」两种写法都能正确显示；未知转义（如正则里的 `\d`）原样保留，需保留反斜杠请写 `\\`。**「更新时间」列可选**：映射它以后，源表该行时间早于库中记录的行判为旧数据、**跳过不覆盖**（避免重复导入旧表格冲掉系统内的改动）；未映射即不比较，照旧全量覆盖；无法识别的时间按行级错误整批拒绝，不会静默关掉保护。
 - **学号（身份键）**：`student_no` 必填、纯数字（1–64 位，全角数字按半角归一化、首尾空白去除）、唯一（DB 唯一索引兜底），前导零有意义（`00123` ≠ `123`）；新增/编辑/导入三条写入路径同一套校验，单条编辑允许改学号（撞号 → 409「学号已存在」，改号不影响运行态：房间绑定/消息/录取决定/出价均随候选人 id 保留）。**该列为 NOT NULL，故旧库必须重置**（AutoMigrate 无法给已有数据的表加 NOT NULL 列）。
 - **候选人与状态机**：五档状态 `NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED` 为唯一权威；管理端支持"重置到任意档"（向后自动解绑房间、向前须已有房间）。
 - **完成后自动清房**：候选人完成（无论房间内推进到 `COMPLETED`，还是管理端重置到 `COMPLETED`）自动清空房间绑定（`rooms.candidate_id` 置空，绑定唯一权威在房间侧），房间转空闲、成员留守，可立即拉取下一位候选人；消息仍**按候选人归档保留**，新候选人会话从零开始。
@@ -210,7 +210,7 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 - `PATCH /api/candidates/:id/preferences` `{first_choice, second_choice, accept_adjust}`（**志愿与调剂**：独立权限 `candidates.preferences`（面试官默认持有），只覆盖这三列，其他资料与运行态不动；三项须完整给出，bool 无缺省语义）
 - `PUT  /api/candidates/:id/status` `{status}`（重置到任意档：向后自动解绑、向前须已有房间）
 - `GET  /api/candidates/:id/messages`（候选人历史面试记录归档，完成 / 换房后仍可查）
-- `POST /api/candidates/imports` `{rows:[{student_no, name, profile, first_choice, second_choice, accept_adjust, phone, qq, email}]}`（**批量导入**，需 `candidates.manage`）：单事务**全或无**，按学号 upsert（命中即覆盖全部资料列，值相同也写；批内同学号后者覆盖前者），只写资料列，运行态一律不动；成功 `200 {created, updated, rows:[{index, status, candidate_id}]}`，任一行的硬错误 → `400 {error, rows:[{index, error}]}`（整批未落库）。单次上限 2000 行
+- `POST /api/candidates/imports` `{rows:[{student_no, name, profile, first_choice, second_choice, accept_adjust, phone, qq, email, updated_at?}]}`（**批量导入**，需 `candidates.manage`）：单事务**全或无**，按学号 upsert（命中即覆盖全部资料列，值相同也写；批内同学号后者覆盖前者），只写资料列，运行态一律不动；`updated_at`（可选，RFC3339）早于库中该行 `updated_at` 的行判为**过期 → 跳过不覆盖**（不写库不广播，报告 `status:"skipped"` 并带 `stored_updated_at`；比较基准是导入开始时的库中快照，故批内后行不会因前行写回而被误判）；成功 `200 {created, updated, skipped, rows:[{index, status, candidate_id, stored_updated_at?}]}`，任一行的硬错误 → `400 {error, rows:[{index, error}]}`（整批未落库）。单次上限 2000 行
 - `GET  /api/admissions`、`PUT /api/admissions/:candidateId` `{status}`（录取决定：默认本部门可见，记录需 `admissions.record`）
 - `GET  /api/rooms`、`GET /api/rooms/:id`
 - `POST /api/rooms` `{name?}`（建空房，`rooms.manage`；缺省/空串 = 未命名）
@@ -288,8 +288,8 @@ API/WS」——本地开发就是这样，前端仍走 Vite :3000。
 internal/state/mem_store_test.go    # 状态机/生命周期/订阅（源码包旁功能单测）
 internal/state/manage_test.go       # 拉取并发、重置联动、级联删除、删房规则、用户/角色生命周期
 internal/handler/handler_test.go    # 登录/me/401/403/权限矩阵 + WS(auth 消息→sync) 端到端
-internal/state/import_test.go       # 学号校验/唯一冲突/导入 upsert（含批内覆盖、全或无回滚、量级上限）/关键词检索
-internal/handler/import_test.go     # 导入端点端到端（行级报告、整批回滚、403、409）
+internal/state/import_test.go       # 学号校验/唯一冲突/导入 upsert（含批内覆盖、全或无回滚、量级上限、更新时间过期行跳过）/关键词检索
+internal/handler/import_test.go     # 导入端点端到端（行级报告、整批回滚、403、409、updated_at 过期行契约）
 internal/oidcauth/mapping_test.go   # JMESPath 命中语义/首个命中（角色与部门）、求值失败归因、用户名派生、声明取值
 internal/state/oidc_test.go         # OIDC 配置懒建/密钥三段语义/两类规则校验与整体替换/按 sub 查号与显示名·角色·部门同步
 internal/handler/oidc_test.go       # OIDC 端到端（假 IdP + 真 RS256 ID token：PKCE+nonce、登录码换会话、state 一次性、未映射拒绝、部门写入与未命中保持、配置响应契约、探测）

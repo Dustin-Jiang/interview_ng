@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"time"
 
 	dsmodel "interview_ng/internal/model"
 )
@@ -37,8 +38,10 @@ type StateStore interface {
 	CreateCandidate(ctx context.Context, info CandidateInfo) (*Event, error)
 	// ImportCandidates 批量导入候选人（管理员数据导入的落库端）：按学号 upsert，
 	// 单事务【全或无】——任一行不合法即整批不落库并返回行级错误报告（*ImportError）；
-	// 批内重复学号后者覆盖前者；只写资料字段（CandidateInfo），
+	// 批内重复学号后者覆盖前者；只写资料字段（CandidateInfo）；
 	// 候选人的运行态（状态机 / 房间绑定 / 消息 / 录取决定 / 出价）一律不动。
+	// 行带 UpdatedAt 且早于库中记录的 updated_at 时为【过期行】：跳过不覆盖（报告 status=skipped），
+	// 避免重复导入旧表格冲掉系统内的改动。
 	ImportCandidates(ctx context.Context, rows []CandidateImportRow) (*ImportReport, error)
 	// MovePhase 推进阶段：ASSIGNED -> IN_PROGRESS -> COMPLETED。
 	// 由当前房间成员调用（无主持人概念，成员即可推进）。
@@ -216,6 +219,10 @@ type CandidateInfo struct {
 // （服务端不解析表格，只做校验与落库）。内嵌 CandidateInfo，JSON 仍为扁平字段。
 type CandidateImportRow struct {
 	CandidateInfo
+	// UpdatedAt 源表给出的「该行更新时间」（可选，RFC3339）：仅当它【早于】库中记录的
+	// updated_at 时才说明这行是旧数据 —— 该行跳过不覆盖，避免用旧表格冲掉系统内的改动。
+	// 零值（源表没有这一列 / 单元格为空）→ 不做比较，与历史行为一致：全量覆盖。
+	UpdatedAt *time.Time `json:"updated_at"`
 }
 
 // CandidatePreferences 是候选人的志愿与调剂三项（独立于资料全量编辑：
@@ -226,17 +233,22 @@ type CandidatePreferences struct {
 	AcceptAdjust bool   `json:"accept_adjust"` // 是否接受调剂
 }
 
-// ImportOutcome 单行导入结果（status: created / updated）。
+// ImportOutcome 单行导入结果（status: created / updated / skipped）。
 type ImportOutcome struct {
 	Index       int    `json:"index"`
 	Status      string `json:"status"`
 	CandidateID uint64 `json:"candidate_id"`
+	// StoredUpdatedAt 库中该候选人当前的更新时间：仅 skipped 时有值（说明为何跳过）。
+	StoredUpdatedAt *time.Time `json:"stored_updated_at,omitempty"`
 }
 
 // 导入行状态取值。
 const (
 	ImportStatusCreated = "created" // 新建
-	ImportStatusUpdated = "updated" // 命中既有学号，覆盖姓名/简介
+	ImportStatusUpdated = "updated" // 命中既有学号，覆盖资料
+	// ImportStatusSkipped 命中既有学号，但源表该行的更新时间早于库中记录 → 跳过：
+	// 不写库、不广播事件（该行在报告里带上库中的更新时间供界面说明）。
+	ImportStatusSkipped = "skipped"
 )
 
 // ImportReport 批量导入的落库报告。
@@ -244,6 +256,7 @@ const (
 type ImportReport struct {
 	Created int             `json:"created"`
 	Updated int             `json:"updated"`
+	Skipped int             `json:"skipped"`
 	Rows    []ImportOutcome `json:"rows"`
 	Events  []*Event        `json:"-"`
 }

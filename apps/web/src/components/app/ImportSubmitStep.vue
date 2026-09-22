@@ -1,7 +1,7 @@
 <!--
   ImportSubmitStep —— 数据导入第 ③ 步：确认与提交。
-  提交通知整批全或无：服务端返回即整批已落库（报告逐行给出新建/更新）；
-  任一行不合法则整批拒绝，此时就地列出全部问题行（行号 + 原因）。
+  提交通知整批全或无：服务端返回即整批已落库（报告逐行给出新建/更新，以及因源表更新时间
+  早于库中记录而跳过的行）；任一行不合法则整批拒绝，此时就地列出全部问题行（行号 + 原因）。
   报告表沿用列表页的表格区块（分页、不嵌套 Card），大批次不会一次渲染上千行。
 -->
 <script setup lang="ts">
@@ -18,6 +18,7 @@ import { Spinner } from '@/components/ui/spinner'
 import type { DataTableFeatures } from '@/components/ui/table/features'
 import type { ImportMappedRow } from '@/domain/import'
 import type { CandidateImportReport, CandidateImportRowError } from '@/models'
+import { formatDateTime } from '@/lib/format'
 
 const props = defineProps<{
   mapped: readonly ImportMappedRow[]
@@ -33,13 +34,17 @@ const stats = computed(() => ({
   total: props.mapped.length,
   create: props.mapped.filter((r) => r.status === 'create').length,
   update: props.mapped.filter((r) => r.status === 'update').length,
+  skip: props.mapped.filter((r) => r.status === 'skip').length,
 }))
 
 interface ResultRow {
   line: number
   studentNo: string
-  created: boolean
+  /** 落库结果：新建 / 更新 / 因源表更新时间早于库中记录而跳过（未覆盖）。 */
+  status: 'created' | 'updated' | 'skipped'
   candidateId: number
+  /** 库中该候选人当前的更新时间（仅 skipped 有值，用于说明跳过原因）。 */
+  storedUpdatedAt?: string
 }
 
 /** 落库报告：逐行结果（下标 → 源文件行号与学号）。 */
@@ -47,8 +52,9 @@ const resultRows = computed<ResultRow[]>(() =>
   (props.report?.rows ?? []).map((row) => ({
     line: props.mapped[row.index]?.line ?? row.index + 1,
     studentNo: props.mapped[row.index]?.studentNo ?? '',
-    created: row.status === 'created',
+    status: row.status,
     candidateId: row.candidate_id,
+    storedUpdatedAt: row.stored_updated_at,
   })),
 )
 
@@ -80,13 +86,26 @@ const resultColumns: ColumnDef<DataTableFeatures, ResultRow>[] = columnHelper.co
     enableSorting: false,
     cell: ({ getValue }) => h('div', { class: 'whitespace-nowrap font-mono text-xs' }, String(getValue())),
   }),
-  columnHelper.accessor('created', {
+  columnHelper.accessor('status', {
     header: '结果',
     enableSorting: false,
+    cell: ({ getValue }) => {
+      const status = getValue()
+      const label = status === 'created' ? '新建' : status === 'updated' ? '更新' : '已跳过'
+      return h('div', { class: 'whitespace-nowrap' }, [
+        h(Badge, { variant: status === 'created' ? 'secondary' : 'outline' }, () => label),
+      ])
+    },
+  }),
+  columnHelper.accessor('storedUpdatedAt', {
+    header: '系统更新时间',
+    enableSorting: false,
     cell: ({ getValue }) =>
-      h('div', { class: 'whitespace-nowrap' }, [
-        h(Badge, { variant: getValue() ? 'secondary' : 'outline' }, () => (getValue() ? '新建' : '更新')),
-      ]),
+      h(
+        'div',
+        { class: 'whitespace-nowrap tabular-nums text-muted-foreground' },
+        formatDateTime(String(getValue() ?? '')),
+      ),
   }),
   columnHelper.display({
     id: 'candidate',
@@ -142,6 +161,7 @@ const problemColumns: ColumnDef<DataTableFeatures, ProblemRow>[] = problemColumn
           <Badge variant="outline">总 {{ stats.total }}</Badge>
           <Badge variant="secondary">新建 {{ stats.create }}</Badge>
           <Badge variant="outline">更新 {{ stats.update }}</Badge>
+          <Badge v-if="stats.skip" variant="outline">跳过 {{ stats.skip }}</Badge>
         </div>
         <div class="flex items-center gap-2">
           <Button variant="outline" size="sm" @click="emit('back')">返回修改</Button>
@@ -167,6 +187,7 @@ const problemColumns: ColumnDef<DataTableFeatures, ProblemRow>[] = problemColumn
         <div class="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">新建 {{ props.report.created }}</Badge>
           <Badge variant="outline">更新 {{ props.report.updated }}</Badge>
+          <Badge v-if="props.report.skipped" variant="outline">跳过 {{ props.report.skipped }}</Badge>
           <Button variant="link" class="h-auto p-0" @click="emit('reset')">继续导入下一批</Button>
         </div>
       </template>

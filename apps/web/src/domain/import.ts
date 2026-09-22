@@ -46,6 +46,7 @@ export const CANDIDATE_IMPORT_FIELDS = [
   { key: 'qq', label: 'QQ号', required: false },
   { key: 'email', label: '邮箱', required: false },
   { key: 'profile', label: '个人简介', required: false },
+  { key: 'updated_at', label: '更新时间', required: false },
 ] as const
 
 export type CandidateImportFieldKey = (typeof CANDIDATE_IMPORT_FIELDS)[number]['key']
@@ -68,10 +69,17 @@ export interface ImportMappedRow {
   phone: string
   qq: string
   email: string
+  /** 源表给出的本行更新时间（RFC3339）；未映射 / 空 → ''，即不参与过期判定。 */
+  updatedAt: string
+  /** 库中该候选人当前的更新时间（仅 status='skip' 时有值，用于说明跳过原因）。 */
+  storedUpdatedAt?: string
   /** 行级错误（非空即该行不合法；提交为全或无，任一行不合法会被服务端整批拒绝）。 */
   errors: string[]
-  /** 行结果：新建 / 命中既有学号（或批内前行）覆盖 / 不合法。 */
-  status: 'create' | 'update' | 'error'
+  /**
+   * 行结果：新建 / 命中既有学号（或批内前行）覆盖 / 源表更新时间早于库中记录而跳过 / 不合法。
+   * skip 与 update 的判定口径必须与服务端一致（见 mapSheet 的注释）。
+   */
+  status: 'create' | 'update' | 'skip' | 'error'
   /** 本批内被本行覆盖的行号（批内同学号：后行覆盖前行）。 */
   overridesLine?: number
 }
@@ -80,17 +88,17 @@ export interface ImportMappedRow {
 export interface ImportOutcome {
   expressionErrors: Partial<Record<CandidateImportFieldKey, string>>
   mapped: ImportMappedRow[]
-  stats: { total: number; create: number; update: number; failed: number }
+  stats: { total: number; create: number; update: number; skip: number; failed: number }
 }
 
 /** 空映射（进入导入页时的初始表达式：按列名必须加引号的规则给出可复制样例）。 */
 export function emptyMapping(): CandidateImportMapping {
-  return { student_no: '', name: '"姓名"', first_choice: '', second_choice: '', accept_adjust: '', phone: '', qq: '', email: '', profile: '' }
+  return { student_no: '', name: '"姓名"', first_choice: '', second_choice: '', accept_adjust: '', phone: '', qq: '', email: '', profile: '', updated_at: '' }
 }
 
 /** 空映射结果（尚未选文件 / 表达式未通过编译时使用）。 */
 export function emptyOutcome(): ImportOutcome {
-  return { expressionErrors: {}, mapped: [], stats: { total: 0, create: 0, update: 0, failed: 0 } }
+  return { expressionErrors: {}, mapped: [], stats: { total: 0, create: 0, update: 0, skip: 0, failed: 0 } }
 }
 
 /**
@@ -219,14 +227,46 @@ function expressionMessage(e: unknown): string {
 }
 
 /**
+ * 源表「更新时间」→ RFC3339（提交给服务端做过期判定）。
+ * 接受 `2026-09-01 10:00[:ss[.SSS]]`、`2026/9/1 10:00` 这类常见写法与带时区的 ISO 8601；
+ * 不带时区者按【本机时区】解释（表格里填的是填写者的墙上时间），日期单元格（xlsx 已转 ISO）走同一分支。
+ * 无法识别即返回错误：宁可让该行不合法（整批拒绝、一次报出全部问题行），也不能静默当作「没有时间」
+ * ——那等于悄悄关掉过期保护。
+ */
+export function parseRowTimestamp(text: string): { iso: string } | { error: string } {
+  const raw = text.trim()
+  const m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?\s*(Z|[+-]\d{2}:?\d{2})?$/.exec(raw)
+  if (!m) return { error: `更新时间无法识别：${raw}` }
+  const [, y, mo, d, h, mi, s, ms, zone] = m
+  const pad = (v: string | undefined): string => (v ?? '0').padStart(2, '0')
+  const millis = Number((ms ?? '0').padEnd(3, '0'))
+  let date: Date
+  if (zone) {
+    // 无冒号的偏移（+0800）不是合法 ISO：补齐冒号后再交给 Date 解析
+    const z = zone === 'Z' ? 'Z' : `${zone.slice(0, 3)}:${zone.slice(-2)}`
+    date = new Date(`${y}-${pad(mo)}-${pad(d)}T${pad(h)}:${pad(mi)}:${pad(s)}.${String(millis).padStart(3, '0')}${z}`)
+  } else {
+    date = new Date(Number(y), Number(mo) - 1, Number(d), Number(h ?? 0), Number(mi ?? 0), Number(s ?? 0), millis)
+  }
+  if (Number.isNaN(date.getTime())) return { error: `更新时间无法识别：${raw}` }
+  // 无时区分支还要挡日历回卷：2026-02-30 会被 Date 顺延到 3 月
+  if (!zone && (date.getFullYear() !== Number(y) || date.getMonth() !== Number(mo) - 1 || date.getDate() !== Number(d))) {
+    return { error: `更新时间不是合法日期：${raw}` }
+  }
+  return { iso: date.toISOString() }
+}
+
+/**
  * 按映射把源表各行求值成候选人字段。表达式先整体编译（编译失败即返回表达式级错误，
  * 不产出行结果），再逐行求值 —— 编译一次、多行复用。
- * @param existingNos 库中已有学号（用于区分「新建 / 更新」的预览统计）
+ * @param existing 库中既有候选人：学号 → 其 updated_at（用于区分「新建 / 更新」，
+ *   并预判「源表该行是否早于库中记录 → 服务端将跳过」。判定口径与服务端一致：
+ *   仅比较「早于」，相等不算过期；库中无此人或源表没给时间则不做比较）
  */
 export function mapSheet(
   sheet: ImportSheet,
   mapping: CandidateImportMapping,
-  existingNos: ReadonlySet<string>,
+  existing: ReadonlyMap<string, string>,
 ): ImportOutcome {
   const expressionErrors: Partial<Record<CandidateImportFieldKey, string>> = {}
   const compiled: Partial<Record<CandidateImportFieldKey, CompiledExpression>> = {}
@@ -269,6 +309,7 @@ export function mapSheet(
       phone: '',
       qq: '',
       email: '',
+      updatedAt: '',
       errors: [],
       status: 'create',
     }
@@ -288,8 +329,22 @@ export function mapSheet(
     out.qq = interpretEscapes(evaluate('qq', row.values)).trim()
     out.email = interpretEscapes(evaluate('email', row.values)).trim()
 
+    const timestamp = interpretEscapes(evaluate('updated_at', row.values)).trim()
+    if (timestamp) {
+      const parsed = parseRowTimestamp(timestamp)
+      if ('error' in parsed) out.errors.push(parsed.error)
+      else out.updatedAt = parsed.iso
+    }
+
     if (out.errors.length > 0) {
       out.status = 'error'
+      return out
+    }
+    // 过期行：源表时间早于库中记录 → 服务端会跳过它（不覆盖库里的改动），预览如实标出。
+    const stored = existing.get(out.studentNo)
+    if (out.updatedAt && stored && Date.parse(out.updatedAt) < Date.parse(stored)) {
+      out.status = 'skip'
+      out.storedUpdatedAt = stored
       return out
     }
     const firstLine = seen.get(out.studentNo)
@@ -299,7 +354,7 @@ export function mapSheet(
       out.overridesLine = firstLine
     } else {
       seen.set(out.studentNo, row.line)
-      out.status = existingNos.has(out.studentNo) ? 'update' : 'create'
+      out.status = stored !== undefined ? 'update' : 'create'
     }
     return out
   })
@@ -311,6 +366,7 @@ export function mapSheet(
       total: mapped.length,
       create: mapped.filter((r) => r.status === 'create').length,
       update: mapped.filter((r) => r.status === 'update').length,
+      skip: mapped.filter((r) => r.status === 'skip').length,
       failed: mapped.filter((r) => r.status === 'error').length,
     },
   }
@@ -328,6 +384,8 @@ export function toImportPayload(mapped: readonly ImportMappedRow[]): CandidateIm
     phone: r.phone,
     qq: r.qq,
     email: r.email,
+    // 过期行也照发：跳过与否由服务端按库中快照裁决，前端只做预览
+    updated_at: r.updatedAt || undefined,
   }))
 }
 

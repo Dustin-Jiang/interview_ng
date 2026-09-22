@@ -207,3 +207,36 @@ func TestImportCandidatesForbidden(t *testing.T) {
 		t.Fatalf("无 candidates.manage 应 403: got %d %v", code, out)
 	}
 }
+
+// TestImportCandidatesStaleRowJSON 过期行保护的线上契约：请求行的 updated_at（RFC3339）参与判定，
+// 过期行在响应里报 status=skipped、带上库中 updated_at（stored_updated_at），且资料未被覆盖。
+func TestImportCandidatesStaleRowJSON(t *testing.T) {
+	r := newTestApp(t)
+	token := adminToken(t, r)
+
+	_, out := doJSON(t, r, "POST", "/api/candidates", `{"student_no":"0500","name":"系统内改的名"}`, token)
+	id := int(out["id"].(float64))
+
+	body := `{"rows":[{"student_no":"0500","name":"旧表名","updated_at":"2000-01-01T00:00:00Z"}]}`
+	code, out := doJSON(t, r, "POST", "/api/candidates/imports", body, token)
+	if code != http.StatusOK {
+		t.Fatalf("导入应 200: got %d %v", code, out)
+	}
+	if out["skipped"] != float64(1) || out["updated"] != float64(0) || out["created"] != float64(0) {
+		t.Fatalf("报告计数: %v", out)
+	}
+	rows, _ := out["rows"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("行报告: %v", out)
+	}
+	row, _ := rows[0].(map[string]any)
+	if row["status"] != "skipped" || row["candidate_id"] != float64(id) {
+		t.Fatalf("行状态: %v", rows[0])
+	}
+	if stored, _ := row["stored_updated_at"].(string); stored == "" {
+		t.Fatalf("跳过的行应带上库中更新时间: %v", rows[0])
+	}
+	if _, got := doJSON(t, r, "GET", "/api/candidates/"+itoa(id), "", token); got["name"] != "系统内改的名" {
+		t.Fatalf("过期行不该覆盖资料: %v", got)
+	}
+}

@@ -338,6 +338,11 @@ export interface CandidateImportRow {
   phone: string
   qq: string
   email: string
+  /**
+   * 源表给出的该行更新时间（RFC3339）。早于库中记录 → 该行被判定为旧数据，跳过不覆盖；
+   * 缺省（未映射该列 / 单元格为空）即不比较，照旧全量覆盖。
+   */
+  updated_at?: string
 }
 
 /** 导入行级错误（整批拒绝时给出；index 为请求体中的行下标）。 */
@@ -350,5 +355,13 @@ export interface CandidateImportRowError {
 export interface CandidateImportReport {
   created: number
   updated: number
-  rows: { index: number; status: 'created' | 'updated'; candidate_id: number }[]
+  /** 因源表更新时间早于库中记录而跳过的行数（未覆盖）。 */
+  skipped: number
+  rows: {
+    index: number
+    status: 'created' | 'updated' | 'skipped'
+    candidate_id: number
+    /** 库中该候选人当前的更新时间（仅 skipped 时有值）。 */
+    stored_updated_at?: string
+  }[]
 }

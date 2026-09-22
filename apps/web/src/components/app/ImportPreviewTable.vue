@@ -1,7 +1,7 @@
 <!--
   ImportPreviewTable —— 导入实时预览：分页表格直接承载全部映射结果（无「只看前 N 行」切换，
-  分页控件负责浏览），每行按目标字段展开（学号 / 姓名 / 个人简介）+ 校验状态；
-  统计标签（总 / 新建 / 更新 / 失败）同时是筛选入口。
+  分页控件负责浏览），每行按目标字段展开（学号 / 姓名 / 个人简介 / 更新时间）+ 校验状态；
+  统计标签（总 / 新建 / 更新 / 跳过 / 失败）同时是筛选入口。
   表格不嵌套 Card：标题与统计条分别走 DataTableSection 的标题与工具条插槽。
 -->
 <script setup lang="ts">
@@ -14,14 +14,15 @@ import { Badge } from '@/components/ui/badge'
 import { textCell } from '@/components/ui/table/cells'
 import type { DataTableFeatures } from '@/components/ui/table/features'
 import type { ImportOutcome } from '@/domain/import'
+import { formatDateTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 const props = defineProps<{
   outcome: ImportOutcome
 }>()
 
-/** 表格筛选维度：总 / 新建 / 更新 / 失败（点标签切换，再点一次回到「总」）。 */
-type FilterKey = 'all' | 'create' | 'update' | 'error'
+/** 表格筛选维度：总 / 新建 / 更新 / 跳过 / 失败（点标签切换，再点一次回到「总」）。 */
+type FilterKey = 'all' | 'create' | 'update' | 'skip' | 'error'
 const filter = ref<FilterKey>('all')
 
 /** 筛选标签（计数取整体结果，标签本身即筛选入口）。 */
@@ -31,6 +32,7 @@ const filterOptions = computed(() => {
     { key: 'all', label: '总', count: stats.total, variant: 'outline' },
     { key: 'create', label: '新建', count: stats.create, variant: 'secondary' },
     { key: 'update', label: '更新', count: stats.update, variant: 'outline' },
+    { key: 'skip', label: '跳过', count: stats.skip, variant: 'outline' },
     { key: 'error', label: '失败', count: stats.failed, variant: stats.failed ? 'destructive' : 'outline' },
   ] as const
 })
@@ -51,8 +53,10 @@ interface PreviewRow {
   qq: string
   email: string
   profile: string
-  status: 'create' | 'update' | 'error'
-  /** 状态标签：新建 / 更新 / 覆盖第 N 行 / 不合法。 */
+  /** 源表给出的该行更新时间（RFC3339）；未映射 / 空单元格为 `-`。 */
+  updatedAt: string
+  status: 'create' | 'update' | 'skip' | 'error'
+  /** 状态标签：新建 / 更新 / 覆盖第 N 行 / 已跳过（含库中更新时间）/ 不合法。 */
   label: string
   errors: string[]
 }
@@ -69,6 +73,7 @@ const allRows = computed<PreviewRow[]>(() =>
     qq: row.qq,
     email: row.email,
     profile: row.profile,
+    updatedAt: row.updatedAt,
     status: row.status,
     label:
       row.status === 'create'
@@ -77,7 +82,9 @@ const allRows = computed<PreviewRow[]>(() =>
           ? row.overridesLine
             ? `覆盖第 ${row.overridesLine} 行`
             : '更新'
-          : '不合法',
+          : row.status === 'skip'
+            ? `已跳过（库中更新于 ${formatDateTime(row.storedUpdatedAt)}）`
+            : '不合法',
     errors: row.errors,
   })),
 )
@@ -149,6 +156,11 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
       return h(ClampText, { text: value, lines: 3, class: 'min-w-56 text-muted-foreground' })
     },
   }),
+  columnHelper.accessor('updatedAt', {
+    header: '更新时间',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(formatDateTime(String(getValue() ?? '')), 'whitespace-nowrap tabular-nums'),
+  }),
   columnHelper.display({
     id: 'status',
     header: '校验状态',
@@ -157,7 +169,15 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
       h('div', { class: 'space-y-1 whitespace-nowrap' }, [
         h(
           Badge,
-          { variant: row.original.status === 'error' ? 'destructive' : 'secondary', class: 'text-sm' },
+          {
+            variant:
+              row.original.status === 'error'
+                ? 'destructive'
+                : row.original.status === 'skip'
+                  ? 'outline'
+                  : 'secondary',
+            class: 'text-sm',
+          },
           () => row.original.label,
         ),
         ...row.original.errors.map((message) => h('p', { class: 'text-destructive' }, message)),
