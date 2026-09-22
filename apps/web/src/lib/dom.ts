@@ -32,16 +32,3 @@ export function isActivatableElement(target: EventTarget | null): boolean {
 export function isModalOpen(): boolean {
   return document.querySelector('[role="dialog"], [role="alertdialog"]') !== null
 }
-
-/**
- * 页面级快捷键是否应忽略本次按键：
- *  - 事件已被内层控件处理（`defaultPrevented`，如 Select/Listbox 自己的方向键导航）；
- *  - 有模态弹窗打开（弹窗内按键归弹窗）；
- *  - 焦点在输入控件内（输入/文本域/下拉/contenteditable）。
- * 需要「在某个输入框内也响应」的页面先自行判断该框（见捡漏页的 `data-bid-input`）。
- */
-export function shouldIgnorePageKey(e: KeyboardEvent): boolean {
-  if (e.defaultPrevented) return true
-  if (isModalOpen()) return true
-  return isEditableTarget(e.target)
-}

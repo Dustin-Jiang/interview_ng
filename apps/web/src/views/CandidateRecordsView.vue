@@ -5,20 +5,20 @@
   筛选条件与选中条目分别同步到 URL query（`?q=`/`?status=`）与路径参数（`/candidates/:candidateId`，可深链 / 分享）；
   记录经 REST GET /api/candidates/:id/messages 拉取。
 
-  组装层：布局与名册交给 MasterDetailSplit / RosterList / RosterPager，
-  数据与交互交给 useCandidatePool / useRosterSelection / useCandidateMessages / useAdmissions。
+  组装层：布局与名册交给 MasterDetailSplit / RosterToolbar / RosterList / RosterPager，
+  数据与交互交给 useCandidatePool / useRosterSelection / useRosterHotkeys / useCandidateMessages / useAdmissions。
 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ExternalLink, Pencil, SearchX, SlidersHorizontal, UsersRound, X } from 'lucide-vue-next'
 
 import { useAdmissions } from '@/composables/useAdmissions'
 import { useAuth } from '@/composables/useAuth'
-import { useBoardChannel } from '@/composables/useBoardChannel'
+import { useBoardChannel, useBoardRefresh } from '@/composables/useBoardChannel'
 import { useCandidateMessages } from '@/composables/useCandidateMessages'
 import { useCandidatePool } from '@/composables/useCandidatePool'
-import { useDebouncedRefresh } from '@/composables/useDebouncedRefresh'
+import { useRosterHotkeys } from '@/composables/useRosterHotkeys'
 import { useRosterRouteSync } from '@/composables/useRosterRouteSync'
 import { useRosterSelection } from '@/composables/useRosterSelection'
 import { useRoomNames } from '@/composables/useRoomNames'
@@ -31,16 +31,15 @@ import {
   type CandidateStatus,
 } from '@/models'
 import { formatDateTime } from '@/lib/format'
-import { shouldIgnorePageKey } from '@/lib/dom'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { segmentedItemVariants } from '@/components/ui/tokens'
 import CandidateDetailHeader from '@/components/app/CandidateDetailHeader.vue'
 import CandidatePreferenceDialog from '@/components/app/CandidatePreferenceDialog.vue'
+import CandidateStatusSelect from '@/components/app/CandidateStatusSelect.vue'
 import EmptyState from '@/components/app/EmptyState.vue'
 import ErrorAlert from '@/components/app/ErrorAlert.vue'
 import ListSkeleton from '@/components/app/ListSkeleton.vue'
@@ -49,6 +48,7 @@ import MessageTranscript from '@/components/app/MessageTranscript.vue'
 import RefreshButton from '@/components/app/RefreshButton.vue'
 import RosterList from '@/components/app/RosterList.vue'
 import RosterPager from '@/components/app/RosterPager.vue'
+import RosterToolbar from '@/components/app/RosterToolbar.vue'
 import SearchInput from '@/components/app/SearchInput.vue'
 
 const route = useRoute()
@@ -145,27 +145,19 @@ const {
 } = useAdmissions(() => selected.value)
 
 // ---- 键盘：↑/↓ 切换候选人（与捡漏页同一套键位）；1/2/3 记录本部门录取决定 ----
-function onGlobalKeydown(e: KeyboardEvent): void {
-  if (shouldIgnorePageKey(e)) return // 输入控件聚焦 / 弹窗打开 / 已被内层处理时不拦截
-  if (e.key === 'ArrowUp') {
-    e.preventDefault()
-    goPrev()
-    return
-  }
-  if (e.key === 'ArrowDown') {
-    e.preventDefault()
-    goNext()
-    return
-  }
-  const key = Number(e.key)
-  if (!Number.isInteger(key) || key < 1 || key > ADMISSION_STATUSES.length) return
-  const candidate = selected.value
-  if (!showControls.value || !canRecord.value || admissionsLoading.value) return
-  if (!candidate || !user.value?.department_id) return
-  void switchAdmission(candidate, ADMISSION_STATUSES[key - 1])
-}
-onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
+useRosterHotkeys({
+  goPrev,
+  goNext,
+  onOtherKey: (e) => {
+    const key = Number(e.key)
+    if (!Number.isInteger(key) || key < 1 || key > ADMISSION_STATUSES.length) return false
+    const candidate = selected.value
+    if (!showControls.value || !canRecord.value || admissionsLoading.value) return false
+    if (!candidate || !user.value?.department_id) return false
+    void switchAdmission(candidate, ADMISSION_STATUSES[key - 1])
+    return true
+  },
+})
 
 // ---- 面试过程记录 ----
 const { messages, loading: msgsLoading, error: msgsError, load: loadMessages, prefetch: prefetchMessages } = useCandidateMessages()
@@ -193,13 +185,11 @@ const BOARD_ROSTER_EVENTS = [
   'candidate_deleted',
   'room_phase_changed',
 ]
-const rosterReload = useDebouncedRefresh(() => void load())
+useBoardRefresh(BOARD_ROSTER_EVENTS, () => void load())
 useBoardChannel().subscribe((ev) => {
-  if (BOARD_ROSTER_EVENTS.includes(ev.type)) return rosterReload.schedule()
-  if (ev.type === 'message_appended') {
-    const cid = (ev.data as { CandidateID?: number } | undefined)?.CandidateID
-    if (cid != null && cid === selectedId.value) void loadMessages(cid)
-  }
+  if (ev.type !== 'message_appended') return
+  const cid = (ev.data as { CandidateID?: number } | undefined)?.CandidateID
+  if (cid != null && cid === selectedId.value) void loadMessages(cid)
 })
 
 // ---- 深链与写回见上方（onMounted 恢复 + useUrlSync） ----
@@ -236,15 +226,13 @@ function onPreferencesSaved(): void {
     <!-- 左侧：名册工具条 + 名册 -->
     <template #aside>
       <!-- 紧凑工具条：标题 + 结果数 + 筛选浮层 + 刷新 -->
-      <div class="flex items-center gap-2 p-3">
-        <h1 class="flex min-w-0 items-center gap-2 truncate text-base font-semibold tracking-tight">
-          <UsersRound class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          候选人
-        </h1>
-        <span class="shrink-0 text-xs text-muted-foreground" aria-live="polite">
-          {{ filtered.length }} / {{ candidates.length }}
-        </span>
-        <span class="ml-auto flex shrink-0 items-center gap-1">
+      <RosterToolbar title="候选人" :icon="UsersRound">
+        <template #meta>
+          <span class="shrink-0 text-xs text-muted-foreground" aria-live="polite">
+            {{ filtered.length }} / {{ candidates.length }}
+          </span>
+        </template>
+        <template #actions>
           <Popover :open="filterOpen" @update:open="filterOpen = $event">
             <PopoverTrigger as-child>
               <Button
@@ -260,20 +248,7 @@ function onPreferencesSaved(): void {
             <PopoverContent class="w-72">
               <div class="space-y-3">
                 <SearchInput v-model="keyword" full placeholder="搜索学号 / 姓名 / 简介…" />
-                <Select
-                  :model-value="statusFilter || 'ALL'"
-                  @update:model-value="statusFilter = $event === 'ALL' ? '' : ($event as CandidateStatus)"
-                >
-                  <SelectTrigger class="w-full" aria-label="按状态筛选">
-                    <SelectValue placeholder="全部状态" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ALL">全部状态</SelectItem>
-                    <SelectItem v-for="s in CANDIDATE_STATUSES" :key="s" :value="s">
-                      {{ STATUS_PRESENTATION[s].label }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                <CandidateStatusSelect v-model="statusFilter" allow-all />
                 <Button
                   v-if="hasFilter"
                   variant="ghost"
@@ -288,8 +263,8 @@ function onPreferencesSaved(): void {
             </PopoverContent>
           </Popover>
           <RefreshButton variant="ghost" class="h-8 w-8" label="刷新列表" :loading="poolLoading" @click="load" />
-        </span>
-      </div>
+        </template>
+      </RosterToolbar>
 
       <RosterList
         :items="filtered"

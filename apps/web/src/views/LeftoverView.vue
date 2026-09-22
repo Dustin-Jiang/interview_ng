@@ -7,18 +7,19 @@
   结算不由本页触发：进入「结算阶段」时后端按出价自动结算全部竞拍，结算结果以带文字 Badge 呈现。
   结算阶段竞拍数据只读。无部门用户只读。
 
-  组装层：布局与名册交给 MasterDetailSplit / RosterList / RosterPager，
-  数据与交互交给 useLeftover / useRosterSelection。
+  组装层：布局与名册交给 MasterDetailSplit / RosterToolbar / RosterList / RosterPager，
+  数据与交互交给 useLeftover / useRosterSelection / useRosterHotkeys。
 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Check, Eye, EyeOff, Gavel, Minus, Plus, SearchX, UsersRound } from 'lucide-vue-next'
 
 import { useLeftover } from '@/composables/useLeftover'
+import { useRosterHotkeys } from '@/composables/useRosterHotkeys'
 import { useRosterRouteSync } from '@/composables/useRosterRouteSync'
 import { useRosterSelection } from '@/composables/useRosterSelection'
-import { isActivatableElement, isEditableTarget, isModalOpen } from '@/lib/dom'
+import { isActivatableElement } from '@/lib/dom'
 import type { Candidate } from '@/models'
 
 import { Badge } from '@/components/ui/badge'
@@ -32,6 +33,7 @@ import MasterDetailSplit from '@/components/app/MasterDetailSplit.vue'
 import RefreshButton from '@/components/app/RefreshButton.vue'
 import RosterList from '@/components/app/RosterList.vue'
 import RosterPager from '@/components/app/RosterPager.vue'
+import RosterToolbar from '@/components/app/RosterToolbar.vue'
 import SearchInput from '@/components/app/SearchInput.vue'
 
 const route = useRoute()
@@ -119,38 +121,30 @@ const bidEditable = computed(
 // 焦点在**出价输入框**内时同样生效（该框只放数字，不需要左右移动光标）；其它输入控件（搜索框等）完全让位。
 const BID_INPUT_ATTR = 'bidInput'
 
+/** 出价输入框：唯一在焦点内仍响应方向键的控件（标记 `data-bid-input`）。 */
 function isBidInput(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null
   return !!el && el.dataset?.[BID_INPUT_ATTR] !== undefined
 }
 
-function onGlobalKeydown(e: KeyboardEvent): void {
-  // 内层控件已处理（Select 弹层等）或有模态弹窗时完全让位。
-  if (e.defaultPrevented || isModalOpen()) return
-  const inBidInput = isBidInput(e.target)
-  if (!inBidInput && isEditableTarget(e.target)) return // 搜索框等：让位
-
-  const c = selected.value
-  const editable = !!c && bidEditable.value
-  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-    e.preventDefault()
-    if (e.key === 'ArrowUp') goPrev()
-    else goNext()
-    return
-  }
-  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-    if (!editable || !c) return
-    e.preventDefault()
-    stepDraft(c, e.key === 'ArrowLeft' ? -1 : 1)
-    return
-  }
-  if (e.key !== 'Enter' || !editable || !c) return
-  if (!inBidInput && isActivatableElement(e.target)) return // 真按钮/链接：Enter 归它们
-  e.preventDefault()
-  void saveBid(c)
-}
-onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
+useRosterHotkeys({
+  goPrev,
+  goNext,
+  isHotkeyInput: isBidInput,
+  onOtherKey: (e, inBidInput) => {
+    const c = selected.value
+    const editable = !!c && bidEditable.value
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (!editable || !c) return false
+      stepDraft(c, e.key === 'ArrowLeft' ? -1 : 1)
+      return true
+    }
+    if (e.key !== 'Enter' || !editable || !c) return false
+    if (!inBidInput && isActivatableElement(e.target)) return false // 真按钮/链接：Enter 归它们
+    void saveBid(c)
+    return true
+  },
+})
 
 // ---- 深链：挂载恢复搜索（query）与选中条目（路径参数）；变更写回 URL（replace） ----
 useRosterRouteSync<Candidate>({
@@ -186,13 +180,11 @@ function searchQuery(): Record<string, string> {
     <!-- 左侧：名册工具条 + 名册 -->
     <template #aside>
       <!-- 紧凑工具条：标题 + 阶段 + 已录取显隐 + 刷新 -->
-      <div class="flex items-center gap-2 p-3">
-        <h1 class="flex min-w-0 items-center gap-2 truncate text-base font-semibold tracking-tight">
-          <Gavel class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          捡漏竞拍
-        </h1>
-        <Badge :variant="isLeftoverPhase ? 'default' : 'secondary'">{{ phaseLabel }}</Badge>
-        <span class="ml-auto flex shrink-0 items-center gap-1">
+      <RosterToolbar title="捡漏竞拍" :icon="Gavel">
+        <template #meta>
+          <Badge :variant="isLeftoverPhase ? 'default' : 'secondary'">{{ phaseLabel }}</Badge>
+        </template>
+        <template #actions>
           <Button
             variant="ghost"
             size="icon"
@@ -213,8 +205,8 @@ function searchQuery(): Record<string, string> {
             :loading="loading"
             @click="reloadAll"
           />
-        </span>
-      </div>
+        </template>
+      </RosterToolbar>
 
       <div class="px-3 pb-2">
         <SearchInput v-model="keyword" full placeholder="搜索学号 / 姓名…" />
