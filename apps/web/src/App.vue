@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { Toaster } from 'vue-sonner'
 import { LogOut } from 'lucide-vue-next'
 
 import { useAuth, ensureAuthReady } from '@/composables/useAuth'
+import { isNavPathActive } from '@/domain/nav'
 import { PERMISSIONS } from '@/models'
 import { hasAnyManagePermission } from '@/presenters/permissions'
 import { Button } from '@/components/ui/button'
@@ -12,6 +13,7 @@ import { IconBadge } from '@/components/ui/icon-badge'
 import { tabItemVariants } from '@/components/ui/tokens'
 
 const route = useRoute()
+const router = useRouter()
 const { user, isLoggedIn, hasPermission, permissions, logout } = useAuth()
 
 const navItems = computed(() => {
@@ -31,6 +33,11 @@ const navItems = computed(() => {
   }
   return items
 })
+
+/** 导航项 + 解析后的目标路径（高亮按路径归属判定，路径取自路由表，不二次定义）。 */
+const navLinks = computed(() =>
+  navItems.value.map((item) => ({ ...item, path: router.resolve(item.to).path })),
+)
 
 /** 用户展示名与头像首字符。 */
 const displayName = computed(() => user.value?.name || user.value?.username || '')
@@ -62,10 +69,10 @@ onMounted(() => {
         <!-- 小屏下导航可横向滚动，避免溢出换行 -->
         <nav class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto md:flex-none" aria-label="主导航">
           <RouterLink
-            v-for="item in navItems"
+            v-for="item in navLinks"
             :key="item.name"
             :to="item.to"
-            :class="tabItemVariants({ active: route.name === item.to.name })"
+            :class="tabItemVariants({ active: isNavPathActive(route.path, item.path) })"
           >
             {{ item.name }}
           </RouterLink>
