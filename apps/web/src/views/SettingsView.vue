@@ -7,7 +7,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { Building2, FileSpreadsheet, Gauge, ShieldCheck, UserCog, UsersRound } from 'lucide-vue-next'
+import { Building2, FileSpreadsheet, Gauge, KeyRound, ShieldCheck, UserCog, UsersRound } from 'lucide-vue-next'
 
 import { useAuth } from '@/composables/useAuth'
 import { PERMISSIONS } from '@/models'
@@ -33,6 +33,7 @@ const sections = computed(() => {
     items.push({ name: 'settings-imports', label: '数据导入', icon: FileSpreadsheet })
   }
   if (hasPermission(PERMISSIONS.USERS_MANAGE)) {
+    items.push({ name: 'settings-authentication', label: '登录认证', icon: KeyRound })
     items.push({ name: 'settings-users', label: '面试官', icon: UserCog })
     items.push({ name: 'settings-roles', label: '角色', icon: ShieldCheck })
     items.push({ name: 'settings-departments', label: '部门', icon: Building2 })

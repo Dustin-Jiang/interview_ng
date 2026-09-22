@@ -8,7 +8,7 @@
  */
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { authApi, setAuthToken, setUnauthorizedHandler } from '@/api/http'
+import { authApi, oidcApi, setAuthToken, setUnauthorizedHandler } from '@/api/http'
 import type { Permission, User, UserProfile } from '@/models'
 
 const TOKEN_KEY = 'interview_ng_token'
@@ -16,6 +16,8 @@ const TOKEN_KEY = 'interview_ng_token'
 /** 模块级单例状态：登录态全局唯一（由 App.vue 在 setup 中初始化）。 */
 const profile = ref<UserProfile | null>(null)
 const booting = ref(true)
+/** 后端是否启用统一身份认证（登录页据此显示入口；读取失败按未启用处理）。 */
+const oidcEnabled = ref(false)
 /** token 是否已从 localStorage 恢复过（与 401 处理器注册标志分离，避免互相阻塞）。 */
 let tokenRestored = false
 /** 401 处理器是否已注册。 */
@@ -66,8 +68,14 @@ export interface UseAuth {
   readonly roles: Ref<string[]>
   readonly permissions: Ref<Permission[]>
   readonly isLoggedIn: ComputedRef<boolean>
+  /** 后端是否启用统一身份认证（登录页据此渲染入口）。 */
+  readonly oidcEnabled: Ref<boolean>
   hasPermission: (perm: Permission) => boolean
   login: (username: string, password: string) => Promise<void>
+  /** 读取登录方式开关（失败按「未启用 OIDC」处理，不阻塞密码登录）。 */
+  loadAuthenticationOptions: () => Promise<void>
+  /** 用 OIDC 回调带回的一次性登录码换取会话。 */
+  completeOidc: (code: string) => Promise<void>
   logout: () => void
 }
 
@@ -84,10 +92,26 @@ export function useAuth(): UseAuth {
     return permissions.value.includes(perm)
   }
 
-  async function login(username: string, password: string): Promise<void> {
-    const res = await authApi.login(username, password)
+  /** 落地会话：持久化 token 并写入登录态（密码登录与 OIDC 兑换共用）。 */
+  function adoptSession(res: UserProfile & { token: string }): void {
     persistToken(res.token)
     profile.value = { user: res.user, roles: res.roles, permissions: res.permissions }
+  }
+
+  async function login(username: string, password: string): Promise<void> {
+    adoptSession(await authApi.login(username, password))
+  }
+
+  async function loadAuthenticationOptions(): Promise<void> {
+    try {
+      oidcEnabled.value = (await oidcApi.options()).oidc.enabled
+    } catch {
+      oidcEnabled.value = false
+    }
+  }
+
+  async function completeOidc(code: string): Promise<void> {
+    adoptSession(await oidcApi.createSession(code))
   }
 
   function logout(): void {
@@ -109,8 +133,11 @@ export function useAuth(): UseAuth {
     roles,
     permissions,
     isLoggedIn,
+    oidcEnabled,
     hasPermission,
     login,
+    loadAuthenticationOptions,
+    completeOidc,
     logout,
   }
 }

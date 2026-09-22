@@ -1,19 +1,23 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { ClipboardList } from 'lucide-vue-next'
 
+import { OIDC_AUTHORIZATION_PATH } from '@/api/http'
 import { useAuth } from '@/composables/useAuth'
+import { oidcErrorMessage } from '@/domain/oidc'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { Spinner } from '@/components/ui/spinner'
 
+const route = useRoute()
 const router = useRouter()
-const { login } = useAuth()
+const { login, oidcEnabled, loadAuthenticationOptions, completeOidc } = useAuth()
 
 const username = ref('')
 const password = ref('')
@@ -36,6 +40,35 @@ async function submit() {
     submitting.value = false
   }
 }
+
+/** 统一身份认证：整页跳转到后端授权入口（非 XHR）。 */
+function toOidc() {
+  window.location.assign(OIDC_AUTHORIZATION_PATH)
+}
+
+// 回调落地：oidc_code 换会话；oidc_error 展示原因并清掉 query（避免刷新重复提示）。
+onMounted(async () => {
+  void loadAuthenticationOptions()
+  const code = route.query.oidc_code
+  if (typeof code === 'string' && code) {
+    submitting.value = true
+    try {
+      await completeOidc(code)
+      toast.success('登录成功')
+      await router.replace({ name: 'home' })
+    } catch (e) {
+      toast.error((e as Error).message || '统一身份认证登录失败')
+    } finally {
+      submitting.value = false
+    }
+    return
+  }
+  const error = route.query.oidc_error
+  if (typeof error === 'string' && error) {
+    toast.error(oidcErrorMessage(error))
+    void router.replace({ name: 'login' })
+  }
+})
 </script>
 
 <template>
@@ -49,6 +82,12 @@ async function submit() {
         <CardTitle>面试系统 · 控制台</CardTitle>
       </CardHeader>
       <CardContent class="grid gap-4">
+        <template v-if="oidcEnabled">
+          <Button variant="outline" aria-label="统一身份认证登录" @click="toOidc">
+            统一身份认证登录
+          </Button>
+          <Separator />
+        </template>
         <div class="grid gap-2">
           <Label for="login-username">用户名</Label>
           <Input

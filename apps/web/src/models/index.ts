@@ -23,7 +23,7 @@ export const CANDIDATE_STATUSES: CandidateStatus[] = [
   'ADMITTED',
 ]
 
-/** 权限名（10 枚，RBAC 目录与后端一致）。 */
+/** 权限名（12 枚，RBAC 目录与后端一致）。 */
 export const PERMISSIONS = {
   USERS_MANAGE: 'users.manage',
   CANDIDATES_MANAGE: 'candidates.manage',
@@ -190,6 +190,63 @@ export interface UserProfile {
   user: User
   roles: string[]
   permissions: Permission[]
+}
+
+// ---- 单点登录（OIDC） ----
+
+/** 一条「组 → 角色」映射规则：对 ID token 声明求值 JMESPath，首个命中生效。 */
+export interface OidcRule {
+  id: number
+  position: number
+  expression: string
+  role_id: number
+}
+
+/** OIDC 配置（GET /oidc/config；明文客户端密钥永不下发，只回 client_secret_set）。 */
+export interface OidcConfig {
+  id: number
+  enabled: boolean
+  issuer: string
+  client_id: string
+  client_secret_set: boolean
+  scopes: string
+  redirect_url: string
+  auto_provision: boolean
+  rules: OidcRule[]
+  updated_at: string
+}
+
+/** 保存态的规则（无 id/position：顺序即数组顺序）。 */
+export interface OidcRulePayload {
+  expression: string
+  role_id: number
+}
+
+/** PUT /oidc/config 请求体。 */
+export interface OidcConfigPayload {
+  enabled: boolean
+  issuer: string
+  client_id: string
+  /** 省略/undefined = 保持不变；"" = 清除；非空 = 覆盖。 */
+  client_secret?: string
+  scopes: string
+  redirect_url: string
+  auto_provision: boolean
+  rules: OidcRulePayload[]
+}
+
+/** 登录页可用的登录方式（GET /authentication，公共接口）。 */
+export interface AuthenticationOptions {
+  password: boolean
+  oidc: { enabled: boolean }
+}
+
+/** 连通性探测结果（POST /oidc/probes）。 */
+export interface OidcProbeResult {
+  issuer: string
+  authorization_endpoint: string
+  token_endpoint: string
+  jwks_uri: string
 }
 
 // ---- 捡漏阶段竞拍（leftover） ----

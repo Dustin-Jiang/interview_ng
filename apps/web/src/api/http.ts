@@ -4,7 +4,7 @@
  * 鉴权：请求拦截器自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
  */
 import axios, { type AxiosRequestConfig } from 'axios'
-import type { AdmissionStatus, Bid, Candidate, CandidateAdmission, CandidateImportReport, CandidateImportRow, CandidateInfoPayload, CandidatePreferencesPayload, CandidateStatus, Department, LeftoverFinalResult, LeftoverOverview, LeftoverResult, Message, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
+import type { AdmissionStatus, AuthenticationOptions, Bid, Candidate, CandidateAdmission, CandidateImportReport, CandidateImportRow, CandidateInfoPayload, CandidatePreferencesPayload, CandidateStatus, Department, LeftoverFinalResult, LeftoverOverview, LeftoverResult, Message, OidcConfig, OidcConfigPayload, OidcProbeResult, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
 
 /** 401 处理器：由 useAuth 注册（登出 + 跳登录页），避免循环依赖。 */
 let onUnauthorized: (() => void) | null = null
@@ -96,6 +96,31 @@ export const authApi = {
   },
   me(): Promise<UserProfile> {
     return request('/me')
+  },
+}
+
+// ---- 单点登录（OIDC） ----
+
+/** OIDC 授权入口（整页跳转，非 XHR）。 */
+export const OIDC_AUTHORIZATION_PATH = '/api/oidc/authorization'
+
+export const oidcApi = {
+  /** 登录方式开关（公共接口，登录页据此渲染入口）。 */
+  options(): Promise<AuthenticationOptions> {
+    return request('/authentication')
+  },
+  config(): Promise<OidcConfig> {
+    return request('/oidc/config')
+  },
+  updateConfig(body: OidcConfigPayload): Promise<{ ok: boolean }> {
+    return put('/oidc/config', body)
+  },
+  probe(issuer: string): Promise<OidcProbeResult> {
+    return post('/oidc/probes', { issuer })
+  },
+  /** 用回调带回的一次性登录码换取会话。 */
+  createSession(code: string): Promise<UserProfile & { token: string }> {
+    return post('/oidc/sessions', { code })
   },
 }
 

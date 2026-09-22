@@ -100,6 +100,12 @@ export const router = createRouter({
           name: 'settings-system-status',
           component: () => import('@/views/SettingsSystemStatusView.vue'),
         },
+        {
+          // 登录认证（OIDC 单点登录配置：连接参数 + JMESPath 组→角色规则）。
+          path: 'authentication',
+          name: 'settings-authentication',
+          component: () => import('@/views/SettingsAuthenticationView.vue'),
+        },
       ],
     },
     // ---- 旧路径重定向（书签/分享兼容；新路径见上方路由） ----
@@ -113,11 +119,13 @@ export const router = createRouter({
   ],
 })
 
-// 全局守卫：未登录访问非 /login → 跳登录；已登录访问 /login → 跳欢迎页。
+// 全局守卫：未登录访问非 /login → 跳登录；已登录访问 /login → 跳欢迎页
+// （例外：带 oidc_code 的回调落地必须放行，否则已登录态下回调码被丢弃）。
 router.beforeEach(async (to) => {
   const authed = await ensureAuthReady()
   if (to.name === 'login') {
-    return authed ? { name: 'home' } : true
+    if (authed && !to.query.oidc_code) return { name: 'home' }
+    return true
   }
   return authed ? true : { name: 'login' }
 })
