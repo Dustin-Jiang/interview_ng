@@ -35,7 +35,7 @@ cmd/server/main.go（装配：AutoMigrate 12 表 → seed → rbac → auth → 
 - `models/index.ts`：与后端 JSON 契约一一对应的纯类型层
 - `domain/`：无 Vue 依赖的纯函数（状态机、消息合并、录取预览、**学号归一化校验**、**Excel 解析与 JMESPath 映射**）
 - `presenters/`：状态 → 中文标签 + Badge variant 的展示映射
-- **数据导入页**（`/settings/imports`，需 `candidates.manage`）：`xlsx`（官方 CDN tarball，import `xlsx/dist/xlsx.mini.min.js`）与 `@jmespath-community/jmespath` **只在该分区的懒加载 chunk 里引入**；解析、映射、预览全在浏览器完成，服务端零新增依赖、无 multipart。JMESPath 里中文列名必须加引号（`"姓名"`），界面给出可复制的列名清单。
+- **数据导入页**（`/settings/imports`，需 `candidates.manage`）：`xlsx`（官方 CDN tarball，import `xlsx/dist/xlsx.mini.min.js`）与 `@jmespath-community/jmespath` **只在该分区的懒加载 chunk 里引入**；解析、映射、预览全在浏览器完成，服务端零新增依赖、无 multipart。JMESPath 里中文列名必须加引号（`"姓名"`），界面给出可复制的列名清单。映射结果按 JSON 转义集解释字面量转义（`\n`/`\t`/`\uXXXX`…，见 `domain/import.ts#interpretEscapes`），换行等字符因此可真显示；含反斜杠的文本（如路径）需写 `\\`。
 
 ## 关键目录
 

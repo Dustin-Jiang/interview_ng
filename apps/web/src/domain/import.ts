@@ -6,6 +6,7 @@
  *  - 行对象 = 首行表头为 key，值做类型推断（数字 / 布尔 / 日期 → ISO 字符串 / 文本），
  *    空单元格为 null，全空行跳过；
  *  - 学号取单元格原始值（数值单元格的格式化文本可能带千分位等格式，会破坏纯数字校验）；
+ *  - 映射结果按 JSON 转义集解释字面量转义（`\n` → 换行等），使真实换行与字面量换行都能正确显示；
  *  - JMESPath 中非 ASCII 起首的标识符必须加引号（`"姓名"`），各实现一致强制；
  *    中文列名因此以 `"列名"` 形式出现在表达式里，界面直接提供可复制的列名清单。
  */
@@ -158,6 +159,45 @@ export function parseWorkbook(data: ArrayBuffer, fileName: string): ImportSheet 
   return { fileName, sheetName, headers: headerRow, rows }
 }
 
+/**
+ * 解释映射结果中的转义序列。
+ * 映射结果里的换行有两种来源：单元格内**真实的换行符**（Alt+Enter），以及**字面量转义**
+ * ——JMESPath 的原始字符串字面量（`'...'`）按规范不处理转义，单元格里也可能存的就是 `\n` 两个字符。
+ * 这里统一按 **JSON 字符串转义集** 解释：`\" \\ \/ \b \f \n \r \t \uXXXX`。
+ * 未知/非法转义（如正则里的 `\d`）原样保留；注意 `C:\temp` 这类文本中的 `\t` 会被解释为制表符，
+ * 需要保留反斜杠时写 `\\`。
+ */
+export function interpretEscapes(text: string): string {
+  if (!text.includes('\\')) return text
+  return text.replace(/\\u[0-9a-fA-F]{4}|\\./gs, (match) => {
+    const seq = match.slice(1)
+    switch (seq[0]) {
+      case '"':
+        return '"'
+      case '\\':
+        return '\\'
+      case '/':
+        return '/'
+      case 'b':
+        return '\b'
+      case 'f':
+        return '\f'
+      case 'n':
+        return '\n'
+      case 'r':
+        return '\r'
+      case 't':
+        return '\t'
+      case 'u': {
+        const code = Number.parseInt(seq.slice(1), 16)
+        return Number.isNaN(code) ? match : String.fromCharCode(code)
+      }
+      default:
+        return match
+    }
+  })
+}
+
 /** 值转文本：null/undefined → ''；对象/数组 → JSON（不静默丢信息）；其余 String()。 */
 function toText(value: unknown): string {
   if (value === null || value === undefined) return ''
@@ -216,13 +256,13 @@ export function mapSheet(
       errors: [],
       status: 'create',
     }
-    const no = normalizeStudentNo(evaluate('student_no', row.values))
+    const no = normalizeStudentNo(interpretEscapes(evaluate('student_no', row.values)))
     if ('error' in no) out.errors.push(no.error)
     else out.studentNo = no.value
 
-    out.name = evaluate('name', row.values).trim()
+    out.name = interpretEscapes(evaluate('name', row.values)).trim()
     if (!out.name) out.errors.push('姓名不能为空')
-    out.profile = evaluate('profile', row.values)
+    out.profile = interpretEscapes(evaluate('profile', row.values))
 
     if (out.errors.length > 0) {
       out.status = 'error'

@@ -113,6 +113,7 @@
 
 ### 实现差异（相对上方计划）
 
+- **换行处理**：映射结果统一按 JSON 转义集解释字面量转义（`\n`/`\t`/`\uXXXX`…，`domain/import.ts#interpretEscapes`），并让简介/原因等自由文本按 `whitespace-pre-line` 呈现——「单元格内真实换行」与「字面量 `\n`」两种写法都能正确显示。代价：含反斜杠的文本（如 `C:\temp`）需写 `\\`。
 - **预览表形态**：按反馈去掉了「原始行 JSON」栏，映射结果由 JSON 串改为按目标字段展开的列（学号 / 姓名 / 个人简介）；映射与预览由左右分栏改为上下布局；表格改为分页展示全部数据（去掉前 10 行/显示全部切换），且不再嵌套 Card；第 ③ 步的报告表同步改用同一表格区块。
 
 - **步骤条**：改用页内只读步骤指示，**没有**复用 `components/ui/stepper` —— reka 的 `StepperSeparator` 必须在 `StepperItem` 内使用，且「总步数」由 `StepperTrigger` 注册，纯指示用法会渲染出错误的读屏文案（`Step 1 of 0`）。`components/ui/stepper/*` 库文件未改动（本就未被引用）。
