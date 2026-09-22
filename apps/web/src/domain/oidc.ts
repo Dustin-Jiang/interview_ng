@@ -9,16 +9,16 @@ export const OIDC_ERROR_MESSAGES: Record<string, string> = {
   oidc_exchange_failed: '身份提供方拒绝了本次登录',
   oidc_nonce_invalid: '登录校验失败，请重新发起',
   oidc_claims_invalid: '身份提供方返回的凭据无法识别',
-  oidc_rule_eval_failed: '账号信息未通过角色规则校验，请联系管理员',
-  oidc_role_unmapped: '账号未匹配到任何角色，请联系管理员',
+  oidc_rule_eval_failed: '没有登录权限：账号信息未匹配到角色规则，请联系管理员',
+  oidc_role_unmapped: '没有登录权限：账号未匹配到任何角色，请联系管理员',
   oidc_user_unknown: '账号尚未开通，请联系管理员',
   oidc_username_taken: '用户名已被占用，请联系管理员',
   oidc_login_failed: '统一身份认证登录失败',
 }
 
-/** 未知错误码回退到通用文案。 */
+/** 未知错误码：回退到通用文案并**带上错误码**，免得「登录失败」四字成死胡同（码在 URL 里本就不保密）。 */
 export function oidcErrorMessage(code: string): string {
-  return OIDC_ERROR_MESSAGES[code] ?? OIDC_ERROR_MESSAGES.oidc_login_failed
+  return OIDC_ERROR_MESSAGES[code] ?? `${OIDC_ERROR_MESSAGES.oidc_login_failed}（错误码：${code}）`
 }
 
 // ---- 回调地址（主机可编辑，路径固定） ----
