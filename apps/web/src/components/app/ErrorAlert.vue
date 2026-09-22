@@ -35,7 +35,7 @@ defineEmits<{ retry: [] }>()
     "
   >
     {{ props.message }}
-    <Button v-if="props.retryLabel" variant="link" class="h-auto p-0" @click="$emit('retry')">
+    <Button v-if="props.retryLabel" variant="link" class="h-auto p-0 max-lg:h-11 max-lg:px-2" @click="$emit('retry')">
       {{ props.retryLabel }}
     </Button>
   </div>

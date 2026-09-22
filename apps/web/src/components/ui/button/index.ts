@@ -17,10 +17,12 @@ export const buttonVariants = cva(
         link: 'text-primary underline-offset-4 hover:underline',
       },
       size: {
-        default: 'h-9 px-4 py-2',
-        sm: 'h-8 rounded-md px-3 text-xs',
-        lg: 'h-10 rounded-md px-8',
-        icon: 'h-9 w-9',
+        // 触屏抬高到 ≥44px（触控目标下限）：按 ≤lg 判断而非手机——平板竖屏（768~1023）同样是触屏；
+        // 桌面（鼠标、≥lg）保持原有紧凑尺寸。
+        default: 'h-9 px-4 py-2 max-lg:h-11',
+        sm: 'h-8 rounded-md px-3 text-xs max-lg:h-11 max-lg:px-4 max-lg:text-sm',
+        lg: 'h-10 rounded-md px-8 max-lg:h-12',
+        icon: 'h-9 w-9 max-lg:h-11 max-lg:w-11',
       },
     },
     defaultVariants: {

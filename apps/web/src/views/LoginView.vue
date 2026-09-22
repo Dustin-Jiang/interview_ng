@@ -73,12 +73,15 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="relative flex h-full items-center justify-center bg-muted/30 p-4">
-    <!-- 登录前也要能切主题（顶栏此时不可见） -->
-    <div class="absolute right-4 top-4">
+  <!-- h-full + overflow-y-auto：横屏矮窗口（如 640×360）下卡片可滚动，不会被裁掉顶部；
+       pt/pb 走 max(1rem, 安全区)：刘海屏与手势条不压住内容（px-4 与 p-4 分开写，避免工具类覆盖顺序歧义）。 -->
+  <div class="relative flex h-full overflow-y-auto bg-muted/30 px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
+    <!-- 登录前也要能切主题（顶栏此时不可见）；同样避开安全区 -->
+    <div class="absolute right-[max(1rem,env(safe-area-inset-right))] top-[max(1rem,env(safe-area-inset-top))]">
       <ThemeToggle />
     </div>
-    <Card class="w-full max-w-sm">
+    <!-- m-auto：水平垂直居中；内容高于容器时 flex 居中会把顶部顶出可视区，auto 外边距不会 -->
+    <Card class="m-auto w-full max-w-sm">
       <CardHeader class="items-center text-center">
         <!-- 品牌标识：图标 + 标题 -->
         <IconBadge size="lg" tone="solid" class="mx-auto mb-1" aria-hidden="true">

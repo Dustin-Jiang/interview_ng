@@ -8,7 +8,7 @@ import { cva, type VariantProps } from 'class-variance-authority'
 
 /** 页签/导航项：激活实底、未激活弱化（App 全局导航与 UsersView 页签共用）。 */
 export const tabItemVariants = cva(
-  'cursor-pointer shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+  'inline-flex cursor-pointer shrink-0 items-center rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-lg:min-h-11',
   {
     variants: {
       active: {
@@ -29,7 +29,7 @@ export type TabItemVariants = VariantProps<typeof tabItemVariants>
  * 激活弱化实底（区别于页顶 tab 的主色实底），全宽 + 图标 + 文字。
  */
 export const navItemVariants = cva(
-  'flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+  'flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-lg:min-h-11',
   {
     variants: {
       active: {
@@ -50,7 +50,7 @@ export type NavItemVariants = VariantProps<typeof navItemVariants>
  * 无实底填充、无阴影，仅激活文字/底色区分（含文字标签，不依赖颜色单通道）。
  */
 export const segmentedItemVariants = cva(
-  'shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+  'shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-lg:min-h-11',
   {
     variants: {
       active: {

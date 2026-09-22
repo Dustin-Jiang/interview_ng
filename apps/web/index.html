@@ -3,7 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover：配合 env(safe-area-inset-*) 让顶栏/底部导航避开刘海与手势条。
+         interactive-widget=resizes-content：Android Chrome 默认只缩「可视视口」，布局视口不缩，
+         dvh 不收缩、软键盘会直接盖住输入区；声明后由布局视口收缩驱动内部滚动区（房间聊天输入区因此不被遮）。 -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>面试系统 · 控制台</title>
     <!--
       首屏防闪烁：在样式表之前按存储的模式给 <html> 挂 .dark，避免深色用户先看到一帧白屏。

@@ -54,7 +54,7 @@ const clampClass = computed(() => CLAMP_CLASS[props.lines] ?? CLAMP_CLASS[3])
         />
       </div>
     </PopoverAnchor>
-    <PopoverContent align="start" class="w-96 max-h-72 overflow-y-auto whitespace-pre-line break-words text-sm">
+    <PopoverContent align="start" class="max-h-72 w-[min(24rem,calc(100vw-2rem))] overflow-y-auto whitespace-pre-line break-words text-sm">
       {{ props.text }}
     </PopoverContent>
   </Popover>

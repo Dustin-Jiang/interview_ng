@@ -92,6 +92,27 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
+    /* 手机上禁用下拉刷新：列表里下滑时不能因为触到顶部就把整个应用重新加载（会丢进行中的状态）。 */
+    overscroll-behavior-y: none;
+  }
+  /*
+    触屏：去掉 300ms 点击延迟与双击缩放（交互元素各自声明，不波及内容区滚动）。
+    表单控件在手机上按 16px 渲染——否则 iOS Safari 聚焦时会自动放大页面，
+    而且 14px 也低于移动端可读下限。桌面端字号不变。
+  */
+  button,
+  a,
+  [role='button'],
+  summary,
+  label {
+    touch-action: manipulation;
+  }
+  @media (max-width: 1023px) {
+    input,
+    textarea,
+    select {
+      font-size: 1rem;
+    }
   }
 }
 

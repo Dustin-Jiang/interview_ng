@@ -17,7 +17,7 @@ const forwarded = useForwardProps(delegatedProps)
   <NumberFieldIncrement
     data-slot="increment"
     v-bind="forwarded"
-    :class="cn('absolute top-1/2 -translate-y-1/2 right-0 p-2.5 disabled:cursor-not-allowed disabled:opacity-20', props.class)"
+    :class="cn('absolute top-1/2 -translate-y-1/2 right-0 p-2.5 max-lg:p-3.5 disabled:cursor-not-allowed disabled:opacity-20', props.class)"
   >
     <slot>
       <Plus class="h-4 w-4" aria-hidden="true" />

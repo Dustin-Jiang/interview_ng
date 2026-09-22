@@ -17,17 +17,18 @@ const currentPage = computed(() => Math.min(pagination.value.pageIndex + 1, page
 </script>
 
 <template>
-  <!-- 分页条：页码/每页条数 + 首页/上一页/下一页/末页（图标按钮带可访问名）。 -->
-  <div class="flex items-center justify-between px-2">
+  <!-- 分页条：页码/每页条数 + 首页/上一页/下一页/末页（图标按钮带可访问名）。
+       手机上允许换行并抬高按钮，避免「固定宽 + 不换行」把整页顶出横向滚动。 -->
+  <div class="flex flex-wrap items-center justify-between gap-2 px-2">
     <div class="text-sm text-muted-foreground">
       共 {{ table.getFilteredRowModel().rows.length }} 条
     </div>
-    <div class="flex items-center gap-2">
+    <div class="flex flex-wrap items-center gap-1.5 sm:gap-2">
       <Select
         :model-value="`${pagination.pageSize}`"
         @update:model-value="(v) => table.setPageSize(Number(v))"
       >
-        <SelectTrigger class="h-8 w-[70px]">
+        <SelectTrigger class="h-8 w-[70px] max-lg:w-20">
           <SelectValue />
         </SelectTrigger>
         <SelectContent side="top">
@@ -36,7 +37,7 @@ const currentPage = computed(() => Math.min(pagination.value.pageIndex + 1, page
           </SelectItem>
         </SelectContent>
       </Select>
-      <span class="text-sm font-medium">
+      <span class="whitespace-nowrap text-sm font-medium">
         第 {{ currentPage }} / {{ pageCount }} 页
       </span>
       <Button

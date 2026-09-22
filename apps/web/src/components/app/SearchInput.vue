@@ -41,13 +41,13 @@ function onClear() {
       v-model="keyword"
       type="text"
       :placeholder="placeholder"
-      :class="props.full ? 'w-full pl-8 pr-8' : 'w-56 pl-8 pr-8'"
+      :class="props.full ? 'w-full pl-8 pr-8' : 'w-full pl-8 pr-8 md:w-56'"
       @keydown.enter="emit('search', String(keyword))"
     />
     <button
       v-if="keyword"
       type="button"
-      class="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      class="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-lg:right-1 max-lg:top-0 max-lg:h-full max-lg:translate-y-0 max-lg:p-3"
       aria-label="清空搜索"
       @click="onClear"
     >
