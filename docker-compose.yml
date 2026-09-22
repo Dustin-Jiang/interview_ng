@@ -32,7 +32,6 @@ services:
       context: .
       dockerfile: Dockerfile
     image: interview_ng:local
-    container_name: interview_ng_app
     restart: unless-stopped
     depends_on:
       - postgres
