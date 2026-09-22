@@ -1,6 +1,8 @@
 package oidcauth
 
 import (
+	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 
@@ -45,18 +47,24 @@ func Hit(result any) bool {
 	return true
 }
 
+// ErrRuleEval 规则表达式**求值**失败：表达式本身合法（保存时已编译校验过），但声明缺失或类型不符
+// （典型：ID token 里没有 groups 声明，`length(groups[? …])` 对 null 取 length 直接报错）。
+// 与「未命中任何规则」（ErrOidcRoleUnmapped）区分开：前者是配置写错，后者是用户不在任何组里。
+var ErrRuleEval = errors.New("oidc rule evaluation failed")
+
 // MatchRole 按 Position 升序逐条求值，返回首个命中的角色 id；
-// 无命中 → (0, false, nil)；表达式执行出错 → error。
+// 无命中 → (0, false, nil)；表达式**求值**出错 → 包 ErrRuleEval 的错误
+// （含第几条与表达式原文，便于服务端日志与管理员定位）。
 // 规则顺序即切片顺序（store 已按 position 升序返回，此处不重排）。
 func MatchRole(rules []dsmodel.OidcRoleRule, claims map[string]any) (uint64, bool, error) {
 	for i := range rules {
 		node, err := Compile(rules[i].Expression)
 		if err != nil {
-			return 0, false, err
+			return 0, false, fmt.Errorf("%w: 第 %d 条规则（%s）编译失败：%v", ErrRuleEval, i+1, rules[i].Expression, err)
 		}
 		out, err := node.Search(claims)
 		if err != nil {
-			return 0, false, err
+			return 0, false, fmt.Errorf("%w: 第 %d 条规则（%s）求值失败：%v", ErrRuleEval, i+1, rules[i].Expression, err)
 		}
 		if Hit(out) {
 			return rules[i].RoleID, true, nil

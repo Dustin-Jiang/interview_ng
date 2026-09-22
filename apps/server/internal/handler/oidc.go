@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -80,12 +81,15 @@ func (h *HTTPServer) oidcCallback(c *gin.Context) {
 	}
 	id, err := h.oidc.Exchange(c.Request.Context(), cfg, stateParam, code)
 	if err != nil {
+		// 失败原因（换 token / 验签 / nonce / state）只在这里可见：不记日志就只能靠 HAR 猜。
+		log.Printf("[oidc] 回调换 token 失败: %v", err)
 		h.redirectOidcError(c, origin, oidcErrorCode(err))
 		return
 	}
 	roleID, hit, err := oidcauth.MatchRole(cfg.Rules, id.Claims)
 	if err != nil {
-		h.redirectOidcError(c, origin, "oidc_login_failed")
+		log.Printf("[oidc] 规则求值失败: %v", err)
+		h.redirectOidcError(c, origin, oidcErrorCode(err))
 		return
 	}
 	if !hit {
@@ -272,6 +276,8 @@ func oidcErrorCode(err error) string {
 		return "oidc_nonce_invalid"
 	case errors.Is(err, oidcauth.ErrClaimsInvalid):
 		return "oidc_claims_invalid"
+	case errors.Is(err, oidcauth.ErrRuleEval):
+		return "oidc_rule_eval_failed"
 	case errors.Is(err, auth.ErrOidcRoleUnmapped):
 		return "oidc_role_unmapped"
 	case errors.Is(err, auth.ErrOidcUserNotFound):

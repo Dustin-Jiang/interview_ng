@@ -19,6 +19,9 @@ import (
 
 //---- 测试辅助 ----
 
+// bt 是 JMESPath 原始字面量的反引号（Go 里写 \x60，免得与原始字符串语法打架）。
+const bt = "\x60"
+
 // rawRequest 发起一次请求并返回原始 recorder（doJSON 不暴露响应头/原始体）。
 func rawRequest(t *testing.T, r *gin.Engine, method, path, body, token string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -124,18 +127,23 @@ func newFakeIdp(t *testing.T, clientID string) *fakeIdp {
 			return
 		}
 		now := time.Now()
+		extra := map[string]any{
+			"nonce":              f.lastNonce,
+			"preferred_username": "oidc-user",
+			"name":               "OIDC 面试官",
+		}
+		// groups 为 nil 时**不带该声明**：复刻 Keycloak 客户端未配 Group Membership mapper、
+		// ID token 里根本没有 groups 的情形（规则求值失败的常见触发条件）。
+		if f.groups != nil {
+			extra["groups"] = f.groups
+		}
 		tok, err := jwt.Signed(signer).Claims(jwt.Claims{
 			Issuer:   f.server.URL,
 			Audience: jwt.Audience{clientID},
 			Subject:  "oidc-1",
 			IssuedAt: jwt.NewNumericDate(now),
 			Expiry:   jwt.NewNumericDate(now.Add(time.Hour)),
-		}).Claims(map[string]any{
-			"nonce":              f.lastNonce,
-			"groups":             f.groups,
-			"preferred_username": "oidc-user",
-			"name":               "OIDC 面试官",
-		}).Serialize()
+		}).Claims(extra).Serialize()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -407,6 +415,46 @@ func TestOidcLoginUnmappedRole(t *testing.T) {
 	w := rawGET(t, r, "/api/oidc/sessions?code="+start.code+"&state="+start.state)
 	if !strings.Contains(w.Header().Get("Location"), "oidc_error=oidc_role_unmapped") {
 		t.Fatalf("未映射角色应拒绝并回错误码: %s", w.Header().Get("Location"))
+	}
+}
+
+// TestOidcRuleEvalFailure 规则表达式对**缺失声明**求值失败（实际踩到的坑）：
+// ID token 里没有 groups 声明时 `length(groups[? …])` 直接报错。
+// 此前它退化成笼统的 oidc_login_failed（只能靠 HAR 反推），现在给专门错误码并在服务端记日志；
+// 换成先判类型的写法后，同一份声明只是「未命中」，不再让登录整体失败。
+func TestOidcRuleEvalFailure(t *testing.T) {
+	r := newTestApp(t)
+	admin := adminToken(t, r)
+	idp := newFakeIdp(t, "interview-ng")
+	idp.groups = nil // ID token 不带 groups 声明
+	adminRole := findRole(t, r, admin, "admin")
+
+	fragile := "length(groups[? ends_with(@, '-admin')]) > " + bt + "0" + bt
+	guarded := "type(groups) == 'array' && length(groups[? ends_with(@, '-admin')]) > " + bt + "0" + bt
+
+	put := func(expression string) {
+		t.Helper()
+		body := oidcConfigBody(idp.server.URL,
+			`{"expression":"`+expression+`","role_id":`+itoa(adminRole)+`}`)
+		if code, out := doJSON(t, r, "PUT", "/api/oidc/config", body, admin); code != http.StatusOK {
+			t.Fatalf("保存配置: %d %v", code, out)
+		}
+	}
+	callbackErr := func() string {
+		t.Helper()
+		start := startOidc(t, r, idp)
+		loc := rawGET(t, r, "/api/oidc/sessions?code="+start.code+"&state="+start.state).Header().Get("Location")
+		_, errCode, _ := strings.Cut(loc, "oidc_error=")
+		return errCode
+	}
+
+	put(fragile)
+	if got := callbackErr(); got != "oidc_rule_eval_failed" {
+		t.Fatalf("对缺失声明求值失败应回专门错误码，实得 %q", got)
+	}
+	put(guarded)
+	if got := callbackErr(); got != "oidc_role_unmapped" {
+		t.Fatalf("先判类型的写法应判为「未命中任何规则」，实得 %q", got)
 	}
 }
 
