@@ -13,7 +13,7 @@ import { Check, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper } from '@tanstack/vue-table'
 
 import { admissionApi, candidateApi, departmentApi, leftoverApi, systemStatusApi } from '@/api/http'
-import { useBoardChannel } from '@/composables/useBoardChannel'
+import { useBoardRefresh } from '@/composables/useBoardChannel'
 import { useSystemStatus } from '@/composables/useSystemStatus'
 import { buildAdmissionPreview, type AdmissionPreviewRow } from '@/domain/admission'
 import { ADMISSION_PRESENTATION, PHASE_PRESENTATION, admissionOutcomePresentation } from '@/presenters/status'
@@ -285,12 +285,8 @@ const PREVIEW_RELOAD_EVENTS = [
   'leftover_bid',
   'leftover_resolved',
 ]
-let previewTimer: ReturnType<typeof setTimeout> | undefined
-useBoardChannel().subscribe((ev) => {
-  if (showPreview.value && PREVIEW_RELOAD_EVENTS.includes(ev.type)) {
-    clearTimeout(previewTimer)
-    previewTimer = setTimeout(() => void loadPreview(), 300)
-  }
+useBoardRefresh(PREVIEW_RELOAD_EVENTS, () => {
+  if (showPreview.value) void loadPreview()
 })
 
 onMounted(() => void load())
