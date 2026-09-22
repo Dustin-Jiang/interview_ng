@@ -67,11 +67,13 @@ pnpm typecheck        # web 类型检查（vue-tsc -b --noEmit，走 project ref
 pnpm test             # typecheck + go test ./...
 pnpm test:server      # go test ./...（不带 -race）
 just test-server      # go test -race ./...
-just db               # docker compose up -d（或 podman compose up -d）
+just db               # 只起 Postgres（docker compose up -d postgres，或 podman compose …）
+podman compose up -d --build   # 部署整栈（单镜像 app + postgres），入口宿主机 :8080
 ```
 
 - Go 命令**必须从 `apps/server/` 运行**，且设置 `GOCACHE="$PWD/.gopath/gocache"`（构建缓存进仓库内，已 gitignore）。推荐 `go test -race ./...`。
 - Postgres：`docker-compose.yml`（postgres:16-alpine，库 `interview`，postgres/postgres，:5432）。Schema 由 Gorm AutoMigrate 在启动时创建——**没有迁移工具**。
+- 部署：**前后端单镜像**——根 `Dockerfile`（多阶段：Vite 产物 + Go 二进制 → `caddy:2-alpine`），`deploy/` 是运行期配置（`Caddyfile` 纯 HTTP 发静态并反代 `/api`、`/ws` 到同容器回环 `127.0.0.1:8080`；`entrypoint.sh` 负责等 DB 就绪 + 两个进程同生共死）。`docker-compose.yml` 的 `app` 服务即该镜像，`postgres` 与开发共用。细节见 README「部署（容器，前后端单镜像）」。
 - 服务端环境变量：`DATABASE_DSN`、`ADDR`（默认 `:8080`）、`JWT_SECRET`（缺省 dev 值）、`ADMIN_INIT_PASSWORD`（默认 `admin`）。无开放注册。
 
 ## 代码约定与常见模式

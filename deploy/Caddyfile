@@ -1,0 +1,49 @@
+# interview_ng 入口（由 Dockerfile 的 runtime 阶段装进 /etc/caddy/Caddyfile）。
+#
+# 前后端同镜像：Caddy 既发静态产物，也把两条相对路径前缀反代给**同容器**里的 Go 后端
+# （127.0.0.1:8080，由 deploy/entrypoint.sh 与 Caddy 一起拉起）。
+#
+#   REST      → /api（apps/web/src/api/http.ts 的 baseURL）
+#   WebSocket → /ws（apps/web/src/api/ws.ts）
+#
+# 生产必须同源，Caddy 在同一个 :80 上同时满足这两件事，与 vite dev 的 server.proxy 语义一致。
+# reverse_proxy 原生透传 WebSocket 升级，且不设空闲读超时（面试房间的长连接可以一直挂着）。
+#
+# 纯 HTTP 部署：不涉及证书与自动 HTTPS（`auto_https off`）。需要 TLS 时在更外层做
+# （外部 LB / 反向代理终结 TLS 后转发到本容器 :80），本文件不参与。
+
+{
+	# 显式关掉自动 HTTPS：站点地址是 :80，本来也不会签发证书，写出来是为了避免
+	# 以后有人把地址改成域名时行为突变（那会试图去 ACME 申请证书）。
+	auto_https off
+}
+
+:80 {
+	root * /srv/www
+	encode gzip
+
+	# REST
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	# WebSocket（/ws/rooms/:roomId、/ws/board）
+	handle /ws/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	# 带内容哈希的产物：长缓存
+	handle /assets/* {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	# 前端路由（history 模式）：没有对应文件就回 index.html，
+	# 保证 /candidates/:id、/settings/* 这类深链刷新不 404；入口文件不缓存，
+	# 否则升级后仍会引用已删除的旧 chunk。
+	handle {
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}

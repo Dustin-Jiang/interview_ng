@@ -1,0 +1,33 @@
+# 构建上下文裁剪：仓库里的依赖/缓存/数据目录都不该进 builder（本地 node_modules 183M、
+# .gopath 46M、data 64M），否则每次构建都要白白传输一遍。
+# 注意：不能排除 apps/web/src、apps/server/**、pnpm-lock.yaml、deploy/nginx.conf。
+
+# 版本控制与编辑器
+.git
+.gitignore
+.idea
+.vscode
+
+# 依赖与构建产物（镜像内会重新装/重新编）
+node_modules
+**/node_modules
+dist
+**/dist
+.pnpm-store
+
+# Go 构建缓存（仓库内缓存目录）
+.gopath
+**/.gopath
+bin
+
+# 运行期数据与本地配置
+data
+.env
+.env.*
+
+#  Agents/文档（镜像内不需要）
+.agents
+.claude
+skills-lock.json
+TODO.md
+*.md

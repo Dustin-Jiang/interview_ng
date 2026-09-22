@@ -6,8 +6,9 @@ default:
     @just --list
 
 # 启动 Postgres（docker 或 podman 二选一，见 docker-compose.yml）
+# 只起 postgres 服务：docker-compose.yml 里还有部署用的 app（单镜像），不会被捎带起来
 db:
-    mkdir -p data && docker compose up -d || podman compose up -d
+    mkdir -p data && docker compose up -d postgres || podman compose up -d postgres
 
 # 启动后端 Go 服务（从 apps/server 运行，缓存放在仓库内）
 server:
