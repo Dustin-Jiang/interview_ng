@@ -1,23 +1,20 @@
 <!--
-  ImportPreviewTable —— 导入实时预览：统计条 + 逐行映射结果（学号 / 姓名 / 个人简介）+ 校验状态。
-  映射结果按目标字段展开成列（不展示源表原始行 —— 源数据在 Excel 里，这里只核对将要落库的字段）。
-  默认只渲染前 10 行，可切换为全部。
+  ImportPreviewTable —— 导入实时预览：分页表格直接承载全部映射结果（无「只看前 N 行」切换，
+  分页控件负责浏览），每行按目标字段展开（学号 / 姓名 / 个人简介）+ 校验状态。
+  表格不嵌套 Card：标题与统计条分别走 DataTableSection 的标题与工具条插槽。
 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, h } from 'vue'
+import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
+import DataTableSection from '@/components/app/DataTableSection.vue'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import type { DataTableFeatures } from '@/components/ui/table/features'
 import type { ImportOutcome } from '@/domain/import'
 
 const props = defineProps<{
   outcome: ImportOutcome
 }>()
-
-/** 预览默认只展示前 10 行（2000 行全量渲染只在用户显式切换时发生）。 */
-const PREVIEW_ROWS = 10
-const showAll = ref(false)
 
 interface PreviewRow {
   line: number
@@ -49,68 +46,68 @@ const rows = computed<PreviewRow[]>(() =>
   })),
 )
 
-const visible = computed(() => (showAll.value ? rows.value : rows.value.slice(0, PREVIEW_ROWS)))
+/** 空值统一以 `-` 占位（不区分「映射为空」与「未映射」）。 */
+function textCell(value: string, classNames: string) {
+  return value ? h('div', { class: classNames }, value) : h('span', { class: 'text-muted-foreground' }, '-')
+}
+
+const columnHelper = createColumnHelper<DataTableFeatures, PreviewRow>()
+const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns([
+  columnHelper.accessor('line', {
+    header: '行号',
+    enableSorting: false,
+    cell: ({ getValue }) => h('div', { class: 'font-mono text-xs text-muted-foreground' }, String(getValue())),
+  }),
+  columnHelper.accessor('studentNo', {
+    header: '学号',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'font-mono text-xs'),
+  }),
+  columnHelper.accessor('name', {
+    header: '姓名',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'break-words'),
+  }),
+  columnHelper.accessor('profile', {
+    header: '个人简介',
+    enableSorting: false,
+    cell: ({ getValue }) => textCell(String(getValue() ?? ''), 'break-words text-muted-foreground'),
+  }),
+  columnHelper.display({
+    id: 'status',
+    header: '校验状态',
+    enableHiding: false,
+    cell: ({ row }) =>
+      h('div', { class: 'space-y-1' }, [
+        h(
+          Badge,
+          { variant: row.original.status === 'error' ? 'destructive' : 'secondary' },
+          () => row.original.label,
+        ),
+        ...row.original.errors.map((message) => h('p', { class: 'text-xs text-destructive' }, message)),
+      ]),
+  }),
+])
 </script>
 
 <template>
-  <div class="space-y-3">
-    <div class="flex flex-wrap items-center gap-2">
-      <Badge variant="outline">总 {{ props.outcome.stats.total }}</Badge>
-      <Badge variant="secondary">新建 {{ props.outcome.stats.create }}</Badge>
-      <Badge variant="outline">更新 {{ props.outcome.stats.update }}</Badge>
-      <Badge :variant="props.outcome.stats.failed ? 'destructive' : 'outline'">
-        失败 {{ props.outcome.stats.failed }}
-      </Badge>
-      <Button
-        v-if="rows.length > PREVIEW_ROWS"
-        variant="link"
-        class="ml-auto h-auto p-0"
-        @click="showAll = !showAll"
-      >
-        {{ showAll ? `只看前 ${PREVIEW_ROWS} 行` : `显示全部 ${rows.length} 行` }}
-      </Button>
-    </div>
-
-    <!-- 不设最小宽度：设置页外壳（overflow-hidden）在窄屏下会裁切超宽内容，
-         让表格按可用宽度收缩换行，比溢出被裁掉更可用。 -->
-    <div class="rounded-md border">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead class="w-16">行号</TableHead>
-            <TableHead class="w-32">学号</TableHead>
-            <TableHead class="w-28">姓名</TableHead>
-            <TableHead>个人简介</TableHead>
-            <TableHead class="w-44">校验状态</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          <TableRow v-for="row in visible" :key="row.line">
-            <TableCell class="font-mono text-xs text-muted-foreground">{{ row.line }}</TableCell>
-            <TableCell class="font-mono text-xs">
-              <span v-if="row.studentNo">{{ row.studentNo }}</span>
-              <span v-else class="text-muted-foreground">-</span>
-            </TableCell>
-            <TableCell class="break-words">
-              <span v-if="row.name">{{ row.name }}</span>
-              <span v-else class="text-muted-foreground">-</span>
-            </TableCell>
-            <TableCell class="break-words text-muted-foreground">
-              {{ row.profile || '-' }}
-            </TableCell>
-            <TableCell>
-              <div class="space-y-1">
-                <Badge :variant="row.status === 'error' ? 'destructive' : 'secondary'">
-                  {{ row.label }}
-                </Badge>
-                <p v-for="message in row.errors" :key="message" class="text-xs text-destructive">
-                  {{ message }}
-                </p>
-              </div>
-            </TableCell>
-          </TableRow>
-        </TableBody>
-      </Table>
-    </div>
-  </div>
+  <DataTableSection
+    title="实时预览"
+    :loading="false"
+    :items="rows"
+    :columns="columns"
+    :data="rows"
+    empty-text="尚无映射结果"
+  >
+    <template #toolbar>
+      <div class="flex flex-wrap items-center gap-2">
+        <Badge variant="outline">总 {{ props.outcome.stats.total }}</Badge>
+        <Badge variant="secondary">新建 {{ props.outcome.stats.create }}</Badge>
+        <Badge variant="outline">更新 {{ props.outcome.stats.update }}</Badge>
+        <Badge :variant="props.outcome.stats.failed ? 'destructive' : 'outline'">
+          失败 {{ props.outcome.stats.failed }}
+        </Badge>
+      </div>
+    </template>
+  </DataTableSection>
 </template>

@@ -1,5 +1,5 @@
 <!--
-  ImportMappingStep —— 数据导入第 ② 步：上下布局（字段映射在上、实时预览在下）。
+  ImportMappingStep —— 数据导入第 ② 步：上下布局（字段映射卡在上、实时预览表格在下，表格不套 Card）。
   每个目标字段一条 JMESPath 表达式；中文列名必须加引号，映射卡内给出可直接复制的列名清单。
   表达式输入由调用方防抖（300ms），本组件只负责呈现与收集输入。
 -->
@@ -141,26 +141,20 @@ async function copyColumn(header: string): Promise<void> {
       </CardContent>
     </Card>
 
-    <Card>
-      <CardHeader>
-        <CardTitle>实时预览</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div v-if="props.existingLoading" class="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner aria-hidden="true" />
-          正在核对既有候选人…
-        </div>
-        <ErrorAlert
-          v-else-if="props.existingError"
-          :message="`既有候选人加载失败：${props.existingError}`"
-          retry-label="重试"
-          @retry="emit('retryExisting')"
-        />
-        <p v-else-if="props.outcome.mapped.length === 0" class="text-sm text-muted-foreground">
-          请先补全必填字段的表达式
-        </p>
-        <ImportPreviewTable v-else :outcome="props.outcome" />
-      </CardContent>
-    </Card>
+    <!-- 预览区不嵌套 Card：标题与统计条由表格区块自带（DataTableSection）。 -->
+    <div v-if="props.existingLoading" class="flex items-center gap-2 text-sm text-muted-foreground">
+      <Spinner aria-hidden="true" />
+      正在核对既有候选人…
+    </div>
+    <ErrorAlert
+      v-else-if="props.existingError"
+      :message="`既有候选人加载失败：${props.existingError}`"
+      retry-label="重试"
+      @retry="emit('retryExisting')"
+    />
+    <p v-else-if="props.outcome.mapped.length === 0" class="text-sm text-muted-foreground">
+      请先补全必填字段的表达式
+    </p>
+    <ImportPreviewTable v-else :outcome="props.outcome" />
   </div>
 </template>

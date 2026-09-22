@@ -13,6 +13,7 @@ const pagination = computed(() => props.table.atoms.pagination.get())
 </script>
 
 <template>
+  <!-- 分页条：页码/每页条数 + 首页/上一页/下一页/末页（图标按钮带可访问名）。 -->
   <div class="flex items-center justify-between px-2">
     <div class="text-sm text-muted-foreground">
       共 {{ table.getFilteredRowModel().rows.length }} 条
@@ -38,37 +39,41 @@ const pagination = computed(() => props.table.atoms.pagination.get())
         variant="outline"
         size="icon"
         class="h-8 w-8"
+        aria-label="首页"
         :disabled="!table.getCanPreviousPage()"
         @click="table.setPageIndex(0)"
       >
-        <ChevronsLeft class="h-4 w-4" />
+        <ChevronsLeft class="h-4 w-4" aria-hidden="true" />
       </Button>
       <Button
         variant="outline"
         size="icon"
         class="h-8 w-8"
+        aria-label="上一页"
         :disabled="!table.getCanPreviousPage()"
         @click="table.previousPage()"
       >
-        <ChevronLeft class="h-4 w-4" />
+        <ChevronLeft class="h-4 w-4" aria-hidden="true" />
       </Button>
       <Button
         variant="outline"
         size="icon"
         class="h-8 w-8"
+        aria-label="下一页"
         :disabled="!table.getCanNextPage()"
         @click="table.nextPage()"
       >
-        <ChevronRight class="h-4 w-4" />
+        <ChevronRight class="h-4 w-4" aria-hidden="true" />
       </Button>
       <Button
         variant="outline"
         size="icon"
         class="h-8 w-8"
+        aria-label="末页"
         :disabled="!table.getCanNextPage()"
         @click="table.setPageIndex(table.getPageCount() - 1)"
       >
-        <ChevronsRight class="h-4 w-4" />
+        <ChevronsRight class="h-4 w-4" aria-hidden="true" />
       </Button>
     </div>
   </div>
