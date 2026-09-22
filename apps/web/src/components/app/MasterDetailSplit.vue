@@ -8,7 +8,6 @@ import { computed } from 'vue'
 import { ArrowLeft } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 
 const props = withDefaults(
@@ -51,11 +50,11 @@ const detailClass = computed(() => (props.showDetail ? 'flex' : 'hidden lg:flex'
         </Button>
       </div>
 
-      <ScrollArea class="min-h-0 flex-1">
+      <div class="min-h-0 flex-1 overflow-y-auto">
         <div class="mx-auto max-w-3xl space-y-6 px-4 py-6">
           <slot name="detail" />
         </div>
-      </ScrollArea>
+      </div>
     </section>
   </div>
 </template>

@@ -9,7 +9,6 @@
 import { nextTick, ref, watch, type Component } from 'vue'
 
 import { Avatar, AvatarFallback, avatarVariants } from '@/components/ui/avatar'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/app/EmptyState.vue'
 import ErrorAlert from '@/components/app/ErrorAlert.vue'
@@ -70,71 +69,68 @@ watch(
 </script>
 
 <template>
-  <!--
-    viewport-class：reka 给滚动内容层内联 min-width: fit-content——短列表无害，但本名册含
-    truncate（nowrap）简介列，fit-content 会按全文宽度（可达数千 px）撑开整栏，宽度溢出且
-    省略号失效。以 !important 收回为 0：内容层恒随视口宽，简介/姓名在行内正常截断，
-    真正超宽的内容仍由 viewport 的横向滚动兜底。
-  -->
-  <ScrollArea class="min-h-0 flex-1" viewport-class="[&>div]:!min-w-0">
-    <div ref="rosterEl" role="listbox" :aria-label="props.listLabel" class="space-y-1 p-2">
-      <!-- 首屏骨架 -->
-      <ListSkeleton
-        v-if="props.skeleton"
-        :rows="5"
-        item-class="h-14 w-full rounded-md"
-        class="p-2"
-      />
+  <div
+    ref="rosterEl"
+    role="listbox"
+    :aria-label="props.listLabel"
+    class="min-h-0 flex-1 space-y-1 overflow-y-auto p-2"
+  >
+    <!-- 首屏骨架 -->
+    <ListSkeleton
+      v-if="props.skeleton"
+      :rows="5"
+      item-class="h-14 w-full rounded-md"
+      class="p-2"
+    />
 
-      <!-- 拉取失败 -->
-      <ErrorAlert
-        v-else-if="props.error"
-        variant="plain"
-        :message="props.error"
-        :retry-label="props.retryLabel"
-        @retry="emit('retry')"
-      />
+    <!-- 拉取失败 -->
+    <ErrorAlert
+      v-else-if="props.error"
+      variant="plain"
+      :message="props.error"
+      :retry-label="props.retryLabel"
+      @retry="emit('retry')"
+    />
 
-      <!-- 空态 -->
-      <EmptyState v-else-if="props.items.length === 0" bare :icon="props.emptyIcon" class="py-10">
-        {{ props.emptyText }}
-        <template v-if="props.emptyActionLabel" #action>
-          <Button variant="outline" size="sm" @click="emit('empty-action')">
-            {{ props.emptyActionLabel }}
-          </Button>
-        </template>
-      </EmptyState>
+    <!-- 空态 -->
+    <EmptyState v-else-if="props.items.length === 0" bare :icon="props.emptyIcon" class="py-10">
+      {{ props.emptyText }}
+      <template v-if="props.emptyActionLabel" #action>
+        <Button variant="outline" size="sm" @click="emit('empty-action')">
+          {{ props.emptyActionLabel }}
+        </Button>
+      </template>
+    </EmptyState>
 
-      <!-- 列表项：整行可点；Tab 停靠选中项（roving tabindex），切换走 ←/→ 全局键 -->
-      <button
-        v-for="c in props.items"
-        :key="c.id"
-        type="button"
-        role="option"
-        :aria-selected="c.id === props.selectedId"
-        :tabindex="c.id === props.selectedId ? 0 : -1"
-        class="flex w-full cursor-pointer items-center gap-3 rounded-md p-3 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        :class="c.id === props.selectedId ? 'bg-accent' : ''"
-        @click="emit('select', c)"
-      >
-        <Avatar :class="avatarVariants({ size: 'sm' })" aria-hidden="true">
-          <AvatarFallback>{{ initialsOf(c.name) }}</AvatarFallback>
-        </Avatar>
-        <span class="min-w-0 flex-1">
-          <span class="flex items-center justify-between gap-2">
-            <span class="min-w-0 truncate text-sm font-medium">{{ c.name }}</span>
-            <!-- 徽章插槽：候选人状态 / 本部门录取决定 / 出价与成交结果 -->
-            <span v-if="$slots.badges" class="flex shrink-0 items-center gap-1">
-              <slot name="badges" :item="c" />
-            </span>
-          </span>
-          <span class="mt-0.5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span class="min-w-0 truncate">{{ c.profile || '无简介' }}</span>
-            <!-- 元信息插槽：房间号等 -->
-            <slot name="meta" :item="c" />
+    <!-- 列表项：整行可点；Tab 停靠选中项（roving tabindex），切换走 ←/→ 全局键 -->
+    <button
+      v-for="c in props.items"
+      :key="c.id"
+      type="button"
+      role="option"
+      :aria-selected="c.id === props.selectedId"
+      :tabindex="c.id === props.selectedId ? 0 : -1"
+      class="flex w-full cursor-pointer items-center gap-3 rounded-md p-3 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      :class="c.id === props.selectedId ? 'bg-accent' : ''"
+      @click="emit('select', c)"
+    >
+      <Avatar :class="avatarVariants({ size: 'sm' })" aria-hidden="true">
+        <AvatarFallback>{{ initialsOf(c.name) }}</AvatarFallback>
+      </Avatar>
+      <span class="min-w-0 flex-1">
+        <span class="flex items-center justify-between gap-2">
+          <span class="min-w-0 truncate text-sm font-medium">{{ c.name }}</span>
+          <!-- 徽章插槽：候选人状态 / 本部门录取决定 / 出价与成交结果 -->
+          <span v-if="$slots.badges" class="flex shrink-0 items-center gap-1">
+            <slot name="badges" :item="c" />
           </span>
         </span>
-      </button>
-    </div>
-  </ScrollArea>
+        <span class="mt-0.5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span class="min-w-0 truncate">{{ c.profile || '无简介' }}</span>
+          <!-- 元信息插槽：房间号等 -->
+          <slot name="meta" :item="c" />
+        </span>
+      </span>
+    </button>
+  </div>
 </template>
