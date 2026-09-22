@@ -183,6 +183,8 @@ pnpm install                  # 首次，在仓库根安装所有 workspace 依�
 pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /ws 代理到 :8080）
 ```
 
+**深色模式**：顶栏与登录页右上角的主题按钮提供「浅色 / 深色 / 跟随系统」三档，默认跟随系统；选择存 localStorage（`interview_ng_theme`，跨标签页同步），首屏由 `index.html` 的内联脚本先行应用以免白屏闪烁。颜色全部走语义 token（`assets/index.css` 的 `.dark` 覆盖同名变量 + `color-scheme`），因此 `xlsx` 导入预览、弹窗、提示条、原生表单控件与原生滚动条都随主题切换。
+
 接口：
 - `GET  /api/health`
 - `POST /api/sessions` `{username, password}`（登录，签发 JWT）

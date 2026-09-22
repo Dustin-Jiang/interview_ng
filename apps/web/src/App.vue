@@ -5,16 +5,20 @@ import { Toaster } from 'vue-sonner'
 import { LogOut } from 'lucide-vue-next'
 
 import { useAuth, ensureAuthReady } from '@/composables/useAuth'
+import { useTheme } from '@/composables/useTheme'
 import { isNavPathActive } from '@/domain/nav'
 import { PERMISSIONS } from '@/models'
 import { hasAnyManagePermission } from '@/presenters/permissions'
 import { Button } from '@/components/ui/button'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { tabItemVariants } from '@/components/ui/tokens'
+import ThemeToggle from '@/components/app/ThemeToggle.vue'
 
 const route = useRoute()
 const router = useRouter()
 const { user, isLoggedIn, hasPermission, permissions, logout } = useAuth()
+/** 实际生效主题：交给 vue-sonner 让提示条与全站一致（跟随系统时也以解析结果为准）。 */
+const { resolved: themeResolved } = useTheme()
 
 const navItems = computed(() => {
   const items = [
@@ -83,6 +87,7 @@ onMounted(() => {
             {{ avatarChar }}
           </IconBadge>
           <span class="max-w-[8rem] truncate text-sm text-muted-foreground">{{ displayName }}</span>
+          <ThemeToggle />
           <Button variant="ghost" size="icon" aria-label="退出登录" @click="logout">
             <LogOut class="h-4 w-4" aria-hidden="true" />
           </Button>
@@ -95,6 +100,6 @@ onMounted(() => {
       <RouterView />
     </div>
 
-    <Toaster position="top-right" />
+    <Toaster position="top-right" :theme="themeResolved" />
   </div>
 </template>

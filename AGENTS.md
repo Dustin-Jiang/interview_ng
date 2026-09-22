@@ -35,9 +35,9 @@ cmd/server/main.go（装配：AutoMigrate 14 表 → seed → rbac → state →
 前端（`apps/web/src`）为 MVVM 函数式，无 Pinia：
 
 - `api/`：axios 单例（`/api` baseURL、Bearer 注入、401 统一登出）、各资源 Service 对象（`http.ts`）、WS 客户端 `ws.ts`（首条消息必须 auth，断线 1.5s 重连，重连后增量补拉）
-- `composables/`：函数式 ViewModel；`useAsync(loader)` 是所有请求的基础原语（`{data, loading, error, run}`）；`useBoardChannel` 是唯一模块级单例 + 引用计数，`useBoardRefresh(events, cb)` 300ms 防抖重拉是列表页实时刷新标准模式；**`useSystemStatus` 是系统状态（阶段 / 出价步长）的唯一共享数据源**（模块级单例 + 并发去重 + 写入方落库后强制刷新），捡漏页/候选人页/系统状态页一律消费它，禁止各自再拉一份；`useOidcSettings` 收编登录认证设置页的配置/角色名单/保存/探测/清除密钥
+- `composables/`：函数式 ViewModel；`useAsync(loader)` 是所有请求的基础原语（`{data, loading, error, run}`）；`useBoardChannel` 是唯一模块级单例 + 引用计数，`useBoardRefresh(events, cb)` 300ms 防抖重拉是列表页实时刷新标准模式；**`useSystemStatus` 是系统状态（阶段 / 出价步长）的唯一共享数据源**（模块级单例 + 并发去重 + 写入方落库后强制刷新），捡漏页/候选人页/系统状态页一律消费它，禁止各自再拉一份；`useOidcSettings` 收编登录认证设置页的配置/角色名单/保存/探测/清除密钥；`useTheme` 是深色模式的唯一数据源（模式 + 解析结果 + 落 `<html>.dark`）
 - `models/index.ts`：与后端 JSON 契约一一对应的纯类型层
-- `domain/`：无 Vue 依赖的纯函数（状态机、消息合并、录取预览、**学号归一化校验**、**Excel 解析与 JMESPath 映射**（含 `parseAcceptAdjust`：是/接受/y/yes/true/1 → true）、**OIDC 错误码文案** `oidc.ts`（登录页用，不引 jmespath）、**OIDC 规则编译与试算** `oidcRules.ts`）
+- `domain/`：无 Vue 依赖的纯函数（状态机、消息合并、录取预览、**学号归一化校验**、**Excel 解析与 JMESPath 映射**（含 `parseAcceptAdjust`：是/接受/y/yes/true/1 → true）、**OIDC 错误码文案** `oidc.ts`（登录页用，不引 jmespath）、**OIDC 规则编译与试算** `oidcRules.ts`、**深色模式纯逻辑** `theme.ts`（模式解析/解析结果/存储键））
 - `presenters/`：状态 → 中文标签 + Badge variant 的展示映射
 - **数据导入页**（`/settings/imports`，需 `candidates.manage`）：`xlsx`（官方 CDN tarball，import `xlsx/dist/xlsx.mini.min.js`）与 `@jmespath-community/jmespath` **只在该分区的懒加载 chunk 里引入**；解析、映射、预览全在浏览器完成，服务端零新增依赖、无 multipart。JMESPath 里中文列名必须加引号（`"姓名"`），界面给出可复制的列名清单。映射结果按 JSON 转义集解释字面量转义（`\n`/`\t`/`\uXXXX`…，见 `domain/import.ts#interpretEscapes`），换行等字符因此可真显示；含反斜杠的文本（如路径）需写 `\\`。
 - **登录认证页**（`/settings/authentication`，需 `users.manage`）：OIDC 连接参数（开关 / Issuer / 客户端 / Scopes / 回调地址 / 自动开通 + 连通性检测）+ 「组 → 角色」JMESPath 规则表（`OidcRoleRules`，上移/下移即调优先级，保存时下标即 `position`）+ 规则验证（`OidcClaimsPreview`，粘贴 ID token 声明试算命中）。客户端密钥**只写不读**（界面只显示是否已配置，清除走单独按钮）。`domain/oidcRules.ts` 是 `@jmespath-community/jmespath` 的第二个懒加载引用点；登录页只引 `domain/oidc.ts`（不引 jmespath）。
@@ -55,7 +55,7 @@ cmd/server/main.go（装配：AutoMigrate 14 表 → seed → rbac → state →
 | `apps/web/src/api/`、`composables/`、`models/`、`domain/`、`presenters/` | 见上 |
 | `apps/web/src/views/` | 页面（组装层：只做筛选/展示派生 + 组合下方共享组件与 composable） |
 | `apps/web/src/components/ui/` | shadcn-vue 组件，`index.ts` + cva 变体约定 |
-| `apps/web/src/components/app/` | 自研业务外壳：`PageShell`、`EmptyState`、`SearchInput`、`ConfirmDialog`、`MessageTranscript`（通用）+ `MasterDetailSplit`、`RosterList`、`RosterPager`、`CandidateDetailHeader`（名册↔详情布局）、`DataTableSection`、`FormDialog`、`RefreshButton`、`ListSkeleton`、`ErrorAlert`（列表/表单/状态骨架）、`FileDropInput`、`CandidateFormFields`、`ClampText`（长文折叠 + Popover）、`CandidatePreferenceDialog`（志愿与调剂编辑，三处入口共用）、`CallNumberDialog`（候场大屏叫号弹窗）、`RoomSidebar`（面试房间左栏：候选人信息/简介/拉取/阶段控制）、`ImportFileStep`/`ImportMappingStep`/`ImportPreviewTable`/`ImportSubmitStep`（数据导入）、`OidcRoleRules`/`OidcClaimsPreview`（登录认证：规则表与规则验证） |
+| `apps/web/src/components/app/` | 自研业务外壳：`PageShell`、`EmptyState`、`SearchInput`、`ConfirmDialog`、`MessageTranscript`（通用）+ `MasterDetailSplit`、`RosterList`、`RosterPager`、`CandidateDetailHeader`（名册↔详情布局）、`DataTableSection`、`FormDialog`、`RefreshButton`、`ListSkeleton`、`ErrorAlert`（列表/表单/状态骨架）、`FileDropInput`、`CandidateFormFields`、`ClampText`（长文折叠 + Popover）、`CandidatePreferenceDialog`（志愿与调剂编辑，三处入口共用）、`CallNumberDialog`（候场大屏叫号弹窗）、`RoomSidebar`（面试房间左栏：候选人信息/简介/拉取/阶段控制）、`ImportFileStep`/`ImportMappingStep`/`ImportPreviewTable`/`ImportSubmitStep`（数据导入）、`OidcRoleRules`/`OidcClaimsPreview`（登录认证：规则表与规则验证）、`ThemeToggle`（深色模式三档切换，顶栏与登录页共用） |
 
 ## 开发命令
 
@@ -89,6 +89,7 @@ just db               # docker compose up -d（或 podman compose up -d）
   - **单文件行数**：视图/组件/组合式函数尽量 ≤ 400 行；超标即按上述原语拆分，避免超长文件难以维护。
   - WS 消息经 `domain/` 纯函数不可变更新（如 `mergeMessages` 按 id 去重升序）。
   - **视觉 token**：颜色/圆角/边框/阴影只能取自 `src/assets/index.css`（`:root`/`.dark` 语义变量）与 `tailwind.config.cjs` 语义映射（如 `bg-muted`、`text-muted-foreground`），**禁止硬编码 hex/rgb/hsl**。新组件沿用 `components/ui/<name>/index.ts` + cva 变体；状态只通过带文字标签的 Badge 传达，不依赖颜色单通道。
+  - **深色模式**：三档「浅色 / 深色 / 跟随系统」（默认跟随系统）存 localStorage `interview_ng_theme`；`useTheme()` 把解析结果 toggle 到 `<html>` 的 `.dark` 类上（`domain/theme.ts` 是纯逻辑，`usePreferredDark` 供系统偏好，`useStorage` 负责持久化与跨标签页同步），切换入口 `ThemeToggle` 在**顶栏与登录页右上角**两处共用。组件**一律不写 `dark:` 变体**——`.dark` 覆盖同名语义变量即全站生效。`color-scheme` 随 `.dark` 一起切换（原生表单控件、原生滚动条因此跟随），`vue-sonner` 的 `Toaster` 绑 `resolved`。**首屏防白闪在 `index.html` 的内联脚本里按同一键与规则先应用一次——改动 `domain/theme.ts` 的键或规则必须同步改它**（内联脚本不能 import，那是唯一的第二份实现）。
   - **房间展示名**：任何界面都不显示房间编号，统一走 `domain/room.ts#roomLabel(room)`——入参是**房间对象**（不是 name 字符串），未命名/非字符串 name → 「未命名」；手上是房间对象时直接调用，只有候选人 `room_id` 的列表页/大屏用 `composables/useRoomNames.ts`（挂载拉取 + 房间 CRUD 事件重拉，映射里存的就是已解析的展示名）按 id 反查。
   - **键盘**：键位放在**各页自己的 window 处理**里（`useRosterSelection` 只提供状态与 `goPrev/goNext`，不再注册全局键；名册也不做 ↑/↓ 列表导航）。两个名册页统一 **↑/↓ 切换候选人**；捡漏页另用 **←/→ 按步长调整报价**、**Enter 保存报价**——焦点在出价输入框内同样生效（该框只放数字、无光标需求，标记 `data-bid-input`），其它输入控件（搜索框等）与真按钮/链接一律让位（守卫 `lib/dom.ts#isEditableTarget` / `isActivatableElement`）。捡漏页的出价框是普通 `Input`（草稿即文本、输入即时同步），**不要换回 `ui/number-field`**：它自带 ↑/↓ 步进，会与新键位打架。
   - **无 caption 小字**：禁止在标题下附加小字号说明文字（页头 description、表单说明行、空态 hint 等）——要么删掉冗余说明，要么改写标题。数据内容（如个人简介）与功能元信息（字段标签、时间戳、`-` 占位）不受限。

@@ -1,9 +1,18 @@
+/**
+ * 设计令牌（全站唯一颜色来源）：语义变量 + tailwind.config.cjs 的语义映射。
+ *
+ * 深色模式 = `<html>` 上的 `.dark` 类（由 composables/useTheme.ts 切换）覆盖下列同名变量，
+ * 因此组件一律只用语义类（bg-background / text-muted-foreground / border-border …），
+ * **禁止硬编码颜色与调色板类**（slate-500 之类）——否则深色下必然出错。
+ */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
+    /* 原生 UI 的配色：表单控件（checkbox/滚动条等）不认 CSS 变量，只认 color-scheme。 */
+    color-scheme: light;
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
 
@@ -41,6 +50,7 @@
   }
 
   .dark {
+    color-scheme: dark;
     --background: 222.2 84% 4.9%;
     --foreground: 210 40% 98%;
 

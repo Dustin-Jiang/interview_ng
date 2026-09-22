@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { Spinner } from '@/components/ui/spinner'
+import ThemeToggle from '@/components/app/ThemeToggle.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -72,7 +73,11 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="flex h-full items-center justify-center bg-muted/30 p-4">
+  <div class="relative flex h-full items-center justify-center bg-muted/30 p-4">
+    <!-- 登录前也要能切主题（顶栏此时不可见） -->
+    <div class="absolute right-4 top-4">
+      <ThemeToggle />
+    </div>
     <Card class="w-full max-w-sm">
       <CardHeader class="items-center text-center">
         <!-- 品牌标识：图标 + 标题 -->
