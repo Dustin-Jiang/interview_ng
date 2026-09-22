@@ -189,6 +189,8 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 
 **深色模式**：顶栏与登录页右上角的主题按钮提供「浅色 / 深色 / 跟随系统」三档，默认跟随系统；选择存 localStorage（`interview_ng_theme`，跨标签页同步），首屏由 `index.html` 的内联脚本先行应用以免白屏闪烁。颜色全部走语义 token（`assets/index.css` 的 `.dark` 覆盖同名变量 + `color-scheme`），因此 `xlsx` 导入预览、弹窗、提示条、原生表单控件与原生滚动条都随主题切换。
 
+**移动端适配**：手机（<768px）用**底部导航**替换顶栏横向导航（6 个目的地一屏可达，此前顶栏横滑会把末尾的「设置」藏出屏幕）；顶栏只留品牌/主题/退出，并避开刘海（`viewport-fit=cover` + `env(safe-area-inset-*)`）。管理页的宽表格在 <768px 自动变成**一记录一卡片**（字段标签来自列头，操作列铺底），无需各页单独适配——见 `components/ui/table/data-table.vue`；设置页在 <768px 把左侧栏换成顶部可横滑的分区标签条。触屏（≤1023px）下按钮/输入框/下拉一律 ≥44px，输入框按 16px 渲染（否则 iOS 聚焦会自动放大页面）。高度链用 `dvh`，viewport 声明 `interactive-widget=resizes-content`，因此软键盘弹出时房间聊天的输入区不被遮挡。
+
 接口：
 - `GET  /api/health`
 - `POST /api/sessions` `{username, password}`（登录，签发 JWT）
