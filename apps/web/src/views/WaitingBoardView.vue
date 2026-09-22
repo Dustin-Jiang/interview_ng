@@ -96,7 +96,7 @@ const columns: ColumnDef<DataTableFeatures, Candidate>[] = columnHelper.columns(
   columnHelper.accessor('student_no', {
     header: '学号',
     enableSorting: false,
-    cell: ({ getValue }) => h('span', { class: 'whitespace-nowrap tabular-nums' }, String(getValue())),
+    cell: ({ getValue }) => h('span', { class: 'tabular-nums' }, String(getValue())),
   }),
   columnHelper.accessor('name', {
     header: '姓名',
@@ -116,10 +116,11 @@ const columns: ColumnDef<DataTableFeatures, Candidate>[] = columnHelper.columns(
     cell: ({ row }) => {
       const roomId = row.original.room_id
       if (!roomId) return h('span', { class: 'text-muted-foreground' }, '-')
-      // 大屏只报房间名（不显示编号）。
+      // 大屏只报房间名（不显示编号）。不写死 nowrap：<md 卡片模式靠 whitespace-normal 生效，
+      // 写死 nowrap 会把卡片顶宽、导致横向溢出。
       const label = roomLabelOf(roomId)
       const unnamed = label === UNNAMED_ROOM_LABEL
-      return h('span', { class: unnamed ? 'text-muted-foreground' : 'whitespace-nowrap' }, label)
+      return h('span', { class: unnamed ? 'text-muted-foreground' : '' }, label)
     },
   }),
   columnHelper.display({

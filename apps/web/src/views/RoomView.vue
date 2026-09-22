@@ -166,8 +166,8 @@ const {
       item-class="h-[104px] rounded-xl"
     />
 
-    <!-- 房间卡片网格（tileVariants 统一可交互表面） -->
-    <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <!-- 房间卡片网格（tileVariants 统一可交互表面）：手机单列，md 起两列，lg 三列 -->
+    <div v-else class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
       <div
         v-for="room in rooms"
         :key="room.id"
@@ -191,15 +191,15 @@ const {
             </Badge>
           </span>
         </button>
-        <!-- 卡片脚注：时间与操作分离，不再重叠 -->
-        <div class="flex items-center justify-between border-t bg-muted/30 px-4 py-2">
+        <!-- 卡片脚注：时间与操作分离，不再重叠；窄屏放不下时操作换行而非横向溢出 -->
+        <div class="flex flex-wrap items-center justify-between gap-2 border-t bg-muted/30 px-4 py-2">
           <time class="text-xs text-muted-foreground">{{ formatDateTime(room.created_at) }}</time>
-          <span class="flex items-center gap-1">
+          <span class="flex flex-wrap items-center gap-1">
             <Button
               v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE)"
               variant="ghost"
               size="sm"
-              class="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+              class="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground max-lg:h-11 max-lg:text-sm"
               :aria-label="`改名：${roomLabel(room)}`"
               @click="renameRoom(room)"
             >
@@ -210,7 +210,7 @@ const {
               v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE) && !room.candidate"
               variant="ghost"
               size="sm"
-              class="h-7 gap-1 px-2 text-xs text-destructive hover:text-destructive"
+              class="h-7 gap-1 px-2 text-xs text-destructive hover:text-destructive max-lg:h-11 max-lg:text-sm"
               @click="requestDelete(room)"
             >
               <Trash2 aria-hidden="true" />

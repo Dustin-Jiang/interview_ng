@@ -54,7 +54,11 @@ onUnmounted(stopTimer)
 
 <template>
   <Dialog :open="!!notice" @update:open="(v) => !v && emit('dismiss')">
-    <DialogContent size="lg" class="items-center gap-5 border-2 border-primary py-10 text-center">
+    <!-- 小屏（360×640）压紧纵向留白与行距，保证大字报内容 + 主按钮一屏可见、无需滚动 -->
+    <DialogContent
+      size="lg"
+      class="items-center gap-4 border-2 border-primary py-6 text-center sm:gap-5 sm:py-10"
+    >
       <span
         class="flex h-20 w-20 animate-pulse items-center justify-center rounded-full bg-primary/10 text-primary"
         aria-hidden="true"
@@ -64,11 +68,13 @@ onUnmounted(stopTimer)
 
       <DialogTitle class="text-xl font-semibold text-muted-foreground">请入场面试</DialogTitle>
 
-      <p v-if="notice" class="text-5xl font-black tracking-wide">{{ notice.name }}</p>
+      <p v-if="notice" class="break-words text-4xl font-black tracking-wide sm:text-5xl">{{ notice.name }}</p>
       <p v-if="notice" class="text-lg tabular-nums text-muted-foreground">学号 {{ notice.studentNo }}</p>
-      <p v-if="notice" class="text-3xl font-semibold text-primary">请前往 {{ notice.roomLabel }}</p>
+      <p v-if="notice" class="break-words text-2xl font-semibold text-primary sm:text-3xl">
+        请前往 {{ notice.roomLabel }}
+      </p>
 
-      <DialogFooter class="flex-row items-center justify-center gap-3 sm:justify-center">
+      <DialogFooter class="flex-row flex-wrap items-center justify-center gap-3 sm:justify-center">
         <span v-if="pending > 0" class="text-sm tabular-nums text-muted-foreground">
           还有 {{ pending }} 位待叫号
         </span>

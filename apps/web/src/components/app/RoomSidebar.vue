@@ -58,10 +58,13 @@ const phaseIndex = computed(() =>
 </script>
 
 <template>
+  <!-- 纵向堆叠（<lg：手机 / 平板竖屏）时若不限高，内部 overflow-y-auto 形同失效，
+       侧栏会撑满内容高度把底部「推进阶段」按钮挤出视口；此处限高 45dvh 使其内部可滚动。
+       ≥lg 左右分栏后由 h-full 撑满；pt-16 只为 ≥lg 的悬浮胶囊让位。 -->
   <aside
-    class="order-last flex w-full shrink-0 flex-col border-t lg:order-first lg:h-full lg:w-80 lg:border-t-0"
+    class="order-last flex w-full shrink-0 flex-col border-t max-lg:max-h-[45dvh] lg:order-first lg:h-full lg:w-80 lg:border-t-0"
   >
-    <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-4 pt-16">
+    <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-4 pt-4 lg:pt-16">
       <!-- 候选人信息 -->
       <Card>
         <CardContent class="space-y-3 p-4">
@@ -79,7 +82,7 @@ const phaseIndex = computed(() =>
               v-if="canEditPreferences && hasCandidate"
               size="icon"
               variant="ghost"
-              class="h-7 w-7 shrink-0 text-muted-foreground"
+              class="h-7 w-7 shrink-0 text-muted-foreground max-lg:h-11 max-lg:w-11"
               aria-label="修改志愿与调剂"
               @click="openPreferences"
             >
@@ -89,7 +92,7 @@ const phaseIndex = computed(() =>
           <div class="space-y-1 text-sm">
             <div class="flex justify-between gap-3">
               <span class="shrink-0 text-muted-foreground">房间</span>
-              <span class="text-right">{{ roomLabel(props.room) }}</span>
+              <span class="min-w-0 break-words text-right">{{ roomLabel(props.room) }}</span>
             </div>
             <div v-if="room?.candidate?.student_no" class="flex justify-between gap-3">
               <span class="shrink-0 text-muted-foreground">学号</span>
@@ -97,11 +100,11 @@ const phaseIndex = computed(() =>
             </div>
             <div v-if="room?.candidate?.first_choice" class="flex justify-between gap-3">
               <span class="shrink-0 text-muted-foreground">第一志愿</span>
-              <span class="text-right">{{ room.candidate.first_choice }}</span>
+              <span class="min-w-0 break-words text-right">{{ room.candidate.first_choice }}</span>
             </div>
             <div v-if="room?.candidate?.second_choice" class="flex justify-between gap-3">
               <span class="shrink-0 text-muted-foreground">第二志愿</span>
-              <span class="text-right">{{ room.candidate.second_choice }}</span>
+              <span class="min-w-0 break-words text-right">{{ room.candidate.second_choice }}</span>
             </div>
             <div
               v-if="room?.candidate && (room.candidate.first_choice || room.candidate.second_choice)"
@@ -112,15 +115,15 @@ const phaseIndex = computed(() =>
             </div>
             <div v-if="room?.candidate?.phone" class="flex justify-between gap-3">
               <span class="shrink-0 text-muted-foreground">手机号</span>
-              <span class="break-all text-right tabular-nums">{{ room.candidate.phone }}</span>
+              <span class="min-w-0 break-all text-right tabular-nums">{{ room.candidate.phone }}</span>
             </div>
             <div v-if="room?.candidate?.qq" class="flex justify-between gap-3">
               <span class="shrink-0 text-muted-foreground">QQ号</span>
-              <span class="break-all text-right tabular-nums">{{ room.candidate.qq }}</span>
+              <span class="min-w-0 break-all text-right tabular-nums">{{ room.candidate.qq }}</span>
             </div>
             <div v-if="room?.candidate?.email" class="flex justify-between gap-3">
               <span class="shrink-0 text-muted-foreground">邮箱</span>
-              <span class="break-all text-right tabular-nums">{{ room.candidate.email }}</span>
+              <span class="min-w-0 break-all text-right tabular-nums">{{ room.candidate.email }}</span>
             </div>
           </div>
         </CardContent>
@@ -181,7 +184,7 @@ const phaseIndex = computed(() =>
             <li
               v-for="(s, i) in CANDIDATE_STATUSES"
               :key="s"
-              class="flex gap-3"
+              class="flex min-w-0 gap-3"
             >
               <!-- 节点列：圆点 + 连接线 -->
               <div class="flex flex-col items-center">
@@ -205,7 +208,7 @@ const phaseIndex = computed(() =>
               </div>
               <!-- 标签列 -->
               <span
-                class="pb-4 text-xs leading-none"
+                class="min-w-0 flex-1 break-words pb-4 text-xs leading-none"
                 :class="
                   i === phaseIndex
                     ? 'font-semibold text-foreground'

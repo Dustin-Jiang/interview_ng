@@ -161,12 +161,14 @@ watch(connecting, (v, prev) => {
 
 <template>
   <div class="relative mx-auto flex h-full w-full max-w-content flex-col overflow-hidden">
-    <!-- 悬浮胶囊：返回键 + 房间号 + 连接状态 + 阶段计时器（顶栏下方左侧） -->
+    <!-- 返回键 + 房间号 + 连接状态 + 阶段计时器。
+         <lg 布局为纵向堆叠：绝对定位会压住聊天首条消息，且 w-72 胶囊在 360px 下会溢出，
+         故此处内联为页头一条；≥lg 布局左右分栏，恢复悬浮胶囊（叠在左侧栏上方）。 -->
     <div
-      class="absolute left-4 top-4 z-30 flex h-9 w-72 items-center gap-2 rounded-md border bg-background/95 py-1 pl-1 pr-3 text-xs text-muted-foreground shadow-sm backdrop-blur"
+      class="z-30 flex min-h-11 w-full shrink-0 items-center gap-2 border-b bg-background/95 px-2 text-xs text-muted-foreground lg:absolute lg:left-4 lg:top-4 lg:min-h-0 lg:w-72 lg:max-w-[calc(100vw-2rem)] lg:rounded-md lg:border lg:py-1 lg:pl-1 lg:pr-3 lg:shadow-sm lg:backdrop-blur"
     >
       <Button
-        class="h-7 w-7 shrink-0"
+        class="h-7 w-7 shrink-0 max-lg:h-11 max-lg:w-11"
         size="icon"
         variant="ghost"
         aria-label="返回房间列表"
@@ -220,8 +222,9 @@ watch(connecting, (v, prev) => {
         @saved="reloadRoom"
       />
 
-      <!-- 聊天面板：定高（撑满剩余空间，内部滚动），有边框浮动卡片 -->
-      <div class="flex min-w-0 flex-1 flex-col p-4">
+      <!-- 聊天面板：定高（撑满剩余空间，内部滚动），有边框浮动卡片。
+           min-h-0 必须保留：软键盘弹出时 dvh 收缩，优先压缩消息区，输入区不挤出视口。 -->
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col p-2 md:p-4">
         <div class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-background">
         <!-- 消息滚动区：role=log + aria-live 便于读屏播报新消息 -->
         <div
@@ -233,7 +236,7 @@ watch(connecting, (v, prev) => {
         >
           <!-- 空房/无消息空态（bare：直接置于聊天滚动区，无卡片包裹） -->
           <EmptyState v-if="!hasCandidate && !connecting" bare :icon="UserRound" class="py-12">
-            房间空闲，从左侧「拉取候选人」开始面试
+            房间空闲，拉取候选人后开始面试
           </EmptyState>
           <EmptyState v-else-if="!messages.length && !connecting" bare :icon="MessageSquare" class="py-12">
             暂无消息，发送第一条面试记录吧
@@ -242,7 +245,7 @@ watch(connecting, (v, prev) => {
           <div
             v-for="m in messages"
             :key="m.id"
-            class="flex max-w-full flex-col gap-1"
+            class="flex min-w-0 max-w-full flex-col gap-1"
             :class="m.sender_id === currentUserId ? 'items-end' : 'items-start'"
           >
             <div class="flex items-baseline gap-2 px-1 text-xs text-muted-foreground">
@@ -255,16 +258,17 @@ watch(connecting, (v, prev) => {
           </div>
         </div>
 
-        <!-- 输入区 -->
+        <!-- 输入区：shrink-0 保证软键盘弹出时输入框与发送键始终可见；输入框 min-w-0 允许被压缩不留溢出 -->
         <div class="flex shrink-0 items-center gap-2 border-t p-3">
           <Input
             v-model="draft"
+            class="min-w-0"
             :disabled="!hasCandidate"
             :placeholder="hasCandidate ? '输入面试记录，Enter 发送…' : '等待候选人进房后可发送消息'"
             aria-label="消息内容"
             @keydown.enter.prevent="send"
           />
-          <Button size="icon" aria-label="发送消息" :disabled="!draft.trim() || !hasCandidate" @click="send">
+          <Button class="shrink-0" size="icon" aria-label="发送消息" :disabled="!draft.trim() || !hasCandidate" @click="send">
             <Send aria-hidden="true" />
           </Button>
         </div>

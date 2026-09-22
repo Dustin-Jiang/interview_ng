@@ -24,14 +24,14 @@ function labelOf(m: Message, currentUserId: number | null): string {
 </script>
 
 <template>
-  <div role="log" aria-label="面试记录" class="space-y-3">
+  <div role="log" aria-label="面试记录" class="w-full min-w-0 space-y-3">
     <div
       v-for="m in messages"
       :key="m.id"
-      class="flex max-w-full flex-col gap-1"
+      class="flex min-w-0 max-w-full flex-col gap-1"
       :class="m.sender_id === currentUserId ? 'items-end' : 'items-start'"
     >
-      <div class="flex items-baseline gap-2 px-1 text-xs text-muted-foreground">
+      <div class="flex min-w-0 flex-wrap items-baseline gap-2 px-1 text-xs text-muted-foreground">
         <span class="font-medium">{{ labelOf(m, currentUserId) }}</span>
         <time>{{ formatDateTime(m.created_at) }}</time>
       </div>
