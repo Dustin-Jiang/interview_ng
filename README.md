@@ -78,7 +78,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 - **service**：`InterviewService` 业务编排；强制「先落库后广播」顺序。
 - **state**：`StateStore` 接口 + `MemStateStore` 实现。状态唯一性权威、原子写、转移动图、内存快照读；内部经 Gorm 落库。
 - **broadcast**：`Manager` 订阅事件流，按房间扇出到该房间所有 WS 写队列；`BindGlobal` 注册的全局订阅者（看板通道）接收所有事件。
-- **model**：`User / Department / Candidate / Room / RoomMember / Message / SystemStatus / CandidateAdmission / Bid / OidcConfig / OidcRoleRule` + 状态枚举/转移动图。
+- **model**：`User / Department / Candidate / Room / RoomMember / Message / SystemStatus / CandidateAdmission / Bid / OidcConfig / OidcRoleRule / OidcDeptRule` + 状态枚举/转移动图。
 
 ---
 
@@ -99,7 +99,8 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 | `candidate_admissions` | candidate_id + department_id（联合唯一）, status(pending/admitted/withdrawn) | 各部门对候选人的录取决定（候选人无固定部门，按部门分别记） |
 | `bids` | candidate_id + department_id（联合唯一）, amount | 捡漏阶段部门出价（candidate+department 唯一；金额对其他部门保密、事件不带金额，持 `candidates.browse_all` 的管理端跨部门可见） |
 | `oidc_configs` | id=1(单行), enabled, issuer, client_id, client_secret, scopes, redirect_url, auto_provision | 单点登录（OIDC）配置（单行懒建，同 `system_status` 范式）；`client_secret` 明文存库但**读取接口只回 `client_secret_set` 布尔**，明文永不下发 |
-| `oidc_role_rules` | id, position, expression, role_id | 「组 → 角色」映射规则：对 ID token 声明求值 JMESPath 表达式，命中即赋予该角色；**自上而下、首个命中生效**（`position` 即界面行序，保存时整体替换） |
+| `oidc_role_rules` | id, position, expression, role_id | 「声明 → 角色」映射规则：对 ID token 声明求值 JMESPath 表达式，命中即赋予该角色；**自上而下、首个命中生效**（`position` 即界面行序，保存时整体替换） |
+| `oidc_dept_rules` | id, position, expression, department_id | 「声明 → 部门」映射规则：同上语义，命中即把账号的 `department_id` 设为该部门；**未命中不拒绝登录**，只是不改动账号现有部门（部门不是权限） |
 
 权限目录（12 枚）：`users.manage`、`candidates.manage`、`candidates.preferences`（修改候选人志愿与调剂）、`candidates.browse_all`（跨部门浏览录取状态与捡漏出价）、`candidates.create`、`candidates.checkin`、`candidates.assign`、`rooms.view`、`rooms.chat`、`rooms.move_phase`、`rooms.manage`、`admissions.record`（记录本部门录取决定/捡漏出价）。预置角色：`admin`（全部）、`interviewer`（8 枚流程权限：候选人创建/签到/拉取、志愿与调剂、房间浏览/聊天/推进阶段、本部门录取记录；不含资料与房间管理、跨部门浏览）。
 
@@ -154,14 +155,14 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 ### 单点登录（OIDC）
 
-- 配置入口：「登录认证」设置分区（`/settings/authentication`，需 `users.manage`）：开关、Issuer、Client ID / Secret、Scopes、回调地址、是否自动开通，以及「组 → 角色」的 **JMESPath 规则表**与规则验证（粘贴 ID token 声明试算）。
+- 配置入口：「登录认证」设置分区（`/settings/authentication`，需 `users.manage`）：开关、Issuer、Client ID / Secret、Scopes、回调地址、是否自动开通，以及「声明 → 角色」「声明 → 部门」两张 **JMESPath 规则表**（`OidcRuleTable`）与规则验证（`OidcClaimsPreview`，粘贴 ID token 声明同时试算两类规则的命中结果）。
 - 回调地址：界面**只填主机**（控制台与 `/api` 必须同源），路径固定为后端回调端点 `/api/oidc/sessions`；**注册到 IdP 的 redirect_uri 必须是该完整地址** `<主机>/api/oidc/sessions`。管理员只改主机的另一个原因：后端从回调地址的主机推导登录页来源（`spaOrigin`），换主机即换站点，路径却只能由本服务提供。
-- 规则写法：**表达式必须容忍声明缺失/类型不符**——对 `null` 取 `length()` 之类会**求值失败**，整条登录链就此中断（错误码 `oidc_rule_eval_failed`，服务端日志会打出第几条规则与表达式原文）。写法对比（同一份「ID token 无 `groups`」声明）：`length(groups[? ends_with(@, '-admin')]) > \`0\`` ❌ 求值失败；`type(groups) == 'array' && length(groups[? ends_with(@, '-admin')]) > \`0\`` ✅ 判为未命中；`groups[? ends_with(@, '-admin')] | [0]` ✅ 判为未命中。**声明本身要存在**：Keycloak 需给客户端加上 `groups` 作用域（Group Membership mapper，勾选 Add to ID token），否则 IdP 侧的组信息根本没进 ID token。
-- 流程：`GET /api/oidc/authorization` 发现文档 → 生成 `state` / `nonce` / PKCE（S256，始终启用）→ 302 到 IdP；IdP 回调 `GET /api/oidc/sessions?code=&state=` → 换 token 并用 go-oidc 校验签名/iss/aud/exp（**nonce 由本服务手工比对**，库不校验）→ 命中规则 → 建号/同步 → 签发同款 JWT → 302 回前端并携带**一次性登录码**（60 秒有效，token 不出现在 URL）；前端 `POST /api/oidc/sessions {code}` 换取会话。`state`（10 分钟有效）与登录码均为**单次使用**。
-- 身份与授权：身份键 = IdP 的 `sub`（`users.oidc_subject`，可空唯一）；显示名与角色**以 IdP 为权威**，每次登录覆盖。**未命中任何规则 → 拒绝登录**（`oidc_role_unmapped`，无默认角色；要兜底就加一条恒真规则 `@`）。首次登录按 `auto_provision` 自动建号（用户名取 `preferred_username` → 邮箱前缀 → `sub`，非法字符剔除并截断 64 字符；重名追加 `-<sub 前 6 位>`）。
+- 规则写法：**表达式必须容忍声明缺失/类型不符**——对 `null` 取 `length()` 之类会**求值失败**，整条登录链就此中断（错误码 `oidc_rule_eval_failed`，服务端日志会打出第几条**角色/部门**规则与表达式原文）。写法对比（同一份「ID token 无 `groups`」声明）：`length(groups[? ends_with(@, '-admin')]) > \`0\`` ❌ 求值失败；`type(groups) == 'array' && length(groups[? ends_with(@, '-admin')]) > \`0\`` ✅ 判为未命中；`groups[? ends_with(@, '-admin')] | [0]` ✅ 判为未命中。**声明本身要存在**：Keycloak 需给客户端加上 `groups` 作用域（Group Membership mapper，勾选 Add to ID token），否则 IdP 侧的组信息根本没进 ID token。
+- 流程：`GET /api/oidc/authorization` 发现文档 → 生成 `state` / `nonce` / PKCE（S256，始终启用）→ 302 到 IdP；IdP 回调 `GET /api/oidc/sessions?code=&state=` → 换 token 并用 go-oidc 校验签名/iss/aud/exp（**nonce 由本服务手工比对**，库不校验）→ 命中角色规则（未命中即拒绝）与部门规则（未命中不动现有部门）→ 建号/同步 → 签发同款 JWT → 302 回前端并携带**一次性登录码**（60 秒有效，token 不出现在 URL）；前端 `POST /api/oidc/sessions {code}` 换取会话。`state`（10 分钟有效）与登录码均为**单次使用**。
+- 身份与授权：身份键 = IdP 的 `sub`（`users.oidc_subject`，可空唯一）；显示名、角色与部门**以 IdP 为权威**，每次登录覆盖。**未命中任何角色规则 → 拒绝登录**（`oidc_role_unmapped`，无默认角色；要兜底就加一条恒真规则 `@`）；**未命中任何部门规则 → 只保持账号现有部门**（`users.department_id` 可被管理员手工设置，不能被空规则清掉）；两类规则**求值失败一律拒绝登录**（无法判定授权/归属就不放行）。首次登录按 `auto_provision` 自动建号（用户名取 `preferred_username` → 邮箱前缀 → `sub`，非法字符剔除并截断 64 字符；重名追加 `-<sub 前 6 位>`）。
 - 密钥：`client_secret` 明文存库，读取接口只回 `client_secret_set`；保存时省略该字段 = 保持原值，`""` = 清除，非空 = 覆盖。
 - 失败一律 302 回 `<前端源>/login?oidc_error=<码>`（`oidc_not_configured` / `oidc_discovery_failed` / `oidc_state_invalid` / `oidc_exchange_failed` / `oidc_nonce_invalid` / `oidc_claims_invalid` / `oidc_rule_eval_failed` / `oidc_role_unmapped` / `oidc_user_unknown` / `oidc_username_taken` / `oidc_login_failed`），登录页映射为中文提示；**换 token 与规则求值失败会在服务端记日志**（含底层原因，是唯一能看到细节的地方）。
-- 流程与一次性登录码是**单进程内存态**：后端重启后在途登录失效，用户重新点按钮即可。本地密码登录**保留**，登录页同时展示两种方式；同名密码账号不会被 OIDC 接管（避免冒名）。规则只映射**角色**，不映射部门；不使用 userinfo 端点（只用 ID token 声明）。
+- 流程与一次性登录码是**单进程内存态**：后端重启后在途登录失效，用户重新点按钮即可。本地密码登录**保留**，登录页同时展示两种方式；同名密码账号不会被 OIDC 接管（避免冒名）。规则映射**角色与部门**（不映射岗位等其他字段）；不使用 userinfo 端点（只用 ID token 声明）。
 
 ---
 
@@ -195,8 +196,8 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 - `GET  /api/oidc/authorization`（**公共**：302 跳到 IdP 授权端点；未配置完整 → 302 回登录页 `oidc_error=oidc_not_configured`）
 - `GET  /api/oidc/sessions?code=&state=`（**公共**：IdP 回调，成功后 302 回 `<前端源>/login?oidc_code=<一次性登录码>`，失败 302 `?oidc_error=<码>`）
 - `POST /api/oidc/sessions` `{code}`（**公共**：用一次性登录码换会话，响应与 `POST /api/sessions` 一致；失效 → 401）
-- `GET  /api/oidc/config`（`users.manage`：OIDC 配置 + 规则；`client_secret` 明文**不下发**，只回 `client_secret_set`）
-- `PUT  /api/oidc/config` `{enabled, issuer, client_id, client_secret?, scopes, redirect_url, auto_provision, rules:[{expression, role_id}]}`（`users.manage`：整体覆盖保存；`client_secret` 省略 = 保持、`""` = 清除、非空 = 覆盖；校验失败 → 400 `oidc_issuer_invalid` / `oidc_client_id_required` / `oidc_redirect_url_invalid` / `oidc_scopes_invalid` / `oidc_rule_invalid` / `oidc_rule_role_missing`）
+- `GET  /api/oidc/config`（`users.manage`：OIDC 配置 + 两类规则 `role_rules` / `department_rules`（元素为 `{id, position, expression, role_id}` / `{…, department_id}`）；`client_secret` 明文**不下发**，只回 `client_secret_set`）
+- `PUT  /api/oidc/config` `{enabled, issuer, client_id, client_secret?, scopes, redirect_url, auto_provision, role_rules:[{expression, role_id}], department_rules:[{expression, department_id}]}`（`users.manage`：整体覆盖保存，规则顺序即优先级；`client_secret` 省略 = 保持、`""` = 清除、非空 = 覆盖；校验失败 → 400 `oidc_issuer_invalid` / `oidc_client_id_required` / `oidc_redirect_url_invalid` / `oidc_scopes_invalid` / `oidc_rule_invalid` / `oidc_rule_role_missing` / `oidc_dept_rule_invalid` / `oidc_dept_rule_department_missing`）
 - `POST /api/oidc/probes` `{issuer}`（`users.manage`：拉取发现文档做连通性自检，返回 `issuer` / `authorization_endpoint` / `token_endpoint` / `jwks_uri`）
 - `PUT  /api/me/password` `{old_password, new_password}`（自助改密）
 - `GET  /api/candidates?status=&q=&limit=&offset=`
@@ -248,9 +249,9 @@ internal/state/manage_test.go       # 拉取并发、重置联动、级联删除
 internal/handler/handler_test.go    # 登录/me/401/403/权限矩阵 + WS(auth 消息→sync) 端到端
 internal/state/import_test.go       # 学号校验/唯一冲突/导入 upsert（含批内覆盖、全或无回滚、量级上限）/关键词检索
 internal/handler/import_test.go     # 导入端点端到端（行级报告、整批回滚、403、409）
-internal/oidcauth/mapping_test.go   # JMESPath 命中语义/首个命中、用户名派生、声明取值
-internal/state/oidc_test.go         # OIDC 配置懒建/密钥三段语义/规则校验/用户按 sub 查号与同步
-internal/handler/oidc_test.go       # OIDC 端到端（假 IdP + 真 RS256 ID token：PKCE+nonce、登录码换会话、state 一次性、未映射拒绝、探测）
+internal/oidcauth/mapping_test.go   # JMESPath 命中语义/首个命中（角色与部门）、求值失败归因、用户名派生、声明取值
+internal/state/oidc_test.go         # OIDC 配置懒建/密钥三段语义/两类规则校验与整体替换/按 sub 查号与显示名·角色·部门同步
+internal/handler/oidc_test.go       # OIDC 端到端（假 IdP + 真 RS256 ID token：PKCE+nonce、登录码换会话、state 一次性、未映射拒绝、部门写入与未命中保持、配置响应契约、探测）
 tests/
 └── concurrency/                    # 仅文档、尚未实现
 ```
