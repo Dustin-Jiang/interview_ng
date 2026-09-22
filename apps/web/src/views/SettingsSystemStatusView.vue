@@ -210,9 +210,10 @@ const previewColumns = computed(() =>
             cell: ({ row }) => {
               const list = bidsByCandidate.value.get(row.original.candidateId) ?? []
               if (!list.length) return h('span', { class: 'text-muted-foreground' }, '无出价')
+              // 徽章自身 nowrap：多个部门的出价必须允许换行，否则手机卡片里这一行会横向溢出。
               return h(
                 'div',
-                { class: 'flex items-center gap-1' },
+                { class: 'flex flex-wrap items-center gap-1' },
                 list.map((b, i) =>
                   h(
                     Badge,
@@ -233,7 +234,7 @@ const previewColumns = computed(() =>
         // 无出价 → 回退到决定矩阵推出的结论。
         const final = finalsByCandidate.value.get(row.original.candidateId)
         if (inAuctionPhase.value && final) {
-          return h('div', { class: 'flex items-center gap-1' }, [
+          return h('div', { class: 'flex flex-wrap items-center gap-1' }, [
             h(
               Badge,
               { variant: 'default' },
@@ -321,7 +322,9 @@ onMounted(() => void load())
               v-if="i < phaseSteps.length - 1"
               class="absolute left-[calc(50%+20px)] right-[calc(-50%+10px)] top-5 block h-0.5 shrink-0 rounded-full bg-muted group-data-[state=completed]:bg-primary"
             />
-            <StepperTrigger>
+            <!-- 触屏（≤lg）把可点区域抬到 44px：圆点本身 32px（视觉不变），
+                 用 min-* 而非改圆点尺寸，连接线仍对齐圆点中心（top-5）。 -->
+            <StepperTrigger class="max-lg:min-h-11 max-lg:min-w-11">
               <StepperIndicator>
                 <Check v-if="state === 'completed'" class="h-4 w-4" aria-hidden="true" />
                 <component
@@ -332,8 +335,10 @@ onMounted(() => void load())
                 />
               </StepperIndicator>
             </StepperTrigger>
+            <!-- 标题默认 nowrap（桌面四档各占 1/4，标签宽度富余）；手机上 4 个四字标签几乎顶满一张卡，
+                 允许换行后各档的最小内容宽降到一个字，任何窄屏都不会把卡片顶出横向滚动。 -->
             <StepperTitle
-              class="mt-2"
+              class="mt-2 max-md:whitespace-normal"
               :class="state === 'active' ? 'text-primary' : ''"
             >
               {{ PHASE_PRESENTATION[item.phase].label }}
@@ -344,14 +349,16 @@ onMounted(() => void load())
 
       <!-- 出价步长（users.manage）：上下键调整报价的步进 -->
       <Card class="p-5">
-        <div class="flex flex-wrap items-center justify-between gap-x-8 gap-y-3">
+        <!-- 手机上纵向堆叠：并排时固定宽的 NumberField 与按钮合计仍能挤进 360px，但输入框会被压到难按，
+             回落到纵向后两者各占满宽（触屏上输入框本身已抬到 h-11）。 -->
+        <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between md:gap-x-8">
           <h2 class="text-base font-semibold">出价步长</h2>
-          <div class="flex items-center gap-2">
+          <div class="flex flex-col gap-2 md:flex-row md:items-center">
             <NumberField
               :model-value="bidStepDraft"
               :step="1"
               :min="1"
-              class="w-28"
+              class="w-28 max-md:w-full"
               @update:model-value="bidStepDraft = $event"
             >
               <NumberFieldContent>
@@ -384,8 +391,10 @@ onMounted(() => void load())
           暂无候选人
         </EmptyState>
 
-        <!-- 表头与单元格一律不换行：列多时由 DataTable 自身的横向滚动容器承载（默认 w-full 会把内容压到折行） -->
-        <div v-else class="[&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
+        <!-- ≥md 表头与单元格不换行：列多时由 DataTable 自身的横向滚动容器承载（默认 w-full 会把内容压到折行）。
+             「窄于 md 的屏幕」交给 data-table 的卡片模式纵向罗列，这里必须放开 nowrap——`[&_td]`/`[&_th]` 的选择器带类型选择器，
+             特异性高于卡片模式的 `[&_*]:whitespace-normal`，不放开会把每张卡片顶宽、撑出整页横向滚动。 -->
+        <div v-else class="md:[&_td]:whitespace-nowrap md:[&_th]:whitespace-nowrap">
           <DataTable :columns="previewColumns" :data="previewRows" />
         </div>
       </div>

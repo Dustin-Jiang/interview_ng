@@ -199,10 +199,11 @@ const {
           <CardTitle class="text-base">单点登录（OIDC）</CardTitle>
         </CardHeader>
         <CardContent class="grid gap-4">
-          <div class="flex items-center gap-2">
-            <input id="oidc-enabled" v-model="form.enabled" type="checkbox" class="size-4 accent-primary" />
-            <Label for="oidc-enabled">启用统一身份认证</Label>
-          </div>
+          <!-- 触屏（≤lg）整行即命中区：把 label 拉满行高，而不是只靠复选框那一小块。 -->
+          <label class="flex max-lg:min-h-11 items-center gap-2">
+            <input v-model="form.enabled" type="checkbox" class="size-4 accent-primary max-lg:size-5" />
+            启用统一身份认证
+          </label>
 
           <div class="grid gap-2">
             <Label for="oidc-issuer">Issuer</Label>
@@ -232,28 +233,30 @@ const {
 
           <div class="grid gap-2">
             <Label for="oidc-callback-origin">回调地址</Label>
-            <!-- 主机可编辑，路径固定（后端回调端点，注册到 IdP 的 redirect_uri 即此完整地址） -->
-            <div class="flex">
+            <!-- 主机可编辑，路径固定（后端回调端点，注册到 IdP 的 redirect_uri 即此完整地址）。
+                 手机上窄屏放不下「输入框 + 路径后缀」这一行，故纵向堆叠：两段各自独立成框（输入框恢复四角圆角、
+                 后缀补回左边框并居中），后缀里的路径无空格，靠 nowrap 也不会撑宽（它已独占一行）。 -->
+            <div class="flex flex-col gap-2 md:flex-row md:gap-0">
               <Input
                 id="oidc-callback-origin"
                 v-model="form.callback_origin"
-                class="rounded-r-none"
+                class="rounded-r-none max-md:rounded-md"
                 placeholder="http://localhost:3000"
                 aria-describedby="oidc-callback-path"
               />
               <span
                 id="oidc-callback-path"
-                class="inline-flex shrink-0 items-center rounded-r-md border border-l-0 border-input bg-muted px-3 text-sm whitespace-nowrap text-muted-foreground"
+                class="inline-flex shrink-0 items-center rounded-r-md border border-l-0 border-input bg-muted px-3 text-sm whitespace-nowrap text-muted-foreground max-md:justify-center max-md:rounded-md max-md:border-l max-md:py-3"
               >
                 {{ OIDC_CALLBACK_PATH }}
               </span>
             </div>
           </div>
 
-          <div class="flex items-center gap-2">
-            <input id="oidc-auto-provision" v-model="form.auto_provision" type="checkbox" class="size-4 accent-primary" />
-            <Label for="oidc-auto-provision">首次登录自动开通账号</Label>
-          </div>
+          <label class="flex max-lg:min-h-11 items-center gap-2">
+            <input v-model="form.auto_provision" type="checkbox" class="size-4 accent-primary max-lg:size-5" />
+            首次登录自动开通账号
+          </label>
 
           <div class="flex flex-wrap items-center gap-2">
             <Button :disabled="saving" @click="submit">
@@ -272,19 +275,19 @@ const {
           <dl v-if="probeResult" class="grid gap-1 text-sm">
             <div class="flex gap-2">
               <dt class="shrink-0 text-muted-foreground">Issuer</dt>
-              <dd class="break-all">{{ probeResult.issuer }}</dd>
+              <dd class="min-w-0 break-all">{{ probeResult.issuer }}</dd>
             </div>
             <div class="flex gap-2">
               <dt class="shrink-0 text-muted-foreground">授权端点</dt>
-              <dd class="break-all">{{ probeResult.authorization_endpoint }}</dd>
+              <dd class="min-w-0 break-all">{{ probeResult.authorization_endpoint }}</dd>
             </div>
             <div class="flex gap-2">
               <dt class="shrink-0 text-muted-foreground">令牌端点</dt>
-              <dd class="break-all">{{ probeResult.token_endpoint }}</dd>
+              <dd class="min-w-0 break-all">{{ probeResult.token_endpoint }}</dd>
             </div>
             <div class="flex gap-2">
               <dt class="shrink-0 text-muted-foreground">JWKS</dt>
-              <dd class="break-all">{{ probeResult.jwks_uri }}</dd>
+              <dd class="min-w-0 break-all">{{ probeResult.jwks_uri }}</dd>
             </div>
           </dl>
         </CardContent>

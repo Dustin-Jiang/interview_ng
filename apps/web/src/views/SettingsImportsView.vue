@@ -50,8 +50,10 @@ function stepDotClass(target: number): string {
 
 <template>
   <PageShell title="数据导入">
-    <!-- 步骤指示：只读进度（不提供可点击的跳步入口），回退一律走页内按钮。 -->
-    <ol class="flex items-center gap-3" aria-label="导入步骤">
+    <!-- 步骤指示：只读进度（不提供可点击的跳步入口），回退一律走页内按钮。
+         手机上（窄于 md）三档竖排：横排时「圆点 + 三个中文标题 + 连接线」在 360px 下会被 nowrap 标题顶出横向滚动；
+         竖排后连接线无意义（隐藏），保留编号圆点与当前档高亮即可表达进度。 -->
+    <ol class="flex flex-col gap-2 md:flex-row md:items-center md:gap-3" aria-label="导入步骤">
       <li
         v-for="item in STEPS"
         :key="item.step"
@@ -63,10 +65,17 @@ function stepDotClass(target: number): string {
         >
           {{ item.step }}
         </span>
-        <span :class="cn('whitespace-nowrap text-sm font-semibold', item.step === step ? '' : 'text-muted-foreground')">
+        <span
+          :class="
+            cn(
+              'min-w-0 text-sm font-semibold break-all md:whitespace-nowrap',
+              item.step === step ? '' : 'text-muted-foreground',
+            )
+          "
+        >
           {{ item.title }}
         </span>
-        <span v-if="item.step < STEPS.length" class="h-px flex-1 bg-border" />
+        <span v-if="item.step < STEPS.length" class="hidden h-px flex-1 bg-border md:block" />
       </li>
     </ol>
 
@@ -90,7 +99,8 @@ function stepDotClass(target: number): string {
         @expression="setExpression"
         @retry-existing="reloadExisting"
       />
-      <div class="flex items-center gap-2">
+      <!-- 手机上按钮已被抬到 h-11，允许换行：文案更长或字号更大时不会把整行顶出容器。 -->
+      <div class="flex flex-wrap items-center gap-2">
         <Button variant="outline" size="sm" @click="goStep(1)">上一步</Button>
         <Button size="sm" :disabled="!canSubmit" @click="goStep(3)">下一步</Button>
       </div>

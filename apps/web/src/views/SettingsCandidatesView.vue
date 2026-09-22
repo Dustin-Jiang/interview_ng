@@ -246,7 +246,8 @@ function renderActions(c: Candidate) {
       h(Button, { size: 'sm', class: 'text-sm', variant: 'destructive', onClick: () => requestDelete(c) }, () => '删除'),
     )
   }
-  return h('div', { class: 'flex gap-2 whitespace-nowrap' }, buttons)
+  // 手机上卡片宽仅 ~300px（5 个按钮一行放不下），故 <md 允许换行；≥md 表格里保持一行。
+  return h('div', { class: 'flex gap-2 whitespace-nowrap max-md:flex-wrap' }, buttons)
 }
 
 onMounted(() => {
@@ -285,7 +286,7 @@ onMounted(() => {
           <CandidateStatusSelect
             :model-value="statusFilter"
             allow-all
-            trigger-class="w-[180px]"
+            trigger-class="w-full sm:w-[180px]"
             @update:model-value="setStatusFilter"
           />
         </div>

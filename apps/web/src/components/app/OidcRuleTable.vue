@@ -137,11 +137,14 @@ const colActions = helper.display({
   enableHiding: false,
   cell: ({ row }) =>
     h('div', { class: 'flex gap-2 whitespace-nowrap' }, [
+      // 上移/下移是纯图标按钮：触屏（≤lg）固定 44×44 并去掉左右内边距（图标正好居中），
+      // 桌面仍走 size=sm 的紧凑尺寸；卡片模式下这两个按钮铺在卡片底部，两枚 44px 也放得下。
       h(
         Button,
         {
           size: 'sm',
           variant: 'ghost',
+          class: 'max-lg:h-11 max-lg:w-11 max-lg:px-0',
           disabled: row.index === 0,
           'aria-label': '上移',
           onClick: () => move(row.original, -1),
@@ -153,6 +156,7 @@ const colActions = helper.display({
         {
           size: 'sm',
           variant: 'ghost',
+          class: 'max-lg:h-11 max-lg:w-11 max-lg:px-0',
           disabled: row.index === props.rules.length - 1,
           'aria-label': '下移',
           onClick: () => move(row.original, 1),

@@ -86,14 +86,15 @@ function resultClass(outcome: { kind: 'error' | 'hit' | 'none' }): string {
     />
   </div>
 
+  <!-- 触屏窄屏：结论里的表达式片段（无空格的拉丁串）靠 min-w-0 + break-all 折行，不撑宽卡片。 -->
   <dl class="grid gap-1 text-sm">
     <div class="flex gap-2">
       <dt class="shrink-0 text-muted-foreground">角色</dt>
-      <dd :class="resultClass(roleOutcome)">{{ roleOutcome.message }}</dd>
+      <dd class="min-w-0" :class="resultClass(roleOutcome)">{{ roleOutcome.message }}</dd>
     </div>
     <div class="flex gap-2">
       <dt class="shrink-0 text-muted-foreground">部门</dt>
-      <dd :class="resultClass(departmentOutcome)">{{ departmentOutcome.message }}</dd>
+      <dd class="min-w-0" :class="resultClass(departmentOutcome)">{{ departmentOutcome.message }}</dd>
     </div>
   </dl>
 </template>

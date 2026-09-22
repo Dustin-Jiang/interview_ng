@@ -255,11 +255,12 @@ function renderUserActions(u: User) {
       </div>
       <div class="grid gap-2">
         <Label>角色</Label>
-        <div v-if="roles.length" class="grid grid-cols-2 gap-2">
+        <!-- 手机上两列会把中文角色名挤成多行，故 <sm 单列；每行整块可点且高度 ≥44px。 -->
+        <div v-if="roles.length" class="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <label
             v-for="r in roles"
             :key="r.id"
-            class="flex cursor-pointer items-center gap-2 rounded-md border p-2 text-sm transition-colors hover:bg-accent/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+            class="flex cursor-pointer items-center gap-2 rounded-md border p-2 text-sm transition-colors hover:bg-accent/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring max-lg:min-h-11"
           >
             <input
               type="checkbox"

@@ -153,7 +153,8 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
       const value = String(getValue() ?? '')
       if (!value) return h('span', { class: 'text-muted-foreground' }, '-')
       // 最多 3 行 + 省略号，溢出时点击用 Popover 看全文。
-      return h(ClampText, { text: value, lines: 3, class: 'min-w-56 text-muted-foreground' })
+      // min-w-56 只在 ≥md 生效：手机卡片模式里它是绝对下限，会把卡片撑宽（横向滚动随之出现）。
+      return h(ClampText, { text: value, lines: 3, class: 'text-muted-foreground md:min-w-56' })
     },
   }),
   columnHelper.accessor('updatedAt', {
@@ -165,8 +166,9 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
     id: 'status',
     header: '校验状态',
     enableHiding: false,
+    // 不再对整格强制 nowrap（徽章自身已 nowrap）：手机上卡片模式里，nowrap 的错误原因会横向溢出卡片。
     cell: ({ row }) =>
-      h('div', { class: 'space-y-1 whitespace-nowrap' }, [
+      h('div', { class: 'space-y-1 break-words' }, [
         h(
           Badge,
           {
@@ -198,13 +200,14 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
     empty-text="尚无映射结果"
   >
     <template #toolbar>
-      <!-- 标签即筛选：点击只看该类行，再点一次回到「总」（aria-pressed 表达选中态）。 -->
+      <!-- 标签即筛选：点击只看该类行，再点一次回到「总」（aria-pressed 表达选中态）。
+           触屏（≤lg）把每个标签的点击区抬到 44px；容器已换行，窄屏下标签逐行排布不横向溢出。 -->
       <div class="flex flex-wrap items-center gap-2">
         <button
           v-for="option in filterOptions"
           :key="option.key"
           type="button"
-          class="rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          class="rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-lg:inline-flex max-lg:min-h-11 max-lg:items-center"
           :aria-pressed="filter === option.key"
           @click="toggleFilter(option.key)"
         >

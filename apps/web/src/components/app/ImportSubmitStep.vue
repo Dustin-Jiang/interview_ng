@@ -144,8 +144,10 @@ const problemColumns: ColumnDef<DataTableFeatures, ProblemRow>[] = problemColumn
   problemColumnHelper.accessor('reason', {
     header: '原因',
     enableSorting: false,
+    // min-w-56 只在 ≥md 生效：手机卡片模式里它作为绝对下限会把卡片顶宽（td 已由卡片模式统一放开 nowrap，
+    // 这里只留换行相关的类，长原因文本自然折行）。
     cell: ({ getValue }) =>
-      h('div', { class: 'min-w-56 whitespace-pre-line break-words text-destructive' }, String(getValue())),
+      h('div', { class: 'whitespace-pre-line break-words text-destructive md:min-w-56' }, String(getValue())),
   }),
 ])
 </script>
@@ -163,7 +165,8 @@ const problemColumns: ColumnDef<DataTableFeatures, ProblemRow>[] = problemColumn
           <Badge variant="outline">更新 {{ stats.update }}</Badge>
           <Badge v-if="stats.skip" variant="outline">跳过 {{ stats.skip }}</Badge>
         </div>
-        <div class="flex items-center gap-2">
+        <!-- 触屏上按钮已抬到 44px：允许换行，避免「返回修改 + 导入 N 行」在窄屏被挤出容器。 -->
+        <div class="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" @click="emit('back')">返回修改</Button>
           <Button size="sm" :disabled="props.submitting" @click="emit('submit')">
             <Spinner v-if="props.submitting" aria-hidden="true" />

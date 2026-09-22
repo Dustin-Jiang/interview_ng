@@ -113,8 +113,9 @@ const roleColumns: ColumnDef<DataTableFeatures, Role>[] = roleColumnHelper.colum
       const has = groups['管理'].length || groups['流程'].length
       if (!has) return h('span', { class: 'text-muted-foreground' }, '-')
       return h(
+        // 手机上卡片宽度有限，放开 420px 上限（否则窄卡片里 Badge 被挤）；≥md 表格里保持原限宽。
         'div',
-        { class: 'flex max-w-[420px] flex-col gap-1.5' },
+        { class: 'flex max-w-none flex-col gap-1.5 md:max-w-[420px]' },
         (['管理', '流程'] as const).map((g) =>
           groups[g].length
             ? h(
@@ -198,7 +199,7 @@ const roleColumns: ColumnDef<DataTableFeatures, Role>[] = roleColumnHelper.colum
                 <label
                   v-for="p in permGroups[g]"
                   :key="p"
-                  class="flex cursor-pointer items-center gap-2 rounded-sm text-sm transition-colors hover:bg-accent/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+                  class="flex cursor-pointer items-center gap-2 rounded-sm text-sm transition-colors hover:bg-accent/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring max-lg:min-h-11"
                 >
                   <input
                     type="checkbox"
@@ -206,7 +207,7 @@ const roleColumns: ColumnDef<DataTableFeatures, Role>[] = roleColumnHelper.colum
                     :checked="roleForm.permissions.includes(p)"
                     @change="toggleRolePerm(p)"
                   />
-                  <code class="font-mono text-xs">{{ p }}</code>
+                  <code class="min-w-0 break-all font-mono text-xs">{{ p }}</code>
                 </label>
               </div>
             </div>

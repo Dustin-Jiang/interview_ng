@@ -69,16 +69,19 @@ async function copyColumn(header: string): Promise<void> {
 
         <div class="space-y-2">
           <Label>可引用的列</Label>
+          <!-- 列名清单：容器可换行；chip 在触屏（≤lg）抬高到 44px 且内边距放宽，
+               长列名（尤其无空格的拉丁列名）在 chip 内断行，不把卡片顶宽。 -->
           <div class="flex flex-wrap gap-1.5">
             <button
               v-for="header in props.sheet.headers"
               :key="header"
               type="button"
-              class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-xs transition-colors hover:bg-accent"
+              class="inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-xs transition-colors hover:bg-accent max-lg:min-h-11 max-lg:px-3"
               :aria-label="`复制列名 ${header}`"
               @click="copyColumn(header)"
             >
-              <Copy class="h-3 w-3 text-muted-foreground" aria-hidden="true" />"{{ header }}"
+              <Copy class="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span class="break-all text-left">"{{ header }}"</span>
             </button>
           </div>
         </div>

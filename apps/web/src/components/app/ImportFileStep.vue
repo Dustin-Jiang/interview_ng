@@ -37,10 +37,11 @@ const emit = defineEmits<{ pick: [file: File]; clear: []; next: [] }>()
 
       <ErrorAlert v-if="props.error" :message="props.error" />
 
+      <!-- 工作簿摘要 + 操作：窄屏下摘要行允许换行，长表名（无空格）在行内断行，不能把按钮挤出容器。 -->
       <div v-if="props.sheet" class="flex flex-wrap items-center justify-between gap-3">
-        <p class="flex items-center gap-2 text-sm">
+        <p class="flex min-w-0 flex-wrap items-center gap-2 text-sm">
           <FileSpreadsheet class="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-          <span class="font-medium">{{ props.sheet.sheetName }}</span>
+          <span class="min-w-0 break-all font-medium">{{ props.sheet.sheetName }}</span>
           <span class="font-mono text-xs text-muted-foreground">
             {{ props.sheet.headers.length }} 列 × {{ props.sheet.rows.length }} 行
           </span>

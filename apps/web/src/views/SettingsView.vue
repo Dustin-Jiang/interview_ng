@@ -1,7 +1,7 @@
 <!--
-  SettingsView —— 设置页外壳：左右分栏。
-  左侧：分区导航（候选人管理 / 数据导入 / 面试官 / 角色 / 部门 / 系统状态，按权限显隐）；
-  右侧：嵌套路由渲染当前分区内容。
+  SettingsView —— 设置页外壳：桌面左右分栏，手机顶部标签条。
+  ≥md：左侧分区导航（候选人管理 / 数据导入 / 面试官 / 角色 / 部门 / 系统状态，按权限显隐）+ 右侧嵌套路由；
+  <md：固定 208px 左栏会把主区挤到 ~120px，故改为顶部横向滑动的分区标签条，主区占满整宽。
   无任一管理权限时重定向回首页；直接访问无权分区时跳到首个可见分区。
 -->
 <script setup lang="ts">
@@ -58,11 +58,27 @@ watch(
 </script>
 
 <template>
-  <!-- 整体限制最大宽度并居中（max-w-content 语义档位） -->
-  <div class="mx-auto flex h-full w-full max-w-content overflow-hidden">
-    <!-- 左侧：分区导航 -->
+  <!-- 整体限制最大宽度并居中（max-w-content 语义档位）；手机上分区导航置顶、内容占满整宽 -->
+  <div class="mx-auto flex h-full w-full max-w-content flex-col overflow-hidden md:flex-row">
+    <!-- <md：顶部分区标签条（横向滑动，7 个分区滑得到最后一个；行高由 navItemVariants 抬到 44px） -->
+    <nav
+      class="flex shrink-0 items-center gap-1 overflow-x-auto border-b p-2 md:hidden"
+      aria-label="设置分区导航"
+    >
+      <RouterLink
+        v-for="s in sections"
+        :key="s.name"
+        :to="{ name: s.name }"
+        :class="cn(navItemVariants({ active: route.name === s.name }), 'w-auto shrink-0 whitespace-nowrap')"
+      >
+        <component :is="s.icon" class="h-4 w-4 shrink-0" aria-hidden="true" />
+        {{ s.label }}
+      </RouterLink>
+    </nav>
+
+    <!-- ≥md：左侧固定宽度分区导航（手机上隐藏，改由上方标签条承载） -->
     <aside
-      class="flex w-52 shrink-0 flex-col"
+      class="hidden w-52 shrink-0 flex-col md:flex"
       aria-label="设置分区导航"
     >
       <nav class="flex flex-col gap-1 p-3">
