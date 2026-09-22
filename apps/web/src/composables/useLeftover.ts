@@ -7,11 +7,12 @@
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { toast } from 'vue-sonner'
 
-import { leftoverApi, systemStatusApi } from '@/api/http'
+import { leftoverApi } from '@/api/http'
 import { useAsync } from '@/composables/useAsync'
 import { useAuth } from '@/composables/useAuth'
 import { useBoardRefresh } from '@/composables/useBoardChannel'
 import { useCandidatePool } from '@/composables/useCandidatePool'
+import { useSystemStatus } from '@/composables/useSystemStatus'
 import {
   PERMISSIONS,
   type Bid,
@@ -27,6 +28,20 @@ const LEFTOVER_POOL_STAGES: Record<string, true> = {
   ADMISSION_PENDING: true,
   ADMITTED: true,
   COMPLETED: true,
+}
+
+/** 出价文本归一：只保留数字（允许空串——正在输入中）。 */
+function toDigits(text: string): string {
+  return text.replace(/\D+/g, '')
+}
+
+/** 把草稿文本解析为整数金额；空串/非法返回 null。 */
+function parseAmount(raw?: string | null): number | null {
+  if (raw == null) return null
+  const text = raw.trim()
+  if (!text) return null
+  const n = Number(text)
+  return Number.isInteger(n) && n >= 0 ? n : null
 }
 
 export interface UseLeftover {
@@ -54,11 +69,16 @@ export interface UseLeftover {
   readonly isLeftoverPhase: ComputedRef<boolean>
   readonly canBrowseAll: ComputedRef<boolean>
   readonly canBid: ComputedRef<boolean>
-  /** 出价步长（系统状态，默认 10）。 */
-  readonly bidStep: Ref<number>
-  /** 出价草稿（candidate_id → 金额）。 */
-  readonly drafts: Ref<Record<number, number | null>>
+  /** 出价步长（来自 useSystemStatus 共享状态，≥1，缺省 10）。 */
+  readonly bidStep: ComputedRef<number>
+  /** 出价草稿**文本**（candidate_id → 输入框文本；未出价预填 '0'，已出价回填金额）。
+   *  草稿即输入框文本：每次输入即时同步，因此保存/步进读到的永远是屏幕上的数字。 */
+  readonly drafts: Ref<Record<number, string>>
   readonly savingId: Ref<number | null>
+  /** 写入草稿文本（只保留数字，允许空串）。 */
+  setDraft: (candidate: Candidate, text: string) => void
+  /** 按步长调整草稿（夹紧到 ≥ 0）。 */
+  stepDraft: (candidate: Candidate, dir: 1 | -1) => void
   saveBid: (candidate: Candidate) => Promise<void>
 }
 
@@ -117,28 +137,26 @@ export function useLeftover(): UseLeftover {
     return deptNameById.value.get(departmentId) ?? `部门#${departmentId}`
   }
 
-  /** 整页重拉：出价/结算事件与手动刷新共用同一组加载。 */
+  /** 整页重拉：出价/结算事件与手动刷新共用同一组加载（含系统状态，阶段可能刚被管理员切换）。 */
   async function reloadAll(): Promise<void> {
-    await Promise.all([overviewAsync.run(), bidsAsync.run(), resultsAsync.run(), pool.load()])
+    await Promise.all([
+      loadSystemStatus(),
+      overviewAsync.run(),
+      bidsAsync.run(),
+      resultsAsync.run(),
+      pool.load(),
+    ])
+  }
+
+  /** 出价影响的资源：本部门出价 + 预算总览（阶段/结算结果/候选人池与出价无关，不重拉）。 */
+  async function refreshBids(): Promise<void> {
+    await Promise.all([bidsAsync.run(), overviewAsync.run()])
   }
 
   useBoardRefresh(['leftover_bid', 'leftover_resolved'], () => void reloadAll())
 
-  // ---- 出价步长：来自系统状态（管理面板可设，默认 10） ----
-  const bidStep = ref(10)
-  watch(overview, async (ov) => {
-    if (ov && bidStep.value === 10) {
-      try {
-        const st = await systemStatusApi.get()
-        bidStep.value = st.bid_step > 0 ? st.bid_step : 10
-      } catch {
-        /* 保底默认 10 */
-      }
-    }
-  })
-
-  // ---- 阶段与权限 ----
-  const phase = computed(() => overview.value?.phase)
+  // ---- 阶段与出价步长：统一取自 useSystemStatus（单例数据源，勿在此另拉一份） ----
+  const { phase, bidStep, load: loadSystemStatus } = useSystemStatus()
   const phaseLabel = computed(() => (phase.value ? PHASE_PRESENTATION[phase.value].label : '-'))
   const isLeftoverPhase = computed(() => phase.value === 'leftover')
   /** 可出价：持 admissions.record + 已分配部门 + 处于捡漏阶段（与后端前置校验一致）。 */
@@ -146,33 +164,46 @@ export function useLeftover(): UseLeftover {
     () => hasPermission(PERMISSIONS.ADMISSIONS_RECORD) && !!overview.value?.my && isLeftoverPhase.value,
   )
 
-  // ---- 行内出价编辑：草稿按候选人 id 存数值（NumberField 绑定），出价列表每次重拉后整体重置 ----
-  const drafts = ref<Record<number, number | null>>({})
+  // ---- 行内出价编辑：草稿存**输入框文本**，出价列表每次重拉后整体重置 ----
+  // 未出价预填 '0'（0 是合法出价）；已出价回填实际金额。
+  const drafts = ref<Record<number, string>>({})
   const savingId = ref<number | null>(null)
 
   watch(
-    bidsByCandidate,
-    (map) => {
-      const next: Record<number, number | null> = {}
-      for (const [candidateId, bid] of map) next[candidateId] = bid.amount
+    [bidsByCandidate, candidates],
+    ([map, list]) => {
+      const next: Record<number, string> = {}
+      for (const c of list) next[c.id] = '0'
+      for (const [candidateId, bid] of map) next[candidateId] = String(bid.amount)
       drafts.value = next
     },
     { immediate: true },
   )
 
+  /** 写入草稿文本（只留数字；空串表示正在输入）。 */
+  function setDraft(candidate: Candidate, text: string): void {
+    drafts.value[candidate.id] = toDigits(text)
+  }
+
+  /** 按步长调整草稿（夹紧到 ≥ 0）；空/非法文本以 0 为起点。 */
+  function stepDraft(candidate: Candidate, dir: 1 | -1): void {
+    const current = parseAmount(drafts.value[candidate.id]) ?? 0
+    drafts.value[candidate.id] = String(Math.max(0, current + dir * bidStep.value))
+  }
+
+  /** 保存出价：草稿即输入框文本，直接解析落库（空/非法 → 提示）。 */
   async function saveBid(candidate: Candidate): Promise<void> {
     if (savingId.value !== null) return
-    const amount = drafts.value[candidate.id]
-    if (amount == null || !Number.isInteger(amount) || amount <= 0) {
-      toast.error('出价必须为正整数')
+    const amount = parseAmount(drafts.value[candidate.id])
+    if (amount == null) {
+      toast.error('出价必须为不小于 0 的整数')
       return
     }
     savingId.value = candidate.id
     try {
       await leftoverApi.setBid(candidate.id, amount)
       toast.success(`「${candidate.name}」出价已保存`)
-      // 出价影响本部门 spent/remaining，总览一并重拉。
-      await Promise.all([bidsAsync.run(), overviewAsync.run()])
+      await refreshBids()
     } catch (e) {
       toastError(e)
     } finally {
@@ -200,6 +231,8 @@ export function useLeftover(): UseLeftover {
     bidStep,
     drafts,
     savingId,
+    setDraft,
+    stepDraft,
     saveBid,
   }
 }

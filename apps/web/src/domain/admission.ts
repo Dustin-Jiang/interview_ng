@@ -29,8 +29,8 @@ export interface AdmissionRecord {
 
 /**
  * 由某候选人的各部门决定推导汇总结论。
- * statuses 与 departmentNames 按相同部门顺序一一对应（未记录的决定由调用方补为 pending）。
- * 唯一录取 + 其余全部放弃才落定为「录取到该部门」；多家录取视为冲突；存在待定则结论未定。
+ * statuses 与 departmentNames 按相同部门顺序一一对应（**未记录的决定由调用方补为弃权**）。
+ * 唯一录取 + 其余全部放弃才落定为「录取到该部门」；多家录取视为冲突；显式「待定」则结论未定。
  */
 export function admissionOutcomeOf(
   statuses: readonly AdmissionStatus[],
@@ -57,7 +57,8 @@ export function admissionOutcomeOf(
 
 /**
  * 构建录取预览行（保持候选人与部门的给定顺序）。
- * admissions 中缺失的 (候选人, 部门) 组合视为待定。
+ * admissions 中缺失的 (候选人, 部门) 组合 = 该部门未表态 → **弃权**：不表态不影响录取判定；
+ * 只有显式记录的「待定」才表示结论未定。
  */
 export function buildAdmissionPreview(
   candidates: readonly { id: number; name: string }[],
@@ -70,7 +71,7 @@ export function buildAdmissionPreview(
   }
   const departmentNames = departments.map((d) => d.name)
   return candidates.map((c) => {
-    const statuses = departments.map((d) => byKey.get(`${c.id}:${d.id}`) ?? 'pending')
+    const statuses = departments.map((d) => byKey.get(`${c.id}:${d.id}`) ?? 'withdrawn')
     return {
       candidateId: c.id,
       candidateName: c.name,

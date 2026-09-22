@@ -2,7 +2,9 @@
   SettingsSystemStatusView —— 系统状态设置：在「面试阶段 / 录取阶段 / 捡漏阶段 / 结算阶段」之间切换。
   阶段呈 Stepper 进度条：已越过的档带勾选、当前档高亮、后续档待激活，点击任意档即切换。
   录取/捡漏阶段时下方展示录取情况预览：全体候选人 × 各部门决定的矩阵与汇总结论
-  （唯一部门录取且其余全部放弃 → 「录取到该部门」）。跨部门数据需 candidates.browse_all。
+  （未表态部门按弃权计入 → 「录取到该部门」）。跨部门数据需 candidates.browse_all。
+  **捡漏/结算阶段**另加两列：竞拍情况（各部门当前出价）与预览录取结果（当前最高出价部门 +
+  是否已结算，取自 GET /api/leftover/projections）；无出价的候选人回退到决定矩阵的结论。
 -->
 <script setup lang="ts">
 import { computed, h, onMounted, ref, watch } from 'vue'
@@ -10,12 +12,19 @@ import { toast } from 'vue-sonner'
 import { Check, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper } from '@tanstack/vue-table'
 
-import { admissionApi, candidateApi, departmentApi, systemStatusApi } from '@/api/http'
+import { admissionApi, candidateApi, departmentApi, leftoverApi, systemStatusApi } from '@/api/http'
 import { useBoardChannel } from '@/composables/useBoardChannel'
 import { useSystemStatus } from '@/composables/useSystemStatus'
 import { buildAdmissionPreview, type AdmissionPreviewRow } from '@/domain/admission'
 import { ADMISSION_PRESENTATION, PHASE_PRESENTATION, admissionOutcomePresentation } from '@/presenters/status'
-import type { SystemPhase, Candidate, CandidateAdmission, Department } from '@/models'
+import type {
+  SystemPhase,
+  Bid,
+  Candidate,
+  CandidateAdmission,
+  Department,
+  LeftoverFinalResult,
+} from '@/models'
 import { PERMISSIONS, SYSTEM_PHASES } from '@/models'
 import { useAuth } from '@/composables/useAuth'
 import { toastError } from '@/lib/toast'
@@ -127,6 +136,9 @@ async function saveBidStep() {
 const previewCandidates = ref<Candidate[]>([])
 const previewDepartments = ref<Department[]>([])
 const previewAdmissions = ref<CandidateAdmission[]>([])
+/** 竞拍数据（捡漏/结算阶段展示）：各部门出价 + 结算预览。 */
+const previewBids = ref<Bid[]>([])
+const previewFinals = ref<LeftoverFinalResult[]>([])
 const previewLoading = ref(false)
 const previewError = ref('')
 
@@ -142,6 +154,34 @@ const previewRows = computed<AdmissionPreviewRow[]>(() =>
   buildAdmissionPreview(previewCandidates.value, previewDepartments.value, previewAdmissions.value),
 )
 
+// ---- 竞拍阶段派生：出价索引 / 结算预览索引 / 部门名 ----
+/** 捡漏/结算阶段：表格额外展示「竞拍情况」与「预览录取结果」。 */
+const inAuctionPhase = computed(
+  () => status.value?.phase === 'leftover' || status.value?.phase === 'settlement',
+)
+
+/** 候选人 → 各部门出价（金额降序，管理端可见全部门）。 */
+const bidsByCandidate = computed(() => {
+  const map = new Map<number, Bid[]>()
+  for (const b of previewBids.value) {
+    const list = map.get(b.candidate_id) ?? []
+    list.push(b)
+    map.set(b.candidate_id, list)
+  }
+  for (const list of map.values()) list.sort((x, y) => y.amount - x.amount)
+  return map
+})
+
+/** 候选人 → 结算预览（当前最高出价部门；resolved 表示已正式落库）。 */
+const finalsByCandidate = computed(
+  () => new Map(previewFinals.value.map((f) => [f.candidate_id, f])),
+)
+
+/** 部门 id → 名称（出价与预览列展示用）。 */
+function deptLabelOf(departmentId: number): string {
+  return previewDepartments.value.find((d) => d.id === departmentId)?.name ?? `部门#${departmentId}`
+}
+
 // ---- DataTable 列定义：候选人 + 各部门决定（动态列）+ 汇总结论 ----
 const previewColumnHelper = createColumnHelper<DataTableFeatures, AdmissionPreviewRow>()
 
@@ -151,6 +191,29 @@ const previewColumns = computed(() =>
       header: '候选人',
       cell: ({ getValue }) => h('div', { class: 'font-medium' }, getValue()),
     }),
+    ...(inAuctionPhase.value
+      ? [
+          previewColumnHelper.display({
+            id: 'bids',
+            header: '竞拍情况',
+            cell: ({ row }) => {
+              const list = bidsByCandidate.value.get(row.original.candidateId) ?? []
+              if (!list.length) return h('span', { class: 'text-muted-foreground' }, '无出价')
+              return h(
+                'div',
+                { class: 'flex flex-wrap items-center gap-1' },
+                list.map((b, i) =>
+                  h(
+                    Badge,
+                    { key: b.id, variant: i === 0 ? 'default' : 'secondary' },
+                    () => `${deptLabelOf(b.department_id)} · ${b.amount}`,
+                  ),
+                ),
+              )
+            },
+          }),
+        ]
+      : []),
     ...previewDepartments.value.map((d, i) =>
       previewColumnHelper.display({
         id: `dept-${d.id}`,
@@ -163,8 +226,21 @@ const previewColumns = computed(() =>
     ),
     previewColumnHelper.display({
       id: 'outcome',
-      header: '录取情况',
+      header: inAuctionPhase.value ? '预览录取结果' : '录取情况',
       cell: ({ row }) => {
+        // 竞拍阶段：有出价 → 展示当前最高出价部门的预览结果（并标注是否已结算）；
+        // 无出价 → 回退到决定矩阵推出的结论。
+        const final = finalsByCandidate.value.get(row.original.candidateId)
+        if (inAuctionPhase.value && final) {
+          return h('div', { class: 'flex flex-wrap items-center gap-1' }, [
+            h(
+              Badge,
+              { variant: 'default' },
+              () => `录取到 ${deptLabelOf(final.department_id)} · ${final.amount}`,
+            ),
+            ...(final.resolved ? [h(Badge, { variant: 'outline' }, () => '已结算')] : []),
+          ])
+        }
         const p = admissionOutcomePresentation(row.original.outcome)
         return h(Badge, { variant: p.badge }, () => p.label)
       },
@@ -177,14 +253,18 @@ async function loadPreview() {
   previewLoading.value = true
   previewError.value = ''
   try {
-    const [cand, dept, adm] = await Promise.all([
-      candidateApi.list({ limit: 200 }),
+    const [cand, dept, adm, bids, finals] = await Promise.all([
+      candidateApi.listAll(),
       departmentApi.list(),
       admissionApi.list(),
+      leftoverApi.bids(),
+      leftoverApi.projections(),
     ])
     previewCandidates.value = cand.items
     previewDepartments.value = dept.items
     previewAdmissions.value = adm.items
+    previewBids.value = bids.items
+    previewFinals.value = finals.items
   } catch (e) {
     previewError.value = (e as Error).message
   } finally {
@@ -193,11 +273,18 @@ async function loadPreview() {
 }
 
 // 进入录取/捡漏阶段即拉取预览；录取决定无看板事件，仅候选人增删触发重拉（其余靠手动刷新）。
+// 竞拍数据有看板事件（leftover_bid / leftover_resolved），出价与结算即时反映。
 watch(showPreview, (show) => {
   if (show) void loadPreview()
 })
 
-const PREVIEW_RELOAD_EVENTS = ['candidate_created', 'candidate_updated', 'candidate_deleted']
+const PREVIEW_RELOAD_EVENTS = [
+  'candidate_created',
+  'candidate_updated',
+  'candidate_deleted',
+  'leftover_bid',
+  'leftover_resolved',
+]
 let previewTimer: ReturnType<typeof setTimeout> | undefined
 useBoardChannel().subscribe((ev) => {
   if (showPreview.value && PREVIEW_RELOAD_EVENTS.includes(ev.type)) {

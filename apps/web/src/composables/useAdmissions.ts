@@ -4,11 +4,12 @@
  * 持 candidates.browse_all 时展示各部门决定与部门归属。
  * 阶段读取与决定列表都在本函数内自管理（阶段变化 / 权限变化即时生效）。
  */
-import { computed, onMounted, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { toast } from 'vue-sonner'
 
-import { admissionApi, departmentApi, systemStatusApi } from '@/api/http'
+import { admissionApi, departmentApi } from '@/api/http'
 import { useAuth } from '@/composables/useAuth'
+import { useSystemStatus } from '@/composables/useSystemStatus'
 import { PERMISSIONS, type AdmissionStatus, type Candidate, type CandidateAdmission, type SystemPhase } from '@/models'
 import { ADMISSION_PRESENTATION } from '@/presenters/status'
 import { toastError } from '@/lib/toast'
@@ -22,7 +23,8 @@ export interface DepartmentAdmission {
 
 export interface UseAdmissions {
   /** 系统当前阶段（读取失败为 null）。 */
-  readonly phase: Ref<SystemPhase | null>
+  /** 当前系统阶段（取自 useSystemStatus 共享数据源）。 */
+  readonly phase: ComputedRef<SystemPhase | null>
   /** 录取决定列表加载中（控件禁用用）。 */
   readonly loading: Ref<boolean>
   /** 是否持跨部门查看权限（candidates.browse_all）。 */
@@ -44,7 +46,8 @@ export interface UseAdmissions {
 export function useAdmissions(selected: () => Candidate | null): UseAdmissions {
   const { hasPermission, user } = useAuth()
 
-  const phase = ref<SystemPhase | null>(null)
+  // 阶段统一取自 useSystemStatus（模块级单例）：录取控件是否展示依赖它，勿在此另拉一份。
+  const { phase } = useSystemStatus()
   const admissions = ref<CandidateAdmission[]>([])
   const loading = ref(false)
   /** 部门 id → 名称（跨部门浏览时展示决定归属）。 */
@@ -81,7 +84,7 @@ export function useAdmissions(selected: () => Candidate | null): UseAdmissions {
     return mineByCandidate.value.get(c.id)
   })
 
-  /** 他部门决定（未记录默认待定），仅跨部门浏览时展示。 */
+  /** 他部门决定（未记录 = 未表态 → 弃权），仅跨部门浏览时展示。 */
   const othersOf = computed<DepartmentAdmission[]>(() => {
     if (!canBrowseAll.value) return []
     const mine = user.value?.department_id
@@ -89,22 +92,13 @@ export function useAdmissions(selected: () => Candidate | null): UseAdmissions {
     for (const [departmentId, departmentName] of departmentNames.value) {
       if (departmentId === mine) continue
       const admission = selectedAdmissions.value.find((a) => a.department_id === departmentId)
-      result.push({ departmentId, departmentName, status: admission?.status ?? 'pending' })
+      result.push({ departmentId, departmentName, status: admission?.status ?? 'withdrawn' })
     }
     return result
   })
 
   function statusOf(candidateId: number): AdmissionStatus | undefined {
     return mineByCandidate.value.get(candidateId)
-  }
-
-  async function loadPhase(): Promise<void> {
-    try {
-      const s = await systemStatusApi.get()
-      phase.value = s.phase
-    } catch {
-      phase.value = null
-    }
   }
 
   async function loadAdmissions(): Promise<void> {
@@ -140,7 +134,6 @@ export function useAdmissions(selected: () => Candidate | null): UseAdmissions {
     if (on) void loadAdmissions()
   })
 
-  onMounted(() => void loadPhase())
 
   return {
     phase,

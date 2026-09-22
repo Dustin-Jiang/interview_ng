@@ -2,7 +2,8 @@
   LeftoverView —— 捡漏竞拍（布局与 CandidateRecordsView 一致：左名册 + 右详情，移动端两段式）。
   左侧：COMPLETED 候选人名册（搜索 + 刷新 + 键盘可达的 listbox）；
   右侧：预算卡（本部门 / browse_all 各部门）+ 选中候选人的出价与结算详情。
-  出价需 admissions.record 且已分配部门且处于捡漏阶段（行内数字输入 + Enter/按钮保存）；
+  出价需 admissions.record 且已分配部门且处于捡漏阶段（行内数字输入 + ←/→ 步进 + Enter/按钮保存）；
+  键位：**↑/↓ 切换候选人**、**←/→ 调整报价**（焦点在出价输入框内同样生效）、Enter 保存。
   结算不由本页触发：进入「结算阶段」时后端按出价自动结算全部竞拍，结算结果以带文字 Badge 呈现。
   结算阶段竞拍数据只读。无部门用户只读。
 
@@ -10,25 +11,20 @@
   数据与交互交给 useLeftover / useRosterSelection。
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Check, Eye, EyeOff, Gavel, SearchX, UsersRound } from 'lucide-vue-next'
+import { Check, Eye, EyeOff, Gavel, Minus, Plus, SearchX, UsersRound } from 'lucide-vue-next'
 
 import { useLeftover } from '@/composables/useLeftover'
 import { useRosterRouteSync } from '@/composables/useRosterRouteSync'
 import { useRosterSelection } from '@/composables/useRosterSelection'
+import { isActivatableElement, isEditableTarget, isModalOpen } from '@/lib/dom'
 import type { Candidate } from '@/models'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  NumberField,
-  NumberFieldContent,
-  NumberFieldDecrement,
-  NumberFieldIncrement,
-  NumberFieldInput,
-} from '@/components/ui/number-field'
+import { Input } from '@/components/ui/input'
 import CandidateDetailHeader from '@/components/app/CandidateDetailHeader.vue'
 import EmptyState from '@/components/app/EmptyState.vue'
 import ErrorAlert from '@/components/app/ErrorAlert.vue'
@@ -59,6 +55,8 @@ const {
   bidStep,
   drafts,
   savingId,
+  setDraft,
+  stepDraft,
   saveBid,
 } = useLeftover()
 
@@ -84,7 +82,7 @@ const emptyText = computed(() => {
   return '暂无已完成候选人'
 })
 
-const { selectedId, selected, select, highlight, canPrev, canNext, goPrev, goNext, showDetail, closeDetail, presetSelection } =
+const { selectedId, selected, select, canPrev, canNext, goPrev, goNext, showDetail, closeDetail, presetSelection } =
   useRosterSelection<Candidate>({
     items: () => filtered.value,
     lookup: (id) => candidates.value.find((c) => c.id === id) ?? null,
@@ -115,6 +113,44 @@ const selectedResultBadge = computed(() => {
 const bidEditable = computed(
   () => !!selected.value && canBid.value && !resultsByCandidate.value.has(selected.value.id),
 )
+
+// ---- 键盘：↑/↓ 切换候选人、←/→ 调整报价、Enter 保存 ----
+// 名册与出价输入框都不再自带方向键，键位统一在本页处理；两个名册页一致：↑/↓ 切人、←/→ 调价。
+// 焦点在**出价输入框**内时同样生效（该框只放数字，不需要左右移动光标）；其它输入控件（搜索框等）完全让位。
+const BID_INPUT_ATTR = 'bidInput'
+
+function isBidInput(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  return !!el && el.dataset?.[BID_INPUT_ATTR] !== undefined
+}
+
+function onGlobalKeydown(e: KeyboardEvent): void {
+  // 内层控件已处理（Select 弹层等）或有模态弹窗时完全让位。
+  if (e.defaultPrevented || isModalOpen()) return
+  const inBidInput = isBidInput(e.target)
+  if (!inBidInput && isEditableTarget(e.target)) return // 搜索框等：让位
+
+  const c = selected.value
+  const editable = !!c && bidEditable.value
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    e.preventDefault()
+    if (e.key === 'ArrowUp') goPrev()
+    else goNext()
+    return
+  }
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    if (!editable || !c) return
+    e.preventDefault()
+    stepDraft(c, e.key === 'ArrowLeft' ? -1 : 1)
+    return
+  }
+  if (e.key !== 'Enter' || !editable || !c) return
+  if (!inBidInput && isActivatableElement(e.target)) return // 真按钮/链接：Enter 归它们
+  e.preventDefault()
+  void saveBid(c)
+}
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
 
 // ---- 深链：挂载恢复搜索（query）与选中条目（路径参数）；变更写回 URL（replace） ----
 useRosterRouteSync<Candidate>({
@@ -193,7 +229,6 @@ function searchQuery(): Record<string, string> {
         :empty-icon="hasFilter ? SearchX : UsersRound"
         list-label="候选人列表"
         @select="select"
-        @highlight="highlight"
         @retry="reloadAll"
       >
         <template #badges="{ item }">
@@ -278,29 +313,41 @@ function searchQuery(): Record<string, string> {
       <template v-else>
         <CandidateDetailHeader :candidate="selected" :badge="selectedResultBadge">
           <div class="space-y-2 pt-4 text-sm">
-            <!-- 出价：可出价时行内编辑（数字输入，Enter / 按钮保存），否则只读展示 -->
+            <!-- 出价：可出价时行内编辑（←/→ 步进、Enter / 按钮保存），否则只读展示 -->
             <div class="flex items-center justify-between gap-3">
               <span class="text-muted-foreground">出价</span>
               <template v-if="bidEditable">
-                <div class="flex items-center gap-2">
-                  <NumberField
-                    :model-value="drafts[selected.id] ?? null"
-                    :step="bidStep"
-                    :min="bidStep"
-                    :format-options="{ useGrouping: false }"
+                <div class="flex items-center gap-1">
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    class="h-8 w-8"
                     :disabled="savingId === selected.id"
-                    @update:model-value="drafts[selected.id] = $event"
+                    aria-label="减少出价（←）"
+                    @click="stepDraft(selected, -1)"
                   >
-                    <NumberFieldContent>
-                      <NumberFieldDecrement />
-                      <NumberFieldInput
-                        class="h-8"
-                        :aria-label="`「${selected.name}」的出价（上下键按 ${bidStep} 调整）`"
-                        @keydown.enter="saveBid(selected)"
-                      />
-                      <NumberFieldIncrement />
-                    </NumberFieldContent>
-                  </NumberField>
+                    <Minus aria-hidden="true" />
+                  </Button>
+                  <Input
+                    :model-value="drafts[selected.id] ?? ''"
+                    data-bid-input
+                    inputmode="numeric"
+                    autocomplete="off"
+                    class="h-8 w-20 text-center tabular-nums"
+                    :disabled="savingId === selected.id"
+                    :aria-label="`「${selected.name}」的出价（←/→ 按 ${bidStep} 调整，Enter 保存）`"
+                    @update:model-value="setDraft(selected, String($event))"
+                  />
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    class="h-8 w-8"
+                    :disabled="savingId === selected.id"
+                    aria-label="增加出价（→）"
+                    @click="stepDraft(selected, 1)"
+                  >
+                    <Plus aria-hidden="true" />
+                  </Button>
                   <Button
                     size="icon"
                     variant="outline"
@@ -340,7 +387,7 @@ function searchQuery(): Record<string, string> {
           </template>
         </CandidateDetailHeader>
 
-        <!-- 记录末尾：上一个 / 下一个候选人（←/→ 键盘可达） -->
+        <!-- 记录末尾：上一个 / 下一个候选人（↑/↓ 键盘可达） -->
         <RosterPager
           v-if="filtered.length > 0"
           :can-prev="canPrev"
