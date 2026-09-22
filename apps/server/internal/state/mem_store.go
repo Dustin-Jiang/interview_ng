@@ -864,11 +864,16 @@ func (s *MemStateStore) ensureOidcConfig(ctx context.Context) (*dsmodel.OidcConf
 			return nil, err
 		}
 	}
-	var rules []dsmodel.OidcRoleRule
-	if err := s.db.WithContext(ctx).Order("position asc, id asc").Find(&rules).Error; err != nil {
+	var roleRules []dsmodel.OidcRoleRule
+	if err := s.db.WithContext(ctx).Order("position asc, id asc").Find(&roleRules).Error; err != nil {
 		return nil, err
 	}
-	cfg.Rules = rules
+	cfg.RoleRules = roleRules
+	var deptRules []dsmodel.OidcDeptRule
+	if err := s.db.WithContext(ctx).Order("position asc, id asc").Find(&deptRules).Error; err != nil {
+		return nil, err
+	}
+	cfg.DepartmentRules = deptRules
 	return &cfg, nil
 }
 
@@ -876,8 +881,8 @@ func (s *MemStateStore) GetOidcConfig(ctx context.Context) (*dsmodel.OidcConfig,
 	return s.ensureOidcConfig(ctx)
 }
 
-// SetOidcConfig 覆盖保存配置与规则：先校验（开关打开的必填/格式 + 规则的表达式与角色），
-// 再单事务写配置行并整体替换规则表。不发事件（与系统状态写入一致，前端写后自拉）。
+// SetOidcConfig 覆盖保存配置与两类规则：先校验（开关打开的必填/格式 + 规则的表达式与目标角色/部门），
+// 再单事务写配置行并整体替换两张规则表。不发事件（与系统状态写入一致，前端写后自拉）。
 func (s *MemStateStore) SetOidcConfig(ctx context.Context, cfg *dsmodel.OidcConfig, clientSecret *string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -905,14 +910,11 @@ func (s *MemStateStore) SetOidcConfig(ctx context.Context, cfg *dsmodel.OidcConf
 			return &Error{Code: "oidc_scopes_invalid", Msg: "Scopes 必须包含 openid"}
 		}
 	}
-	for i := range cfg.Rules {
-		r := &cfg.Rules[i]
+	for i := range cfg.RoleRules {
+		r := &cfg.RoleRules[i]
 		r.Expression = strings.TrimSpace(r.Expression)
-		if r.Expression == "" {
-			return &Error{Code: "oidc_rule_invalid", Msg: fmt.Sprintf("第 %d 条规则的表达式不能为空", i+1)}
-		}
-		if _, err := oidcauth.Compile(r.Expression); err != nil {
-			return &Error{Code: "oidc_rule_invalid", Msg: fmt.Sprintf("第 %d 条规则的 JMESPath 表达式无效：%v", i+1, err)}
+		if err := checkOidcRuleExpression(r.Expression, i, "规则", "oidc_rule_invalid"); err != nil {
+			return err
 		}
 		var n int64
 		if err := s.db.WithContext(ctx).Model(&dsmodel.Role{}).Where("id = ?", r.RoleID).Count(&n).Error; err != nil {
@@ -920,6 +922,20 @@ func (s *MemStateStore) SetOidcConfig(ctx context.Context, cfg *dsmodel.OidcConf
 		}
 		if n == 0 {
 			return &Error{Code: "oidc_rule_role_missing", Msg: fmt.Sprintf("第 %d 条规则的目标角色不存在", i+1)}
+		}
+	}
+	for i := range cfg.DepartmentRules {
+		r := &cfg.DepartmentRules[i]
+		r.Expression = strings.TrimSpace(r.Expression)
+		if err := checkOidcRuleExpression(r.Expression, i, "部门规则", "oidc_dept_rule_invalid"); err != nil {
+			return err
+		}
+		var n int64
+		if err := s.db.WithContext(ctx).Model(&dsmodel.Department{}).Where("id = ?", r.DepartmentID).Count(&n).Error; err != nil {
+			return err
+		}
+		if n == 0 {
+			return &Error{Code: "oidc_dept_rule_department_missing", Msg: fmt.Sprintf("第 %d 条部门规则的目标部门不存在", i+1)}
 		}
 	}
 	updates := map[string]any{
@@ -940,14 +956,39 @@ func (s *MemStateStore) SetOidcConfig(ctx context.Context, cfg *dsmodel.OidcConf
 		if err := tx.Where("id > 0").Delete(&dsmodel.OidcRoleRule{}).Error; err != nil {
 			return err
 		}
-		for i := range cfg.Rules {
-			rule := dsmodel.OidcRoleRule{Position: i, Expression: cfg.Rules[i].Expression, RoleID: cfg.Rules[i].RoleID}
+		for i := range cfg.RoleRules {
+			rule := dsmodel.OidcRoleRule{Position: i, Expression: cfg.RoleRules[i].Expression, RoleID: cfg.RoleRules[i].RoleID}
+			if err := tx.Create(&rule).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("id > 0").Delete(&dsmodel.OidcDeptRule{}).Error; err != nil {
+			return err
+		}
+		for i := range cfg.DepartmentRules {
+			rule := dsmodel.OidcDeptRule{
+				Position:     i,
+				Expression:   cfg.DepartmentRules[i].Expression,
+				DepartmentID: cfg.DepartmentRules[i].DepartmentID,
+			}
 			if err := tx.Create(&rule).Error; err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// checkOidcRuleExpression 校验第 i+1 条（1 起）JMESPath 规则的表达式：非空且可编译。
+// kind 只进中文文案（「规则」/「部门规则」），code 为该规则类的错误码。
+func checkOidcRuleExpression(expression string, i int, kind, code string) error {
+	if expression == "" {
+		return &Error{Code: code, Msg: fmt.Sprintf("第 %d 条%s的表达式不能为空", i+1, kind)}
+	}
+	if _, err := oidcauth.Compile(expression); err != nil {
+		return &Error{Code: code, Msg: fmt.Sprintf("第 %d 条%s的 JMESPath 表达式无效：%v", i+1, kind, err)}
+	}
+	return nil
 }
 
 func (s *MemStateStore) FindUserByOidcSubject(ctx context.Context, subject string) (*dsmodel.User, error) {
@@ -967,13 +1008,23 @@ func (s *MemStateStore) FindUserByOidcSubject(ctx context.Context, subject strin
 	return &u, nil
 }
 
-// SyncOidcUser 以 IdP 为准覆盖显示名与角色分配（name 为空串时保留原显示名）。
-func (s *MemStateStore) SyncOidcUser(ctx context.Context, id uint64, name string, roleIDs []uint64) error {
+// SyncOidcUser 以 IdP 为准覆盖显示名、角色与部门（name 为空串时保留原显示名；
+// departmentID 为 nil 表示未命中部门规则 → 不动现有部门）。
+func (s *MemStateStore) SyncOidcUser(ctx context.Context, id uint64, name string, roleIDs []uint64, departmentID *uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if name != "" {
 		if err := s.db.WithContext(ctx).Model(&dsmodel.User{}).Where("id = ?", id).
 			UpdateColumn("name", name).Error; err != nil {
+			return err
+		}
+	}
+	if departmentID != nil {
+		if err := s.ensureDepartment(ctx, *departmentID); err != nil {
+			return err
+		}
+		if err := s.db.WithContext(ctx).Model(&dsmodel.User{}).Where("id = ?", id).
+			UpdateColumn("department_id", *departmentID).Error; err != nil {
 			return err
 		}
 	}

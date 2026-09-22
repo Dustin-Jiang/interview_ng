@@ -50,27 +50,53 @@ func Hit(result any) bool {
 // ErrRuleEval 规则表达式**求值**失败：表达式本身合法（保存时已编译校验过），但声明缺失或类型不符
 // （典型：ID token 里没有 groups 声明，`length(groups[? …])` 对 null 取 length 直接报错）。
 // 与「未命中任何规则」（ErrOidcRoleUnmapped）区分开：前者是配置写错，后者是用户不在任何组里。
+// 角色规则与部门规则求值失败走同一个错误：都表示「无法判定账号的授权/归属」，一律拒绝登录。
 var ErrRuleEval = errors.New("oidc rule evaluation failed")
 
-// MatchRole 按 Position 升序逐条求值，返回首个命中的角色 id；
-// 无命中 → (0, false, nil)；表达式**求值**出错 → 包 ErrRuleEval 的错误
-// （含第几条与表达式原文，便于服务端日志与管理员定位）。
-// 规则顺序即切片顺序（store 已按 position 升序返回，此处不重排）。
-func MatchRole(rules []dsmodel.OidcRoleRule, claims map[string]any) (uint64, bool, error) {
+// rule 是求值单元的归一形态：角色规则与部门规则共用同一套「顺序求值、首个命中生效」语义。
+type rule struct {
+	expression string
+	targetID   uint64
+}
+
+// match 按切片顺序逐条求值，返回首个命中规则的目标 id；无命中 → (0, false, nil)。
+// 表达式**求值**出错 → 包 ErrRuleEval 的错误（含第几条、规则种类与表达式原文，
+// 便于服务端日志与管理员定位）。kind 形如「角色规则」「部门规则」，只进错误文案。
+func match(rules []rule, kind string, claims map[string]any) (uint64, bool, error) {
 	for i := range rules {
-		node, err := Compile(rules[i].Expression)
+		node, err := Compile(rules[i].expression)
 		if err != nil {
-			return 0, false, fmt.Errorf("%w: 第 %d 条规则（%s）编译失败：%v", ErrRuleEval, i+1, rules[i].Expression, err)
+			return 0, false, fmt.Errorf("%w: 第 %d 条%s（%s）编译失败：%v", ErrRuleEval, i+1, kind, rules[i].expression, err)
 		}
 		out, err := node.Search(claims)
 		if err != nil {
-			return 0, false, fmt.Errorf("%w: 第 %d 条规则（%s）求值失败：%v", ErrRuleEval, i+1, rules[i].Expression, err)
+			return 0, false, fmt.Errorf("%w: 第 %d 条%s（%s）求值失败：%v", ErrRuleEval, i+1, kind, rules[i].expression, err)
 		}
 		if Hit(out) {
-			return rules[i].RoleID, true, nil
+			return rules[i].targetID, true, nil
 		}
 	}
 	return 0, false, nil
+}
+
+// MatchRole 按顺序逐条求值角色规则，返回首个命中的角色 id；无命中 → (0, false, nil)。
+// 规则顺序即切片顺序（store 已按 position 升序返回，此处不重排）。
+func MatchRole(rules []dsmodel.OidcRoleRule, claims map[string]any) (uint64, bool, error) {
+	converted := make([]rule, len(rules))
+	for i := range rules {
+		converted[i] = rule{expression: rules[i].Expression, targetID: rules[i].RoleID}
+	}
+	return match(converted, "角色规则", claims)
+}
+
+// MatchDepartment 同 MatchRole，但作用在部门规则上：返回首个命中的部门 id。
+// 无命中 → (0, false, nil)，由调用方决定语义（当前为「不改变账号现有部门」，而非拒绝登录）。
+func MatchDepartment(rules []dsmodel.OidcDeptRule, claims map[string]any) (uint64, bool, error) {
+	converted := make([]rule, len(rules))
+	for i := range rules {
+		converted[i] = rule{expression: rules[i].Expression, targetID: rules[i].DepartmentID}
+	}
+	return match(converted, "部门规则", claims)
 }
 
 // DeriveUsername 取用户名：preferred_username → 邮箱 @ 前缀 → sub；

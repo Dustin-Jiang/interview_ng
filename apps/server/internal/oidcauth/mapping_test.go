@@ -1,6 +1,7 @@
 package oidcauth
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -74,6 +75,34 @@ func TestMatchRoleNoRulesAndNoHit(t *testing.T) {
 	rules := []dsmodel.OidcRoleRule{{Expression: "groups[?@ == 'nobody'] | [0]", RoleID: 5}}
 	if _, hit, err := MatchRole(rules, map[string]any{"groups": []any{"x"}}); err != nil || hit {
 		t.Fatalf("不匹配应无命中: hit=%v err=%v", hit, err)
+	}
+}
+
+func TestMatchDepartmentFirstHitAndEvalFailure(t *testing.T) {
+	rules := []dsmodel.OidcDeptRule{
+		{Position: 0, Expression: "groups[?@ == 'interview-tech'] | [0]", DepartmentID: 3},
+		{Position: 1, Expression: "@", DepartmentID: 9},
+	}
+	// 与角色规则同一套语义：顺序求值、首个命中生效（声明缺失时落到下一条）。
+	if id, hit, err := MatchDepartment(rules, map[string]any{"sub": "u1"}); err != nil || !hit || id != 9 {
+		t.Fatalf("无 groups 应落到第 2 条: hit=%v dept=%d err=%v", hit, id, err)
+	}
+	if id, hit, err := MatchDepartment(rules, map[string]any{"groups": []any{"interview-tech"}}); err != nil || !hit || id != 3 {
+		t.Fatalf("应命中第 1 条: hit=%v dept=%d err=%v", hit, id, err)
+	}
+
+	// 空规则 → 无命中（调用方据此「不改动现有部门」）。
+	if id, hit, err := MatchDepartment(nil, map[string]any{"a": 1}); err != nil || hit || id != 0 {
+		t.Fatalf("空规则应无命中: hit=%v dept=%d err=%v", hit, id, err)
+	}
+
+	// 缺声明 + 未做类型守卫 → 求值失败；文案要点明是**部门规则**（否则日志里认不出是哪一类规则）
+	fragile := []dsmodel.OidcDeptRule{
+		{Expression: "length(groups[? ends_with(@, '-tech')]) > \x600\x60", DepartmentID: 3},
+	}
+	if _, _, err := MatchDepartment(fragile, map[string]any{"sub": "u1"}); !errors.Is(err, ErrRuleEval) ||
+		!strings.Contains(err.Error(), "第 1 条部门规则") {
+		t.Fatalf("缺少声明应报求值失败且指明部门规则: %v", err)
 	}
 }
 

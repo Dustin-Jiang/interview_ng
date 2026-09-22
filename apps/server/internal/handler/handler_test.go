@@ -40,7 +40,7 @@ func newTestApp(t *testing.T) *gin.Engine {
 		&dsmodel.RoomMember{}, &dsmodel.Message{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
 		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
-		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{},
+		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{}, &dsmodel.OidcDeptRule{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

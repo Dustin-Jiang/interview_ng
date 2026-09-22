@@ -53,8 +53,9 @@ func (h *HTTPServer) startOidcAuthorization(c *gin.Context) {
 	c.Redirect(http.StatusFound, target)
 }
 
-// oidcCallback IdP 回调落地：换 token → 校验 ID token → 命中角色规则 →
-// 建号/同步 → 签发 JWT → 302 回前端并携带一次性登录码（token 不出现在 URL 与浏览器历史）。
+// oidcCallback IdP 回调落地：换 token → 校验 ID token → 命中角色规则（未命中即拒绝）
+// 与部门规则（未命中不动现有部门）→ 建号/同步 → 签发 JWT →
+// 302 回前端并携带一次性登录码（token 不出现在 URL 与浏览器历史）。
 func (h *HTTPServer) oidcCallback(c *gin.Context) {
 	cfg, err := h.svc.GetOidcConfig(c.Request.Context())
 	if err != nil {
@@ -86,9 +87,9 @@ func (h *HTTPServer) oidcCallback(c *gin.Context) {
 		h.redirectOidcError(c, origin, oidcErrorCode(err))
 		return
 	}
-	roleID, hit, err := oidcauth.MatchRole(cfg.Rules, id.Claims)
+	roleID, hit, err := oidcauth.MatchRole(cfg.RoleRules, id.Claims)
 	if err != nil {
-		log.Printf("[oidc] 规则求值失败: %v", err)
+		log.Printf("[oidc] 角色规则求值失败: %v", err)
 		h.redirectOidcError(c, origin, oidcErrorCode(err))
 		return
 	}
@@ -96,11 +97,24 @@ func (h *HTTPServer) oidcCallback(c *gin.Context) {
 		h.redirectOidcError(c, origin, "oidc_role_unmapped")
 		return
 	}
+	// 部门规则与角色规则独立求值：未命中不拒绝登录（只是不改动现有部门）；
+	// 求值失败仍拒绝——归属判定不了就不放行，避免落到错误部门。
+	deptID, deptHit, err := oidcauth.MatchDepartment(cfg.DepartmentRules, id.Claims)
+	if err != nil {
+		log.Printf("[oidc] 部门规则求值失败: %v", err)
+		h.redirectOidcError(c, origin, oidcErrorCode(err))
+		return
+	}
+	var departmentID *uint64
+	if deptHit {
+		departmentID = &deptID
+	}
 	principal := auth.OidcPrincipal{
-		Subject:  id.Subject,
-		Username: oidcauth.DeriveUsername(id.Claims, id.Subject),
-		Name:     oidcauth.ClaimString(id.Claims, "name"),
-		RoleIDs:  []uint64{roleID},
+		Subject:      id.Subject,
+		Username:     oidcauth.DeriveUsername(id.Claims, id.Subject),
+		Name:         oidcauth.ClaimString(id.Claims, "name"),
+		RoleIDs:      []uint64{roleID},
+		DepartmentID: departmentID,
 	}
 	token, uid, _, _, err := h.auth.LoginWithOidc(c.Request.Context(), principal, cfg.AutoProvision)
 	if err != nil {
@@ -138,15 +152,21 @@ type oidcRuleReq struct {
 	RoleID     uint64 `json:"role_id"`
 }
 
+type oidcDeptRuleReq struct {
+	Expression   string `json:"expression"`
+	DepartmentID uint64 `json:"department_id"`
+}
+
 type putOidcConfigReq struct {
-	Enabled       bool          `json:"enabled"`
-	Issuer        string        `json:"issuer"`
-	ClientID      string        `json:"client_id"`
-	ClientSecret  *string       `json:"client_secret"` // 省略/null=保持；""=清除；非空=覆盖
-	Scopes        string        `json:"scopes"`
-	RedirectURL   string        `json:"redirect_url"`
-	AutoProvision bool          `json:"auto_provision"`
-	Rules         []oidcRuleReq `json:"rules"`
+	Enabled         bool              `json:"enabled"`
+	Issuer          string            `json:"issuer"`
+	ClientID        string            `json:"client_id"`
+	ClientSecret    *string           `json:"client_secret"` // 省略/null=保持；""=清除；非空=覆盖
+	Scopes          string            `json:"scopes"`
+	RedirectURL     string            `json:"redirect_url"`
+	AutoProvision   bool              `json:"auto_provision"`
+	RoleRules       []oidcRuleReq     `json:"role_rules"`
+	DepartmentRules []oidcDeptRuleReq `json:"department_rules"`
 }
 
 type oidcRuleResp struct {
@@ -156,18 +176,26 @@ type oidcRuleResp struct {
 	RoleID     uint64 `json:"role_id"`
 }
 
+type oidcDeptRuleResp struct {
+	ID           uint64 `json:"id"`
+	Position     int    `json:"position"`
+	Expression   string `json:"expression"`
+	DepartmentID uint64 `json:"department_id"`
+}
+
 // oidcConfigResp 是配置的读取响应：明文密钥永不下发，只回是否已配置。
 type oidcConfigResp struct {
-	ID              uint64         `json:"id"`
-	Enabled         bool           `json:"enabled"`
-	Issuer          string         `json:"issuer"`
-	ClientID        string         `json:"client_id"`
-	ClientSecretSet bool           `json:"client_secret_set"`
-	Scopes          string         `json:"scopes"`
-	RedirectURL     string         `json:"redirect_url"`
-	AutoProvision   bool           `json:"auto_provision"`
-	Rules           []oidcRuleResp `json:"rules"`
-	UpdatedAt       time.Time      `json:"updated_at"`
+	ID              uint64             `json:"id"`
+	Enabled         bool               `json:"enabled"`
+	Issuer          string             `json:"issuer"`
+	ClientID        string             `json:"client_id"`
+	ClientSecretSet bool               `json:"client_secret_set"`
+	Scopes          string             `json:"scopes"`
+	RedirectURL     string             `json:"redirect_url"`
+	AutoProvision   bool               `json:"auto_provision"`
+	RoleRules       []oidcRuleResp     `json:"role_rules"`
+	DepartmentRules []oidcDeptRuleResp `json:"department_rules"`
+	UpdatedAt       time.Time          `json:"updated_at"`
 }
 
 func (h *HTTPServer) getOidcConfig(c *gin.Context) {
@@ -177,9 +205,15 @@ func (h *HTTPServer) getOidcConfig(c *gin.Context) {
 		c.JSON(status, gin.H{"error": msg})
 		return
 	}
-	rules := make([]oidcRuleResp, 0, len(cfg.Rules))
-	for _, r := range cfg.Rules {
-		rules = append(rules, oidcRuleResp{ID: r.ID, Position: r.Position, Expression: r.Expression, RoleID: r.RoleID})
+	roleRules := make([]oidcRuleResp, 0, len(cfg.RoleRules))
+	for _, r := range cfg.RoleRules {
+		roleRules = append(roleRules, oidcRuleResp{ID: r.ID, Position: r.Position, Expression: r.Expression, RoleID: r.RoleID})
+	}
+	deptRules := make([]oidcDeptRuleResp, 0, len(cfg.DepartmentRules))
+	for _, r := range cfg.DepartmentRules {
+		deptRules = append(deptRules, oidcDeptRuleResp{
+			ID: r.ID, Position: r.Position, Expression: r.Expression, DepartmentID: r.DepartmentID,
+		})
 	}
 	c.JSON(http.StatusOK, oidcConfigResp{
 		ID:              cfg.ID,
@@ -190,7 +224,8 @@ func (h *HTTPServer) getOidcConfig(c *gin.Context) {
 		Scopes:          cfg.Scopes,
 		RedirectURL:     cfg.RedirectURL,
 		AutoProvision:   cfg.AutoProvision,
-		Rules:           rules,
+		RoleRules:       roleRules,
+		DepartmentRules: deptRules,
 		UpdatedAt:       cfg.UpdatedAt,
 	})
 }
@@ -206,16 +241,21 @@ func (h *HTTPServer) putOidcConfig(c *gin.Context) {
 		scopes = dsmodel.DefaultOidcScopes
 	}
 	cfg := &dsmodel.OidcConfig{
-		Enabled:       req.Enabled,
-		Issuer:        strings.TrimSpace(req.Issuer),
-		ClientID:      strings.TrimSpace(req.ClientID),
-		Scopes:        scopes,
-		RedirectURL:   strings.TrimSpace(req.RedirectURL),
-		AutoProvision: req.AutoProvision,
-		Rules:         make([]dsmodel.OidcRoleRule, 0, len(req.Rules)),
+		Enabled:         req.Enabled,
+		Issuer:          strings.TrimSpace(req.Issuer),
+		ClientID:        strings.TrimSpace(req.ClientID),
+		Scopes:          scopes,
+		RedirectURL:     strings.TrimSpace(req.RedirectURL),
+		AutoProvision:   req.AutoProvision,
+		RoleRules:       make([]dsmodel.OidcRoleRule, 0, len(req.RoleRules)),
+		DepartmentRules: make([]dsmodel.OidcDeptRule, 0, len(req.DepartmentRules)),
 	}
-	for i, r := range req.Rules {
-		cfg.Rules = append(cfg.Rules, dsmodel.OidcRoleRule{Position: i, Expression: r.Expression, RoleID: r.RoleID})
+	for i, r := range req.RoleRules {
+		cfg.RoleRules = append(cfg.RoleRules, dsmodel.OidcRoleRule{Position: i, Expression: r.Expression, RoleID: r.RoleID})
+	}
+	for i, r := range req.DepartmentRules {
+		cfg.DepartmentRules = append(cfg.DepartmentRules,
+			dsmodel.OidcDeptRule{Position: i, Expression: r.Expression, DepartmentID: r.DepartmentID})
 	}
 	if err := h.svc.SetOidcConfig(c.Request.Context(), cfg, req.ClientSecret); err != nil {
 		status, msg := stateErr(err)

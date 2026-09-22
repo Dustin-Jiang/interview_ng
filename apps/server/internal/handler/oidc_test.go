@@ -186,11 +186,41 @@ func startOidc(t *testing.T, r *gin.Engine, idp *fakeIdp) oidcRedirect {
 	return oidcRedirect{authorizeURL: authorizeURL, code: cb.Query().Get("code"), state: cb.Query().Get("state")}
 }
 
-// oidcConfigBody 组装启用态配置请求体。
-func oidcConfigBody(issuer, rules string) string {
+// oidcConfigBody 组装启用态配置请求体（roleRules / deptRules 为各自数组内的 JSON 片段）。
+func oidcConfigBody(issuer, roleRules, deptRules string) string {
 	return `{"enabled":true,"issuer":"` + issuer + `","client_id":"interview-ng","client_secret":"s3cret",` +
 		`"scopes":"openid profile email","redirect_url":"http://app.example/api/oidc/sessions",` +
-		`"auto_provision":true,"rules":[` + rules + `]}`
+		`"auto_provision":true,"role_rules":[` + roleRules + `],"department_rules":[` + deptRules + `]}`
+}
+
+// createDepartment 建一个部门并返回 id（部门规则的映射目标）。
+func createDepartment(t *testing.T, r *gin.Engine, token, name string) int {
+	t.Helper()
+	code, out := doJSON(t, r, "POST", "/api/departments", `{"name":"`+name+`"}`, token)
+	if code != http.StatusCreated {
+		t.Fatalf("建部门: %d %v", code, out)
+	}
+	id, _ := out["id"].(float64)
+	if id == 0 {
+		t.Fatalf("建部门应返回 id: %v", out)
+	}
+	return int(id)
+}
+
+// oidcLoginUser 走完整回调链路（授权 → 假 IdP → 回调 → 一次性登录码换会话），返回会话响应。
+func oidcLoginUser(t *testing.T, r *gin.Engine, idp *fakeIdp) map[string]any {
+	t.Helper()
+	start := startOidc(t, r, idp)
+	loc := rawGET(t, r, "/api/oidc/sessions?code="+start.code+"&state="+start.state).Header().Get("Location")
+	cb, err := url.Parse(loc)
+	if err != nil || cb.Query().Get("oidc_code") == "" {
+		t.Fatalf("回调应带回一次性登录码: %s", loc)
+	}
+	code, out := doJSON(t, r, "POST", "/api/oidc/sessions", `{"code":"`+cb.Query().Get("oidc_code")+`"}`, "")
+	if code != http.StatusOK {
+		t.Fatalf("换取会话: %d %v", code, out)
+	}
+	return out
 }
 
 //---- 用例 ----
@@ -209,7 +239,7 @@ func TestAuthenticationOptions(t *testing.T) {
 
 	admin := adminToken(t, r)
 	if code, out := doJSON(t, r, "PUT", "/api/oidc/config",
-		oidcConfigBody("https://sso.example.com/realms/interview", ""), admin); code != http.StatusOK {
+		oidcConfigBody("https://sso.example.com/realms/interview", "", ""), admin); code != http.StatusOK {
 		t.Fatalf("启用 OIDC 配置: %d %v", code, out)
 	}
 	if _, out := doJSON(t, r, "GET", "/api/authentication", "", ""); out["oidc"].(map[string]any)["enabled"] != true {
@@ -230,7 +260,7 @@ func TestOidcConfigAdminOnlyAndSecretMasking(t *testing.T) {
 		t.Fatalf("面试官登录失败: %v", sess)
 	}
 
-	body := oidcConfigBody("https://sso.example.com/realms/interview", "")
+	body := oidcConfigBody("https://sso.example.com/realms/interview", "", "")
 	if code, _ := doJSON(t, r, "PUT", "/api/oidc/config", body, itv); code != http.StatusForbidden {
 		t.Fatalf("无 users.manage 应 403: %d", code)
 	}
@@ -259,7 +289,7 @@ func TestOidcConfigAdminOnlyAndSecretMasking(t *testing.T) {
 
 	// 省略 client_secret → 保持原密钥
 	keep := `{"enabled":true,"issuer":"https://sso.example.com/realms/interview","client_id":"interview-ng",` +
-		`"scopes":"openid profile email","redirect_url":"http://app.example/api/oidc/sessions","auto_provision":true,"rules":[]}`
+		`"scopes":"openid profile email","redirect_url":"http://app.example/api/oidc/sessions","auto_provision":true,"role_rules":[],"department_rules":[]}`
 	if code, out := doJSON(t, r, "PUT", "/api/oidc/config", keep, admin); code != http.StatusOK {
 		t.Fatalf("省略密钥保存: %d %v", code, out)
 	}
@@ -284,29 +314,81 @@ func TestOidcConfigValidation(t *testing.T) {
 
 	code, out := doJSON(t, r, "PUT", "/api/oidc/config",
 		oidcConfigBody("https://sso.example.com/realms/interview",
-			`{"expression":"groups[","role_id":1}`), admin)
+			`{"expression":"groups[","role_id":1}`, ""), admin)
 	if code != http.StatusBadRequest || !strings.Contains(out["error"].(string), "第 1 条规则") {
 		t.Fatalf("非法表达式应 400 且指明第 1 条: %d %v", code, out)
 	}
 
 	code, out = doJSON(t, r, "PUT", "/api/oidc/config",
 		oidcConfigBody("https://sso.example.com/realms/interview",
-			`{"expression":"@","role_id":99999}`), admin)
+			`{"expression":"@","role_id":99999}`, ""), admin)
 	if code != http.StatusBadRequest || !strings.Contains(out["error"].(string), "目标角色不存在") {
 		t.Fatalf("未知角色应 400 且指明目标角色: %d %v", code, out)
+	}
+
+	// 部门规则校验与角色规则平行（文案点明是部门规则，便于管理员区分）
+	code, out = doJSON(t, r, "PUT", "/api/oidc/config",
+		oidcConfigBody("https://sso.example.com/realms/interview", "",
+			`{"expression":"groups[","department_id":1}`), admin)
+	if code != http.StatusBadRequest || !strings.Contains(out["error"].(string), "第 1 条部门规则") {
+		t.Fatalf("部门规则非法表达式应 400 且指明第 1 条部门规则: %d %v", code, out)
+	}
+	code, out = doJSON(t, r, "PUT", "/api/oidc/config",
+		oidcConfigBody("https://sso.example.com/realms/interview", "",
+			`{"expression":"@","department_id":99999}`), admin)
+	if code != http.StatusBadRequest || !strings.Contains(out["error"].(string), "目标部门不存在") {
+		t.Fatalf("未知部门应 400 且指明目标部门: %d %v", code, out)
+	}
+}
+
+// TestOidcConfigResponseShape 读取响应用 role_rules / department_rules 两个键、元素里带目标 id
+// ——前端按此契约解析（键名漂移会让设置页静默显示为空规则，故钉住）。
+func TestOidcConfigResponseShape(t *testing.T) {
+	r := newTestApp(t)
+	admin := adminToken(t, r)
+	itvRole := findRole(t, r, admin, "interviewer")
+	dept := createDepartment(t, r, admin, "研发部")
+
+	body := oidcConfigBody("https://sso.example.com/realms/interview",
+		`{"expression":"@","role_id":`+itoa(itvRole)+`}`,
+		`{"expression":"@","department_id":`+itoa(dept)+`}`)
+	if code, out := doJSON(t, r, "PUT", "/api/oidc/config", body, admin); code != http.StatusOK {
+		t.Fatalf("保存配置: %d %v", code, out)
+	}
+
+	code, got := doJSON(t, r, "GET", "/api/oidc/config", "", admin)
+	if code != http.StatusOK {
+		t.Fatalf("读取配置: %d %v", code, got)
+	}
+	roleRules, _ := got["role_rules"].([]any)
+	if len(roleRules) != 1 {
+		t.Fatalf("role_rules 应回 1 条: %v", got)
+	}
+	if rule, _ := roleRules[0].(map[string]any); int(rule["role_id"].(float64)) != itvRole || rule["position"] != float64(0) {
+		t.Fatalf("role_rules 元素契约不符: %v", roleRules[0])
+	}
+	deptRules, _ := got["department_rules"].([]any)
+	if len(deptRules) != 1 {
+		t.Fatalf("department_rules 应回 1 条: %v", got)
+	}
+	if rule, _ := deptRules[0].(map[string]any); int(rule["department_id"].(float64)) != dept {
+		t.Fatalf("department_rules 元素契约不符: %v", deptRules[0])
 	}
 }
 
 // TestOidcLoginEndToEnd 全链路：授权（PKCE S256 + nonce）→ 假 IdP 回调 →
-// 规则命中 → 自动开通 → 一次性登录码换 JWT → /api/me 可见角色。
+// 角色规则命中（未命中即拒绝）→ 部门规则独立命中 → 自动开通 → 一次性登录码换 JWT → /api/me 可见角色。
 func TestOidcLoginEndToEnd(t *testing.T) {
 	r := newTestApp(t)
 	admin := adminToken(t, r)
 	idp := newFakeIdp(t, "interview-ng")
 	itvRole := findRole(t, r, admin, "interviewer")
+	dept := createDepartment(t, r, admin, "研发部")
 
+	// 两类规则用意不同的表达式，证明彼此独立求值（且都命中）
 	body := oidcConfigBody(idp.server.URL,
-		`{"expression":"groups[?@ == 'interview-interviewers'] | [0]","role_id":`+itoa(itvRole)+`}`)
+		`{"expression":"groups[?@ == 'interview-interviewers'] | [0]","role_id":`+itoa(itvRole)+`}`,
+		`{"expression":"contains(groups, 'interview-interviewers')","department_id":`+itoa(dept)+`}`)
 	if code, out := doJSON(t, r, "PUT", "/api/oidc/config", body, admin); code != http.StatusOK {
 		t.Fatalf("保存配置: %d %v", code, out)
 	}
@@ -368,6 +450,13 @@ func TestOidcLoginEndToEnd(t *testing.T) {
 	if perms, _ := out["permissions"].([]any); len(perms) == 0 {
 		t.Fatalf("权限应已由 RBAC 缓存解析: %v", out["permissions"])
 	}
+	// 部门规则独立命中 → 自动开通的账号带上部门
+	if user["department_id"] == nil || int(user["department_id"].(float64)) != dept {
+		t.Fatalf("部门规则命中应写入部门 %d: %v", dept, user)
+	}
+	if dep, _ := user["department"].(map[string]any); dep["name"] != "研发部" {
+		t.Fatalf("用户资料应带部门对象: %v", user)
+	}
 	firstID := int(user["id"].(float64))
 
 	// 签发的 JWT 可用于受保护接口，且角色一致
@@ -407,7 +496,7 @@ func TestOidcLoginUnmappedRole(t *testing.T) {
 	idp := newFakeIdp(t, "interview-ng")
 	itvRole := findRole(t, r, admin, "interviewer")
 
-	body := oidcConfigBody(idp.server.URL, `{"expression":"groups[?@ == 'nobody'] | [0]","role_id":`+itoa(itvRole)+`}`)
+	body := oidcConfigBody(idp.server.URL, `{"expression":"groups[?@ == 'nobody'] | [0]","role_id":`+itoa(itvRole)+`}`, "")
 	if code, out := doJSON(t, r, "PUT", "/api/oidc/config", body, admin); code != http.StatusOK {
 		t.Fatalf("保存配置: %d %v", code, out)
 	}
@@ -435,7 +524,7 @@ func TestOidcRuleEvalFailure(t *testing.T) {
 	put := func(expression string) {
 		t.Helper()
 		body := oidcConfigBody(idp.server.URL,
-			`{"expression":"`+expression+`","role_id":`+itoa(adminRole)+`}`)
+			`{"expression":"`+expression+`","role_id":`+itoa(adminRole)+`}`, "")
 		if code, out := doJSON(t, r, "PUT", "/api/oidc/config", body, admin); code != http.StatusOK {
 			t.Fatalf("保存配置: %d %v", code, out)
 		}
@@ -471,6 +560,55 @@ func TestOidcRuleEvalFailure(t *testing.T) {
 		t.Fatalf("先判类型的写法应判为「未命中任何规则」: %s", loc)
 	}
 	noLoginNoProvision(t, loc)
+}
+
+// TestOidcDepartmentRulesSemantics 部门规则的两条语义：
+// ① 未命中**不拒绝登录**、也不清空账号现有部门（部门不是权限，未命中即「无意见」）；
+// ② 求值失败与角色规则一致 fail-closed：拒绝登录（判定不了归属就不放行，免得落到错误部门）。
+func TestOidcDepartmentRulesSemantics(t *testing.T) {
+	r := newTestApp(t)
+	admin := adminToken(t, r)
+	idp := newFakeIdp(t, "interview-ng")
+	itvRole := findRole(t, r, admin, "interviewer")
+	dept := createDepartment(t, r, admin, "研发部")
+
+	itvRule := `{"expression":"groups[?@ == 'interview-interviewers'] | [0]","role_id":` + itoa(itvRole) + `}`
+	alwaysRule := `{"expression":"@","role_id":` + itoa(itvRole) + `}`
+	put := func(roleRule, deptRule string) {
+		t.Helper()
+		body := oidcConfigBody(idp.server.URL, roleRule, deptRule)
+		if code, out := doJSON(t, r, "PUT", "/api/oidc/config", body, admin); code != http.StatusOK {
+			t.Fatalf("保存配置: %d %v", code, out)
+		}
+	}
+	departmentOf := func(session map[string]any) int {
+		t.Helper()
+		user, _ := session["user"].(map[string]any)
+		id, _ := user["department_id"].(float64)
+		return int(id)
+	}
+
+	// ① 首次登录：部门规则命中 → 写入部门
+	put(itvRule, `{"expression":"contains(groups, 'interview-interviewers')","department_id":`+itoa(dept)+`}`)
+	if got := departmentOf(oidcLoginUser(t, r, idp)); got != dept {
+		t.Fatalf("首次登录应写入命中部门 %d，实得 %d", dept, got)
+	}
+
+	// ① 换成不命中的部门规则：角色照常命中（登录成功），部门保持不动
+	put(itvRule, `{"expression":"contains(groups, 'nobody')","department_id":`+itoa(dept)+`}`)
+	if got := departmentOf(oidcLoginUser(t, r, idp)); got != dept {
+		t.Fatalf("未命中部门规则不应清空现有部门，实得 %d", got)
+	}
+
+	// ② 部门规则求值失败：角色规则换成恒真，把失败唯一归因到部门规则
+	idp.groups = nil // ID token 不再带 groups
+	fragile := `{"expression":"length(groups[? ends_with(@, '-admin')]) > ` + bt + `0` + bt + `","department_id":` + itoa(dept) + `}`
+	put(alwaysRule, fragile)
+	start := startOidc(t, r, idp)
+	w := rawGET(t, r, "/api/oidc/sessions?code="+start.code+"&state="+start.state)
+	if !strings.Contains(w.Header().Get("Location"), "oidc_error=oidc_rule_eval_failed") {
+		t.Fatalf("部门规则求值失败应拒绝登录: %s", w.Header().Get("Location"))
+	}
 }
 
 // TestOidcProbe 连通性检测：可达 → 端点摘要；不可达 → 400。

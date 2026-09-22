@@ -81,10 +81,11 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token s
 
 // OidcPrincipal 是归一后的 OIDC 登录主体。
 type OidcPrincipal struct {
-	Subject  string   // IdP 的 sub（身份键）
-	Username string   // 自动开通时的用户名（DeriveUsername 结果）
-	Name     string   // 显示名（name 声明，可为空）
-	RoleIDs  []uint64 // 规则命中的角色（首个命中生效；空 = 未映射）
+	Subject      string   // IdP 的 sub（身份键）
+	Username     string   // 自动开通时的用户名（DeriveUsername 结果）
+	Name         string   // 显示名（name 声明，可为空）
+	RoleIDs      []uint64 // 规则命中的角色（首个命中生效；空 = 未映射）
+	DepartmentID *uint64  // 部门规则命中的部门（nil = 未命中 → 不改动现有部门）
 }
 
 var (
@@ -96,8 +97,9 @@ var (
 
 // LoginWithOidc 以 IdP 主体登录：按 sub 匹配本地用户；
 // 不存在且 autoProvision → 自动建号（用户名冲突先试 "<username>-<sub 前 6 位>"）；
-// 命中则同步显示名与角色（IdP 权威）→ 重载 RBAC → 签发同款 JWT。
+// 命中则同步显示名、角色与部门（IdP 权威）→ 重载 RBAC → 签发同款 JWT。
 // 未映射到角色 → ErrOidcRoleUnmapped；未开通且禁止自动开通 → ErrOidcUserNotFound。
+// 未命中部门规则不构成拒绝理由（此时 p.DepartmentID 为 nil）：只保持账号现有部门。
 func (m *Manager) LoginWithOidc(ctx context.Context, p OidcPrincipal, autoProvision bool) (token string, userID uint64, roles, perms []string, err error) {
 	if len(p.RoleIDs) == 0 {
 		return "", 0, nil, nil, ErrOidcRoleUnmapped
@@ -109,7 +111,7 @@ func (m *Manager) LoginWithOidc(ctx context.Context, p OidcPrincipal, autoProvis
 		if !autoProvision {
 			return "", 0, nil, nil, ErrOidcUserNotFound
 		}
-		newUser := &dsmodel.User{Username: p.Username, Name: p.Name, OidcSubject: &sub}
+		newUser := &dsmodel.User{Username: p.Username, Name: p.Name, OidcSubject: &sub, DepartmentID: p.DepartmentID}
 		uid, createErr := m.st.CreateUser(ctx, newUser, p.RoleIDs)
 		if createErr != nil && isUsernameTaken(createErr) {
 			newUser.Username = fallbackUsername(p.Username, sub)
@@ -127,7 +129,7 @@ func (m *Manager) LoginWithOidc(ctx context.Context, p OidcPrincipal, autoProvis
 		if p.Name != "" {
 			name = p.Name
 		}
-		if syncErr := m.st.SyncOidcUser(ctx, u.ID, name, p.RoleIDs); syncErr != nil {
+		if syncErr := m.st.SyncOidcUser(ctx, u.ID, name, p.RoleIDs, p.DepartmentID); syncErr != nil {
 			return "", 0, nil, nil, syncErr
 		}
 	}
