@@ -91,19 +91,21 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 | `roles` | id, name(唯一), description | 角色（权限组，RBAC） |
 | `role_permissions` | role_id, permission（联合唯一） | 角色↔权限关联 |
 | `user_roles` | user_id, role_id（联合唯一） | 用户↔角色 M2M |
-| `candidates` | id, **student_no(唯一, NOT NULL)**, name, profile, status | 候选人（非登录用户）；**学号 = 身份键**（纯数字、唯一、前导零有意义），当前房间归属为查询投影（`rooms.candidate_id` 主导，`room_id` 不落库） |
-| `rooms` | id, candidate_id(可空) | 房间 = 独立物理会议室记录，`candidate_id` 可空；无状态机、无主持人，"状态"= 候选人状态的查询投影 |
+| `candidates` | id, **student_no(唯一, NOT NULL)**, name, profile, first_choice, second_choice, accept_adjust, phone, qq, email, status, **interview_started_at(可空)** | 候选人（非登录用户）；**学号 = 身份键**（纯数字、唯一、前导零有意义），志愿/联系方式为可选资料字段，当前房间归属为查询投影（`rooms.candidate_id` 主导，`room_id` 不落库）；`interview_started_at` = 进入「面试中」时打点、离开该档即清空（NULL = 不在面试中），前端面试计时以此为准（`updated_at` 会被任意资料编辑刷新，不能当计时起点） |
+| `rooms` | id, **name**, candidate_id(可空) | 房间 = 独立物理会议室记录，`name` 为可选别名（空串=未命名，UI 回退「房间 #id」，不要求唯一），`candidate_id` 可空；无状态机、无主持人，"状态"= 候选人状态的查询投影 |
 | `room_members` | room_id, user_id（`idx_room_user` 唯一） | 房间成员，一次一活跃房间 |
 | `messages` | id, candidate_id, sender_id(可空), content | 群聊记录（长存），**按候选人归属**，`id` 即候选人维度续传游标 |
 | `system_status` | id=1(单行), phase(interview/admission/leftover/settlement) | 系统状态：当前面试 / 录取 / 捡漏 / 结算阶段，管理端可切换 |
 | `candidate_admissions` | candidate_id + department_id（联合唯一）, status(pending/admitted/withdrawn) | 各部门对候选人的录取决定（候选人无固定部门，按部门分别记） |
 | `bids` | candidate_id + department_id（联合唯一）, amount | 捡漏阶段部门出价（candidate+department 唯一；金额对其他部门保密、事件不带金额，持 `candidates.browse_all` 的管理端跨部门可见） |
 
-权限目录（11 枚）：`users.manage`、`candidates.manage`、`candidates.browse_all`（跨部门浏览录取状态与捡漏出价）、`candidates.create`、`candidates.checkin`、`candidates.assign`、`rooms.view`、`rooms.chat`、`rooms.move_phase`、`rooms.manage`、`admissions.record`（记录本部门录取决定/捡漏出价）。预置角色：`admin`（全部）、`interviewer`（6 枚流程权限，不含录取状态浏览/记录）。
+权限目录（12 枚）：`users.manage`、`candidates.manage`、`candidates.preferences`（修改候选人志愿与调剂）、`candidates.browse_all`（跨部门浏览录取状态与捡漏出价）、`candidates.create`、`candidates.checkin`、`candidates.assign`、`rooms.view`、`rooms.chat`、`rooms.move_phase`、`rooms.manage`、`admissions.record`（记录本部门录取决定/捡漏出价）。预置角色：`admin`（全部）、`interviewer`（8 枚流程权限：候选人创建/签到/拉取、志愿与调剂、房间浏览/聊天/推进阶段、本部门录取记录；不含资料与房间管理、跨部门浏览）。
 
-**捡漏阶段**（`phase=leftover`）：各部门按预算竞拍补录候选人。预算 = `max(500, (预期人数 − 已确认录取人数) × 100)`（已结算赢家的出价随录取释放，不重复占用）；出价受剩余预算约束（`PUT /api/leftover/bids/:candidateId`），各部门间出价金额互不可见、持 `candidates.browse_all` 的管理端可见全部门出价与各部门预算占用；`GET /api/leftover/results` 公开已结算的赢家与成交金额。
+**捡漏阶段**（`phase=leftover`）：各部门按预算竞拍补录候选人。预算 = `max(500, (预期人数 − 已确认录取人数) × 100)`（**只有唯一录取（封盘）才算已确认录取**；争议候选人不缩预算基数，其出价照常占用预算；唯一录取赢家的出价随录取释放、不重复占用）；出价受剩余预算约束（`PUT /api/leftover/bids/:candidateId`），**出价须为 ≥ 0 的整数**（0 是合法出价，即零元出价；同候选人 + 同部门唯一，改价即覆盖该行），各部门间出价金额互不可见、持 `candidates.browse_all` 的管理端可见全部门出价与各部门预算占用；`GET /api/leftover/results` 公开已结算的赢家与成交金额。
 
 **结算阶段**（`phase=settlement`，进入即自动结算）：切换到结算阶段时后端自动把**全部有出价的竞拍按出价结算落库**——每个候选人最高出价部门录取（admitted）、其余出价部门 withdrawn，随后**归一化候选人状态**（唯一录取确定 → `ADMITTED`，其余录取档 → `ADMISSION_PENDING`），并 emit `leftover_resolved`。该过程**幂等**（已在库的唯一录取封盘 / 无出价者跳过，不重复成交、不重复广播）；结算时可逆地切回捡漏阶段继续出价/改价，再进结算阶段按最新出价重算。结算阶段竞拍数据只读——出价（`PUT /api/leftover/bids/:candidateId`）被拒绝（`not_leftover_phase`），手动逐个结算入口**已移除**（`POST /api/leftover/results` 不再存在）。`GET /api/leftover/projections` 保留为**未结算前的只读预演/校验**：由当前出价计算每个候选人的赢家与成交额，`resolved` 标记该结果是否已正式落库（与结算结果对照可用于自检）。
+
+**录取决定与默认值**：录取决定按部门分别记录（`pending` 待定 / `admitted` 录取 / `withdrawn` 放弃）。**未记录的 (候选人 × 部门) 组合 = 该部门未表态 → 视作弃权**：不表态不影响录取判定，所以「一家录取 + 其余无记录」即「录取到该部门」；只有**显式记录的 `pending`** 才表示结论未定。服务端全部判定只看 `admitted` 计数（预算、封盘、结算），因此「未记录」与「弃权」在后端等价，无需为未表态的部门落库记录。
 
 **录取争议仲裁**：已结算 = 恰好一家部门 admitted（唯一录取确定，封盘）；0 家未定可竞拍；≥2 家同时录取属争议——该候选人不算已结算、自动进入捡漏竞拍，进入结算阶段按出价自动仲裁：最高出价部门录取（admitted），其余部门（含未出价的手动录取记录）一律改 withdrawn。
 
@@ -139,14 +141,14 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 > `seq` 全局单调事件序；`msg_id` 为**候选人维度**续传游标——消息按候选人归属，候选人换房后历史随人走。空房间（无候选人）可入房但 `send_msg` 会被拒。
 > 捡漏类事件：`leftover_bid`（出价变更，载荷 `{CandidateID, DepartmentID}`，**不含金额**）、`leftover_resolved`（结算，载荷 `{CandidateID, DepartmentID, Amount}`）——均全局扇出。
 >
-> 事件类型：`candidate_signed_in`（全局）、`candidate_assigned`、`room_phase_changed`、`message_appended`、`member_joined/left`（以上带 room_id）、`candidate_created/updated/deleted` 与 `room_created/deleted`（全局，载荷 `{CandidateID}` / `{RoomID}`）。
+> 事件类型：`candidate_signed_in`（全局）、`candidate_assigned`、`room_phase_changed`、`message_appended`、`member_joined/left`（以上带 room_id）、`candidate_created/updated/deleted` 与 `room_created/deleted/renamed`（全局，载荷 `{CandidateID}` / `{RoomID}`）。
 
 ## 认证与鉴权
 
 - 登录：`POST /api/sessions`（JWT，7 天有效，`JWT_SECRET` 环境变量配置）；无登录接口的旧版已移除。
 - RBAC：角色↔权限存库，权限判断走**内存 RBAC 缓存**，角色/权限/改密变更即时生效（改密 bump `token_version`，旧 token 立即失效）。
 - 错误语义：未登录/无效 token → **401**；有身份但缺权限 → **403**。
-- 种子：启动时若无用户则创建 `admin`（全权限）+ `interviewer` 角色与默认账号 `admin/admin`（可用 `ADMIN_INIT_PASSWORD` 覆盖）。
+- 种子：启动时若无用户则创建 `admin`（全权限）+ `interviewer` 角色与默认账号 `admin/admin`（可用 `ADMIN_INIT_PASSWORD` 覆盖）。**不预置任何部门**——部门与用户归属由管理员在设置页显式创建/分配（admin 不隶属任何部门）。
 
 ---
 
@@ -176,26 +178,28 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 - `GET  /api/me`（当前用户 + 角色 + 权限并集）
 - `PUT  /api/me/password` `{old_password, new_password}`（自助改密）
 - `GET  /api/candidates?status=&q=&limit=&offset=`
-- `POST /api/candidates` `{student_no, name, profile?}`（学号必填唯一；重复 → 409）
+- `POST /api/candidates` `{student_no, name, profile?, first_choice?, second_choice?, accept_adjust?, phone?, qq?, email?}`（学号必填唯一；重复 → 409；文本字段服务端裁剪首尾空白）
 - `GET  /api/candidates/:id`
 - `PUT  /api/candidates/:id/check-in`（签到，无请求体）
-- `PUT  /api/candidates/:id` `{student_no, name, profile}`（编辑，含学号；撞号 → 409）
+- `PUT  /api/candidates/:id` `{student_no, name, profile?, first_choice?, second_choice?, accept_adjust?, phone?, qq?, email?}`（编辑，含学号；**全量覆盖**——缺省的可选字段按空串/false 清空旧值；撞号 → 409）
 - `DELETE /api/candidates/:id`（级联删消息并解绑房间）
+- `PATCH /api/candidates/:id/preferences` `{first_choice, second_choice, accept_adjust}`（**志愿与调剂**：独立权限 `candidates.preferences`（面试官默认持有），只覆盖这三列，其他资料与运行态不动；三项须完整给出，bool 无缺省语义）
 - `PUT  /api/candidates/:id/status` `{status}`（重置到任意档：向后自动解绑、向前须已有房间）
 - `GET  /api/candidates/:id/messages`（候选人历史面试记录归档，完成 / 换房后仍可查）
-- `POST /api/candidates/imports` `{rows:[{student_no, name, profile}]}`（**批量导入**，需 `candidates.manage`）：单事务**全或无**，按学号 upsert（命中即覆盖姓名/简介，值相同也写；批内同学号后者覆盖前者），只写 `student_no/name/profile`，运行态一律不动；成功 `200 {created, updated, rows:[{index, status, candidate_id}]}`，任一行的硬错误 → `400 {error, rows:[{index, error}]}`（整批未落库）。单次上限 2000 行
+- `POST /api/candidates/imports` `{rows:[{student_no, name, profile, first_choice, second_choice, accept_adjust, phone, qq, email}]}`（**批量导入**，需 `candidates.manage`）：单事务**全或无**，按学号 upsert（命中即覆盖全部资料列，值相同也写；批内同学号后者覆盖前者），只写资料列，运行态一律不动；成功 `200 {created, updated, rows:[{index, status, candidate_id}]}`，任一行的硬错误 → `400 {error, rows:[{index, error}]}`（整批未落库）。单次上限 2000 行
 - `GET  /api/admissions`、`PUT /api/admissions/:candidateId` `{status}`（录取决定：默认本部门可见，记录需 `admissions.record`）
 - `GET  /api/rooms`、`GET /api/rooms/:id`
-- `POST /api/rooms`（建空房，`rooms.manage`）
+- `POST /api/rooms` `{name?}`（建空房，`rooms.manage`；缺省/空串 = 未命名）
+- `PATCH /api/rooms/:id` `{name}`（房间命名/改名，`rooms.manage`；空串 = 清除命名；超 64 字符 → 400）
 - `DELETE /api/rooms/:id`（仅空房可删）
 - `POST /api/rooms/:id/members` `{user_id}`、`DELETE /api/rooms/:id/members/:userId`
 - `PUT  /api/rooms/:id/candidate` `{candidate_id}`（**拉取式分配**：候选人从待分配池被拉入房间）
 - `GET/POST /api/users`、`PUT/DELETE /api/users/:id`、`PUT /api/users/:id/password` `{new_password}`（`users.manage`；后者为管理员重置他人密码）
 - `GET/POST /api/roles`、`PUT/DELETE /api/roles/:id`（`users.manage`，角色管理）
-- `GET/POST /api/departments`、`PUT/DELETE /api/departments/:id`（`users.manage`，部门管理）
+- `GET /api/departments`（部门名单，**任意登录用户可读**——志愿下拉需要）、`POST /api/departments`、`PUT/DELETE /api/departments/:id`（`users.manage`，部门管理）
 - `GET /api/system/status`（读取当前阶段，任意登录）、`PATCH /api/system/status` `{phase?, bid_step?}`（切换阶段 / 出价步长，`users.manage`，两项至少给一项）
 - `GET /api/leftover`（捡漏总览：各部门预算，spent/remaining 默认仅本部门可见、`browse_all` 全可见）、`GET /api/leftover/bids`（默认本部门出价，`browse_all` 返回全部门）
-- `PUT /api/leftover/bids/:candidateId` `{amount}`（出价/改价，`admissions.record`，仅捡漏阶段、受剩余预算约束）
+- `PUT /api/leftover/bids/:candidateId` `{amount}`（出价/改价，`admissions.record`，仅捡漏阶段、受剩余预算约束；**amount ≥ 0**，0 合法，负数 → 400 `invalid_amount`）
 - `GET /api/leftover/results`（已结算赢家与成交金额，全员可见；结算由切换到结算阶段自动触发）
 - `GET /api/leftover/projections`（未结算前的只读预演：由出价计算的最终录取结果；保密语义与出价一致——默认仅已成交或本部门的进行中出价可见，`candidates.browse_all` 全量）
 - `GET  /ws/rooms/:roomId`（房间通道，连接后首条 `auth` 消息）
