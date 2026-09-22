@@ -152,38 +152,41 @@ const problemColumns: ColumnDef<DataTableFeatures, ProblemRow>[] = problemColumn
       </CardContent>
     </Card>
 
-    <DataTableSection
-      v-if="props.report"
-      title="导入结果"
-      :loading="false"
-      :items="resultRows"
-      :columns="resultColumns"
-      :data="resultRows"
-      empty-text="本次导入没有落库任何行"
-    >
-      <template #toolbar>
-        <div class="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">新建 {{ props.report.created }}</Badge>
-          <Badge variant="outline">更新 {{ props.report.updated }}</Badge>
-          <Button variant="link" class="h-auto p-0" @click="emit('reset')">继续导入下一批</Button>
-        </div>
-      </template>
-    </DataTableSection>
+    <div v-if="props.report" class="[&_th]:whitespace-nowrap">
+      <DataTableSection
+        title="导入结果"
+        :loading="false"
+        :items="resultRows"
+        :columns="resultColumns"
+        :data="resultRows"
+        empty-text="本次导入没有落库任何行"
+      >
+        <template #toolbar>
+          <div class="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">新建 {{ props.report.created }}</Badge>
+            <Badge variant="outline">更新 {{ props.report.updated }}</Badge>
+            <Button variant="link" class="h-auto p-0" @click="emit('reset')">继续导入下一批</Button>
+          </div>
+        </template>
+      </DataTableSection>
+    </div>
 
     <template v-if="problemRows.length > 0">
       <ErrorAlert :message="`服务端返回 ${problemRows.length} 处问题，本批未落库任何数据。`" />
-      <DataTableSection
-        title="整批被拒绝"
-        :loading="false"
-        :items="problemRows"
-        :columns="problemColumns"
-        :data="problemRows"
-        empty-text="没有问题行"
-      >
-        <template #toolbar>
-          <Button variant="outline" size="sm" @click="emit('back')">返回修改映射</Button>
-        </template>
-      </DataTableSection>
+      <div class="[&_th]:whitespace-nowrap">
+        <DataTableSection
+          title="整批被拒绝"
+          :loading="false"
+          :items="problemRows"
+          :columns="problemColumns"
+          :data="problemRows"
+          empty-text="没有问题行"
+        >
+          <template #toolbar>
+            <Button variant="outline" size="sm" @click="emit('back')">返回修改映射</Button>
+          </template>
+        </DataTableSection>
+      </div>
     </template>
   </div>
 </template>

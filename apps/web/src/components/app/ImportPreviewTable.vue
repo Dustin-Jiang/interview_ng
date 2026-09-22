@@ -96,23 +96,26 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
 </script>
 
 <template>
-  <DataTableSection
-    title="实时预览"
-    :loading="false"
-    :items="rows"
-    :columns="columns"
-    :data="rows"
-    empty-text="尚无映射结果"
-  >
-    <template #toolbar>
-      <div class="flex flex-wrap items-center gap-2">
-        <Badge variant="outline">总 {{ props.outcome.stats.total }}</Badge>
-        <Badge variant="secondary">新建 {{ props.outcome.stats.create }}</Badge>
-        <Badge variant="outline">更新 {{ props.outcome.stats.update }}</Badge>
-        <Badge :variant="props.outcome.stats.failed ? 'destructive' : 'outline'">
-          失败 {{ props.outcome.stats.failed }}
-        </Badge>
-      </div>
-    </template>
-  </DataTableSection>
+  <!-- [&_th]：表头与数据列一致地不换行（个人简介列的数据仍可换行）。 -->
+  <div class="[&_th]:whitespace-nowrap">
+    <DataTableSection
+      title="实时预览"
+      :loading="false"
+      :items="rows"
+      :columns="columns"
+      :data="rows"
+      empty-text="尚无映射结果"
+    >
+      <template #toolbar>
+        <div class="flex flex-wrap items-center gap-2">
+          <Badge variant="outline">总 {{ props.outcome.stats.total }}</Badge>
+          <Badge variant="secondary">新建 {{ props.outcome.stats.create }}</Badge>
+          <Badge variant="outline">更新 {{ props.outcome.stats.update }}</Badge>
+          <Badge :variant="props.outcome.stats.failed ? 'destructive' : 'outline'">
+            失败 {{ props.outcome.stats.failed }}
+          </Badge>
+        </div>
+      </template>
+    </DataTableSection>
+  </div>
 </template>
