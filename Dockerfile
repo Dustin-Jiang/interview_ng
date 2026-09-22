@@ -1,18 +1,17 @@
 # syntax=docker/dockerfile:1
 #
-# interview_ng 部署镜像：**前后端同一个镜像**（一个容器 = Caddy + Go 后端）。
+# interview_ng 部署镜像：**单进程、单镜像**——Go 后端同时提供 API/WS 与前端产物。
 #
 #   builder 1  web-build → Vite 产物（apps/web）
 #   builder 2  app-build → Go 静态二进制（apps/server）
-#   运行层     runtime   → caddy:2-alpine：Caddy 发静态产物，并把 /api、/ws 反代给
-#                          同容器内 127.0.0.1:8080 的 Go 进程；两个进程由
-#                          deploy/entrypoint.sh 一起拉起、一起退出（任一死即容器退出）。
+#   运行层              → alpine + 该二进制 + /srv/www 里的前端产物；
+#                          WEB_ROOT=/srv/www 让后端把静态文件一并发出去（同一端口 ⇒ 天然同源）。
+#
+# 不再需要 Caddy/nginx 之类的前置：前端请求都是相对路径（见 apps/web/src/api/http.ts 的
+# baseURL '/api' 与 apps/web/src/api/ws.ts 的 '/ws'），后端本来就监听在同一个端口上，
+# 静态与接口同源，没有第二跳。代价是不会自动压缩（见 README「部署」的说明与实测数据）。
 #
 # 构建上下文 = 仓库根：`podman compose build`（或 `podman build -t interview_ng:local .`）。
-#
-# 前端请求全部走相对路径（见 apps/web/src/api/http.ts 的 baseURL '/api' 与
-# api/ws.ts 的 '/ws'），所以必须同源——Caddy 既发静态又反代这两条前缀，
-# 与 vite dev 的 server.proxy 是同一套语义，只是把「跨容器」换成了「同容器回环」。
 
 # ---------- 前端：Vite 产物 ----------
 FROM docker.io/library/node:22-alpine AS web-build
@@ -36,21 +35,15 @@ COPY apps/server/ ./
 # 纯 Go 依赖（gin/gorm/pgx），关掉 CGO 才能落到 alpine 运行时
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/interview_ng ./cmd/server
 
-# ---------- 运行层：Caddy（静态 + 反代）+ Go 后端 ----------
-FROM docker.io/library/caddy:2-alpine AS runtime
-
-# tzdata：容器默认 UTC，装上后可用 TZ / DSN 的 TimeZone 对齐时区；
-# ca-certificates 已由 caddy 基础镜像自带（ACME 也要用），无需重复安装。
-RUN apk add --no-cache tzdata
-
+# ---------- 运行层：单进程 ----------
+FROM docker.io/library/alpine:3.22
+# ca-certificates：OIDC 的发现文档 / JWKS 走 HTTPS；tzdata：无它时 time.Local 退化成 UTC
+RUN apk add --no-cache ca-certificates tzdata \
+    && adduser -D -u 10001 app
 COPY --from=app-build /out/interview_ng /usr/local/bin/interview_ng
 COPY --from=web-build /src/apps/web/dist /srv/www
-COPY deploy/Caddyfile /etc/caddy/Caddyfile
-COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-# Go 后端只监听容器内的 127.0.0.1:8080（不对外发布），唯一入口是 Caddy 的 :80
-ENV ADDR=127.0.0.1:8080
-EXPOSE 80
-
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# WEB_ROOT：后端据此把前端产物发出去（目录里没有 index.html 时该功能自动不启用）
+ENV ADDR=:8080 WEB_ROOT=/srv/www
+USER app
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/interview_ng"]

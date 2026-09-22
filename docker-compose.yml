@@ -1,13 +1,14 @@
 # interview_ng 本地编排。两种用法：
 #   开发：只用数据库 —— `podman compose up -d postgres`（`just db` 同义）
-#   部署：完整栈 —— `JWT_SECRET=... podman compose up -d --build`，应用入口是宿主机 :8080
+#   部署：完整栈 —— `JWT_SECRET=... podman compose up -d --build`，入口是宿主机 :8080
 #
-# 应用是**单镜像**：Caddy 在 :80 发静态产物并反代 /api、/ws，Go 后端在同容器内监听
-# 回环 8080（两个进程由 deploy/entrypoint.sh 一起管）。镜像定义见根目录 Dockerfile。
+# 应用是**单进程单镜像**：一个 Go 进程同时提供 /api、/ws 与前端产物（WEB_ROOT=/srv/www），
+# 静态与接口同源、无前置 web 服务器。镜像定义见根目录 Dockerfile。
 services:
   postgres:
     image: docker.io/library/postgres:16-alpine
     userns_mode: keep-id
+    container_name: interview_ng_pg
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -17,8 +18,8 @@ services:
     volumes:
       - ./data:/var/lib/postgresql/data
     # 健康检查只作可观测性（`podman ps` 的 health 列、`podman healthcheck run`）。
-    # 注意：podman-compose 不会因它推迟依赖方的启动，就绪等待在 app 的 entrypoint 里自己做
-    # （否则首次 initdb 期间后端必然连不上而退出）。
+    # 就绪等待不靠它：后端启动时自己重试连库（DB_CONNECT_TIMEOUT，默认 60s），
+    # 否则首次 initdb 期间后端会连不上而退出（podman-compose 不会等这个健康状态）。
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d interview"]
       interval: 2s
@@ -31,6 +32,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: interview_ng:local
+    container_name: interview_ng_app
     restart: unless-stopped
     depends_on:
       - postgres
@@ -42,5 +44,5 @@ services:
       # 首次启动创建默认 admin 时用的初始密码；账号建好后改这里不再生效
       ADMIN_INIT_PASSWORD: ${ADMIN_INIT_PASSWORD:-admin}
     ports:
-      # Caddy 的 :80 映射到宿主机（rootless podman 不能绑 <1024 的端口，故不用 80）
-      - "${WEB_PORT:-8080}:80"
+      # rootless podman 不能绑 <1024 的宿主机端口，故默认 8080（容器内也是 8080）
+      - "${WEB_PORT:-8080}:8080"

@@ -73,8 +73,8 @@ podman compose up -d --build   # 部署整栈（单镜像 app + postgres），�
 
 - Go 命令**必须从 `apps/server/` 运行**，且设置 `GOCACHE="$PWD/.gopath/gocache"`（构建缓存进仓库内，已 gitignore）。推荐 `go test -race ./...`。
 - Postgres：`docker-compose.yml`（postgres:16-alpine，库 `interview`，postgres/postgres，:5432）。Schema 由 Gorm AutoMigrate 在启动时创建——**没有迁移工具**。
-- 部署：**前后端单镜像**——根 `Dockerfile`（多阶段：Vite 产物 + Go 二进制 → `caddy:2-alpine`），`deploy/` 是运行期配置（`Caddyfile` 纯 HTTP 发静态并反代 `/api`、`/ws` 到同容器回环 `127.0.0.1:8080`；`entrypoint.sh` 负责等 DB 就绪 + 两个进程同生共死）。`docker-compose.yml` 的 `app` 服务即该镜像，`postgres` 与开发共用。细节见 README「部署（容器，前后端单镜像）」。
-- 服务端环境变量：`DATABASE_DSN`、`ADDR`（默认 `:8080`）、`JWT_SECRET`（缺省 dev 值）、`ADMIN_INIT_PASSWORD`（默认 `admin`）。无开放注册。
+- 部署：**单进程单镜像**——根 `Dockerfile`（多阶段：Vite 产物 + Go 二进制 → `alpine`），运行层只有后端一个进程：`WEB_ROOT=/srv/www` 让它同时提供前端产物，静态与接口同端口、天然同源，无前置 web 服务器。后端启动时自己重试连库（`DB_CONNECT_TIMEOUT`，默认 60s），故不依赖 compose 的启动顺序/healthcheck。`docker-compose.yml` 的 `app` 服务即该镜像，`postgres` 与开发共用。细节见 README「部署（容器，单进程单镜像）」。
+- 服务端环境变量：`DATABASE_DSN`、`ADDR`（默认 `:8080`）、`JWT_SECRET`（缺省 dev 值）、`ADMIN_INIT_PASSWORD`（默认 `admin`）、`WEB_ROOT`（设置且目录内有 `index.html` 时由后端直接提供前端产物；不设则只提供 API/WS）、`DB_CONNECT_TIMEOUT`（启动时重试连库的上限，默认 60s，`0` = 不重试）。无开放注册。
 
 ## 代码约定与常见模式
 

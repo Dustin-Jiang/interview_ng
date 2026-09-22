@@ -26,9 +26,8 @@ interview_ng/
 │       │   └── components/   #   shadcn-vue UI 组件
 │       └── package.json
 ├── packages/                 # 共享包（预留）
-├── Dockerfile                # 部署镜像（前后端单镜像，多阶段）
+├── Dockerfile                # 部署镜像（单进程：后端同时提供 API/WS 与前端产物）
 ├── docker-compose.yml        # 开发用 Postgres + 部署用整栈（postgres + app）
-├── deploy/                   # 部署运行期配置（Caddyfile、单镜像入口脚本）
 ├── pnpm-workspace.yaml       # pnpm 工作区（apps/*、packages/*）
 └── package.json              # 根：聚合 build/dev/test 脚本
 ```
@@ -232,35 +231,43 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 
 ---
 
-## 部署（容器，前后端单镜像）
+## 部署（容器，单进程单镜像）
 
-`Dockerfile` 把 Vite 产物与 Go 二进制装进**同一个镜像**：Caddy 在容器内 `:80` 发静态产物，
-并把 `/api`、`/ws` 反代给**同容器**回环 `127.0.0.1:8080` 的 Go 后端；两个进程由
-`deploy/entrypoint.sh` 一起拉起、一起退出（任一退出即容器退出，交给 `restart` 策略重启）。
-纯 HTTP 部署，TLS 交给更外层（外部 LB / 反代终结 TLS 后转发到本容器 :80）。
+`Dockerfile` 把 Vite 产物与 Go 二进制装进**同一个镜像**，运行起来只有**一个进程**：
+Go 后端同时提供 `/api`、`/ws` 与前端产物（`WEB_ROOT=/srv/www`）。前端请求都走相对路径
+（`/api`、`/ws`），与静态文件同端口、天然同源，**不需要 Caddy/nginx 之类的前置**，
+也没有第二跳。纯 HTTP；要 TLS 就在更外层终结。
 
 ```bash
 export JWT_SECRET=...            # 必填：登录令牌签发密钥（没有安全缺省值）
 podman compose up -d --build     # 或 docker compose up -d --build
 # 打开 http://localhost:8080 （WEB_PORT 可换宿主机端口），默认账号 admin / admin
 
-podman compose logs -f app       # 看 Caddy + 后端日志
+podman compose logs -f app       # 后端日志（含「serving web assets from /srv/www」）
 podman compose down              # 停止（数据在 ./data，不会被删）
 
 podman build -t interview_ng:local .   # 只构建镜像
 ```
 
+`WEB_ROOT` 是唯一的开关：设了且目录里有 `index.html` 才接管静态（未命中磁盘的 GET 回落
+`index.html`，因此 `/candidates/:id`、`/settings/*` 深链刷新不 404）；不设则退化成「只提供
+API/WS」——本地开发就是这样，前端仍走 Vite :3000。
+
 要点：
 
-- **启动顺序**：入口脚本先等 Postgres 接受连接再拉起后端。compose 的 `depends_on` 只保证
-  创建顺序，而 `podman-compose` 不会等 `healthcheck` 变健康（实测 app 比 pg 首次 health
-  通过早约 15s 启动）；首次 `initdb` 期间后端连不上就会退出，故这段等待放在入口脚本里，
-  不依赖编排工具实现差异（可用 `DB_WAIT_SECONDS` 调整上限，默认 60s）。
+- **启动顺序**：后端启动时自己重试连库（`DB_CONNECT_TIMEOUT`，默认 60s，`0` = 不重试），
+  连上才继续 migrate/seed。compose 的 `depends_on` 只保证容器创建顺序，`podman-compose`
+  也不等 `healthcheck` 变健康（实测 app 比 pg 首次 health 通过早约 15s 启动），首次 `initdb`
+  期间必然连不上——所以这段等待放在进程里，不依赖编排工具的实现差异，也不依赖外层脚本。
 - **密钥**：`JWT_SECRET` 缺失时 compose 直接报错（没有安全缺省值）；`ADMIN_INIT_PASSWORD`
   只在首次创建默认 admin 时生效。
-- **端口**：只发布一个端口（默认宿主机 8080 → 容器 80）；后端的 8080 只在容器内可达。
+- **端口**：只发布一个端口（默认宿主机 8080 → 容器 8080）。
 - **数据库**：沿用开发用的 `./data` 绑定目录与同一套账号（`postgres/postgres`）。换库或改
   密码时，`DATABASE_DSN` 与 `postgres` 服务两处要同时改。
+- **缓存**：`/assets/*`（带内容哈希）回 `Cache-Control: immutable`，`index.html` 回 `no-cache`。
+- **未压缩**：后端不发 `Content-Encoding`。实测（本机、回环、HTTP/1.1）292KB 打包产物
+  gzip 后 105KB，但压缩侧吞吐从 66k rps 掉到 3.5k rps——内网部署不值得，故不做；若需要，
+  给静态路由加一个 gzip 中间件即可（约 15 行）。
 
 ---
 
