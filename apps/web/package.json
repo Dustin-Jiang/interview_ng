@@ -34,6 +34,7 @@
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
+    "vite-plugin-vue-devtools": "^8.2.1",
     "vue-sonner": "^1.2.0",
     "vue-tsc": "^2.2.0"
   }
