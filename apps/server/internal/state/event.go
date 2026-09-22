@@ -16,6 +16,7 @@ const (
 	EventCandidateDeleted EventType = "candidate_deleted" // 删除候选人（级联清房删消息）
 	EventRoomCreated      EventType = "room_created"      // 新建空房
 	EventRoomDeleted      EventType = "room_deleted"      // 删除空房
+	EventRoomRenamed      EventType = "room_renamed"      // 房间命名/改名
 	EventLeftoverBid      EventType = "leftover_bid"      // 捡漏出价变更（不含金额，跨部门保密）
 	EventLeftoverResolved EventType = "leftover_resolved" // 捡漏候选人结算（最高出价录取）
 )
@@ -36,7 +37,7 @@ type CandidateRef struct {
 	CandidateID uint64 `json:"candidate_id"`
 }
 
-// RoomRef 房间类事件（created/deleted）的载荷。
+// RoomRef 房间类事件（created/deleted/renamed）的载荷。
 type RoomRef struct {
 	RoomID uint64 `json:"room_id"`
 }
