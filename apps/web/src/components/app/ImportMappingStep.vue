@@ -159,7 +159,7 @@ async function copyColumn(header: string): Promise<void> {
         <p v-else-if="props.outcome.mapped.length === 0" class="text-sm text-muted-foreground">
           请先补全必填字段的表达式
         </p>
-        <ImportPreviewTable v-else :sheet="props.sheet" :outcome="props.outcome" />
+        <ImportPreviewTable v-else :outcome="props.outcome" />
       </CardContent>
     </Card>
   </div>
