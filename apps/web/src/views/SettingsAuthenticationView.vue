@@ -1,8 +1,8 @@
 <!--
   SettingsAuthenticationView —— 「登录认证」设置分区（users.manage）：
   单点登录（OIDC）连接参数（开关 / Issuer / 客户端 / Scopes / 回调地址 / 自动开通 + 连通性检测）
-  + 「组 → 角色」JMESPath 规则表（自上而下首个命中生效）
-  + 规则验证（粘贴 ID token 声明试算命中结果）。
+  + 「声明 → 角色」与「声明 → 部门」两张 JMESPath 规则表（各自自上而下首个命中生效）
+  + 规则验证（粘贴 ID token 声明试算两类规则的命中结果）。
   客户端密钥只写不读：界面只显示「是否已配置」，不回收明文。
   回调地址只让改**主机**：路径固定为后端回调端点（OIDC_CALLBACK_PATH），管理员无从改错。
 -->
@@ -15,7 +15,7 @@ import { useConfirmAction } from '@/composables/useConfirmAction'
 import { useOidcSettings } from '@/composables/useOidcSettings'
 import { callbackOriginOf, normalizeCallbackOrigin } from '@/domain/oidc'
 import { toastError } from '@/lib/toast'
-import type { OidcConfigPayload, OidcRulePayload } from '@/models'
+import type { OidcConfigPayload, OidcDeptRulePayload, OidcRulePayload } from '@/models'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -26,14 +26,30 @@ import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import ErrorAlert from '@/components/app/ErrorAlert.vue'
 import ListSkeleton from '@/components/app/ListSkeleton.vue'
 import OidcClaimsPreview from '@/components/app/OidcClaimsPreview.vue'
-import OidcRoleRules from '@/components/app/OidcRoleRules.vue'
+import OidcRuleTable from '@/components/app/OidcRuleTable.vue'
 import PageShell from '@/components/app/PageShell.vue'
 import RefreshButton from '@/components/app/RefreshButton.vue'
 
-const { config, roles, loading, error, saving, probing, probeResult, load, save, probe, clearSecret } =
-  useOidcSettings()
+const {
+  config,
+  roles,
+  departments,
+  loading,
+  error,
+  saving,
+  probing,
+  probeResult,
+  load,
+  save,
+  probe,
+  clearSecret,
+} = useOidcSettings()
 
 onMounted(() => void load())
+
+/** 两类规则表的目标下拉（角色 / 部门），规则里只存 id。 */
+const roleTargets = computed(() => roles.value.map((r) => ({ id: r.id, label: r.name })))
+const departmentTargets = computed(() => departments.value.map((d) => ({ id: d.id, label: d.name })))
 
 /** 回调主机默认值：控制台自身来源（后端用回调地址的主机推导登录页来源，二者必须同源）。 */
 function defaultOrigin(): string {
@@ -50,7 +66,8 @@ const form = ref({
   /** 回调地址的**主机部分**（scheme://host[:port]）；路径固定为 OIDC_CALLBACK_PATH。 */
   callback_origin: '',
   auto_provision: true,
-  rules: [] as OidcRulePayload[],
+  role_rules: [] as OidcRulePayload[],
+  department_rules: [] as OidcDeptRulePayload[],
 })
 
 // 服务端配置为准：加载/保存后重填草稿（主机取自已存回调地址，路径不参与编辑）。
@@ -66,7 +83,11 @@ watch(
       scopes: c.scopes || 'openid profile email',
       callback_origin: callbackOriginOf(c.redirect_url) || defaultOrigin(),
       auto_provision: c.auto_provision,
-      rules: c.rules.map((r) => ({ expression: r.expression, role_id: r.role_id })),
+      role_rules: c.role_rules.map((r) => ({ expression: r.expression, role_id: r.role_id })),
+      department_rules: c.department_rules.map((r) => ({
+        expression: r.expression,
+        department_id: r.department_id,
+      })),
     }
   },
   { immediate: true },
@@ -90,7 +111,8 @@ async function submit(): Promise<void> {
     // 路径固定，只换主机：拼出来的一定是后端真实回调端点。
     redirect_url: origin + OIDC_CALLBACK_PATH,
     auto_provision: form.value.auto_provision,
-    rules: form.value.rules,
+    role_rules: form.value.role_rules,
+    department_rules: form.value.department_rules,
   }
   // 省略该字段 = 保持原密钥；清空请用「清除密钥」。
   if (form.value.client_secret) payload.client_secret = form.value.client_secret
@@ -233,13 +255,37 @@ const {
         </CardContent>
       </Card>
 
-      <!-- 角色规则 -->
+      <!-- 角色规则：未命中即拒绝登录 -->
       <Card>
         <CardHeader>
           <CardTitle class="text-base">角色规则</CardTitle>
         </CardHeader>
         <CardContent>
-          <OidcRoleRules v-model:rules="form.rules" :roles="roles" />
+          <OidcRuleTable
+            v-model:rules="form.role_rules"
+            :targets="roleTargets"
+            target-label="角色"
+            empty-text="暂无规则，匹配不到规则的用户将被拒绝登录"
+            :target-of="(r) => r.role_id"
+            :make-rule="(expression, id) => ({ expression, role_id: id })"
+          />
+        </CardContent>
+      </Card>
+
+      <!-- 部门规则：未命中不拒绝登录，只是不改动账号现有部门 -->
+      <Card>
+        <CardHeader>
+          <CardTitle class="text-base">部门规则</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <OidcRuleTable
+            v-model:rules="form.department_rules"
+            :targets="departmentTargets"
+            target-label="部门"
+            empty-text="暂无规则，登录不会改变账号现有部门"
+            :target-of="(r) => r.department_id"
+            :make-rule="(expression, id) => ({ expression, department_id: id })"
+          />
         </CardContent>
       </Card>
 
@@ -249,7 +295,12 @@ const {
           <CardTitle class="text-base">规则验证</CardTitle>
         </CardHeader>
         <CardContent class="grid gap-3">
-          <OidcClaimsPreview :rules="form.rules" :roles="roles" />
+          <OidcClaimsPreview
+            :role-rules="form.role_rules"
+            :department-rules="form.department_rules"
+            :roles="roleTargets"
+            :departments="departmentTargets"
+          />
         </CardContent>
       </Card>
     </template>

@@ -1,16 +1,17 @@
 <!--
-  OidcRoleRules —— 「组 → 角色」映射规则表（受控组件：rules 通过 v-model:rules 双向绑定）。
+  OidcRuleTable —— OIDC 映射规则表（「组 → 角色」与「组 → 部门」共用；受控组件：v-model:rules）。
   语义：自上而下逐条求值 JMESPath 表达式，首个命中生效（优先级即行序）；
   上移/下移直接重排数组（保存时下标即 position）。
+  两类规则只差「目标」字段名（role_id / department_id），故存取由调用方的
+  targetOf / makeRule 提供，本组件不关心具体字段名。
 -->
-<script setup lang="ts">
-import { computed, h, ref } from 'vue'
+<script setup lang="ts" generic="T extends { expression: string }">
+import { computed, h, ref, useId } from 'vue'
 import { toast } from 'vue-sonner'
 import { ArrowDown, ArrowUp, Plus, ShieldCheck } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useConfirmAction } from '@/composables/useConfirmAction'
-import type { OidcRulePayload, Role } from '@/models'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -22,20 +23,32 @@ import DataTableSection from '@/components/app/DataTableSection.vue'
 import FormDialog from '@/components/app/FormDialog.vue'
 
 const props = defineProps<{
-  rules: OidcRulePayload[]
-  roles: readonly Role[]
+  rules: T[]
+  /** 可选目标（角色 / 部门）列表：id 存进规则，label 用于展示与下拉。 */
+  targets: readonly { id: number; label: string }[]
+  /** 目标字段的显示名（「角色」/「部门」）。 */
+  targetLabel: string
+  /** 空表提示语（两类规则的后果不同，由调用方给定）。 */
+  emptyText: string
+  /** 读一条规则的目标 id。 */
+  targetOf: (rule: T) => number
+  /** 由表达式与目标 id 造一条规则。 */
+  makeRule: (expression: string, targetId: number) => T
 }>()
 
 const emit = defineEmits<{
-  'update:rules': [rules: OidcRulePayload[]]
+  'update:rules': [rules: T[]]
 }>()
 
-function roleName(id: number): string {
-  return props.roles.find((r) => r.id === id)?.name ?? '未知角色'
+/** 同一页可能挂两个规则表，表单控件 id 必须唯一（否则 Label 的 for 会指向另一个表的输入框）。 */
+const fieldId = useId()
+
+function targetName(id: number): string {
+  return props.targets.find((t) => t.id === id)?.label ?? `未知${props.targetLabel}`
 }
 
 /** 上移/下移：交换相邻两条（首/末行按钮禁用）。 */
-function move(rule: OidcRulePayload, delta: number): void {
+function move(rule: T, delta: number): void {
   const next = [...props.rules]
   const from = next.indexOf(rule)
   const to = from + delta
@@ -50,7 +63,7 @@ const {
   request: requestDelete,
   onOpenChange: onDeleteOpenChange,
   confirm: confirmDelete,
-} = useConfirmAction<OidcRulePayload>({
+} = useConfirmAction<T>({
   action: async (rule) => {
     emit(
       'update:rules',
@@ -64,29 +77,29 @@ const {
 const dialogOpen = ref(false)
 /** 编辑中的行下标；null = 新增（追加到末尾）。 */
 const editingIndex = ref<number | null>(null)
-const form = ref({ expression: '', roleId: '' })
+const form = ref({ expression: '', targetId: '' })
 
 function openCreate(): void {
   editingIndex.value = null
-  form.value = { expression: '', roleId: '' }
+  form.value = { expression: '', targetId: '' }
   dialogOpen.value = true
 }
 
 function openEdit(index: number): void {
   const rule = props.rules[index]
   editingIndex.value = index
-  form.value = { expression: rule.expression, roleId: String(rule.role_id) }
+  form.value = { expression: rule.expression, targetId: String(props.targetOf(rule)) }
   dialogOpen.value = true
 }
 
 function submit(): void {
   const expression = form.value.expression.trim()
-  const roleId = Number(form.value.roleId)
-  if (!expression || !roleId) {
-    toast.error('请填写表达式并选择角色')
+  const targetId = Number(form.value.targetId)
+  if (!expression || !targetId) {
+    toast.error(`请填写表达式并选择${props.targetLabel}`)
     return
   }
-  const rule: OidcRulePayload = { expression, role_id: roleId }
+  const rule = props.makeRule(expression, targetId)
   const next = [...props.rules]
   if (editingIndex.value === null) next.push(rule)
   else next[editingIndex.value] = rule
@@ -95,7 +108,7 @@ function submit(): void {
 }
 
 // ---- DataTable 列定义 ----
-const helper = createColumnHelper<DataTableFeatures, OidcRulePayload>()
+const helper = createColumnHelper<DataTableFeatures, T>()
 
 const colPosition = helper.display({
   id: 'position',
@@ -103,16 +116,19 @@ const colPosition = helper.display({
   enableSorting: false,
   cell: ({ row }) => h('div', { class: 'tabular-nums text-muted-foreground' }, String(row.index + 1)),
 })
-const colExpression = helper.accessor('expression', {
+// 表达式列用**取值函数**而非字段名：字段名重载要求 `'expression'` 是具体类型的键，
+// 泛型 T 在组件内部尚未解析（TS 只能确认 `T extends { expression: string }`）。
+const colExpression = helper.accessor((row: T) => row.expression, {
+  id: 'expression',
   header: 'JMESPath 表达式',
   enableSorting: false,
   cell: ({ getValue }) => h('code', { class: 'font-mono text-xs break-all' }, getValue()),
 })
-const colRole = helper.display({
-  id: 'role',
-  header: '角色',
+const colTarget = helper.display({
+  id: 'target',
+  header: props.targetLabel,
   enableSorting: false,
-  cell: ({ row }) => h('div', { class: 'whitespace-nowrap' }, roleName(row.original.role_id)),
+  cell: ({ row }) => h('div', { class: 'whitespace-nowrap' }, targetName(props.targetOf(row.original))),
 })
 const colActions = helper.display({
   id: 'actions',
@@ -156,8 +172,8 @@ const colActions = helper.display({
     ]),
 })
 
-const columns = computed<ColumnDef<DataTableFeatures, OidcRulePayload>[]>(
-  () => [colPosition, colExpression, colRole, colActions] as ColumnDef<DataTableFeatures, OidcRulePayload>[],
+const columns = computed<ColumnDef<DataTableFeatures, T>[]>(
+  () => [colPosition, colExpression, colTarget, colActions] as ColumnDef<DataTableFeatures, T>[],
 )
 </script>
 
@@ -168,7 +184,7 @@ const columns = computed<ColumnDef<DataTableFeatures, OidcRulePayload>[]>(
       :items="props.rules"
       :columns="columns"
       :data="props.rules"
-      empty-text="暂无规则，匹配不到规则的用户将被拒绝登录"
+      :empty-text="props.emptyText"
       :empty-icon="ShieldCheck"
       :skeleton-rows="2"
     >
@@ -185,27 +201,27 @@ const columns = computed<ColumnDef<DataTableFeatures, OidcRulePayload>[]>(
     :open="dialogOpen"
     :title="editingIndex === null ? '新增规则' : '编辑规则'"
     size="md"
-    :submit-disabled="!form.expression.trim() || !form.roleId"
+    :submit-disabled="!form.expression.trim() || !form.targetId"
     @update:open="dialogOpen = $event"
     @submit="submit"
   >
     <div class="grid gap-2">
-      <Label for="rule-expression">JMESPath 表达式</Label>
+      <Label :for="`${fieldId}-expression`">JMESPath 表达式</Label>
       <Input
-        id="rule-expression"
+        :id="`${fieldId}-expression`"
         v-model="form.expression"
         placeholder="groups[?starts_with(@, 'interview-')] | [0]"
         class="font-mono text-xs"
       />
     </div>
     <div class="grid gap-2">
-      <Label for="rule-role">角色</Label>
-      <Select :model-value="form.roleId" @update:model-value="form.roleId = String($event)">
-        <SelectTrigger id="rule-role" class="w-full">
-          <SelectValue placeholder="选择角色" />
+      <Label :for="`${fieldId}-target`">{{ props.targetLabel }}</Label>
+      <Select :model-value="form.targetId" @update:model-value="form.targetId = String($event)">
+        <SelectTrigger :id="`${fieldId}-target`" class="w-full">
+          <SelectValue :placeholder="`选择${props.targetLabel}`" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem v-for="r in props.roles" :key="r.id" :value="String(r.id)">{{ r.name }}</SelectItem>
+          <SelectItem v-for="t in props.targets" :key="t.id" :value="String(t.id)">{{ t.label }}</SelectItem>
         </SelectContent>
       </Select>
     </div>

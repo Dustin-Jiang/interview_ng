@@ -1,16 +1,18 @@
 /**
  * useOidcSettings —— 登录认证（OIDC）设置的组合式函数（函数式 ViewModel）。
- * 资源：配置（GET /oidc/config）+ 角色名单（GET /roles，规则的目标角色下拉）；
+ * 资源：配置（GET /oidc/config）+ 角色名单（GET /roles）+ 部门名单（GET /departments）
+ * ——后两者是两类规则的目标下拉；
  * 写入：整体保存（PUT /oidc/config）、连通性探测（POST /oidc/probes）、清除已存密钥。
  */
 import { computed, ref, type Ref } from 'vue'
-import { oidcApi, roleApi } from '@/api/http'
+import { departmentApi, oidcApi, roleApi } from '@/api/http'
 import { useAsync } from '@/composables/useAsync'
-import type { OidcConfig, OidcConfigPayload, OidcProbeResult, Role } from '@/models'
+import type { Department, OidcConfig, OidcConfigPayload, OidcProbeResult, Role } from '@/models'
 
 export interface UseOidcSettings {
   readonly config: Ref<OidcConfig | null>
   readonly roles: Ref<readonly Role[]>
+  readonly departments: Ref<readonly Department[]>
   readonly loading: Ref<boolean>
   readonly error: Ref<string | null>
   readonly saving: Ref<boolean>
@@ -27,6 +29,7 @@ export interface UseOidcSettings {
 export function useOidcSettings(): UseOidcSettings {
   const configAsync = useAsync(() => oidcApi.config())
   const roleAsync = useAsync(() => roleApi.list())
+  const departmentAsync = useAsync(() => departmentApi.list())
 
   const saving = ref(false)
   const probing = ref(false)
@@ -34,11 +37,14 @@ export function useOidcSettings(): UseOidcSettings {
 
   const config = computed<OidcConfig | null>(() => configAsync.data.value)
   const roles = computed<readonly Role[]>(() => roleAsync.data.value?.items ?? [])
-  const loading = computed(() => configAsync.loading.value || roleAsync.loading.value)
-  const error = computed(() => configAsync.error.value ?? roleAsync.error.value)
+  const departments = computed<readonly Department[]>(() => departmentAsync.data.value?.items ?? [])
+  const loading = computed(
+    () => configAsync.loading.value || roleAsync.loading.value || departmentAsync.loading.value,
+  )
+  const error = computed(() => configAsync.error.value ?? roleAsync.error.value ?? departmentAsync.error.value)
 
   async function load(): Promise<void> {
-    await Promise.all([configAsync.run(), roleAsync.run()])
+    await Promise.all([configAsync.run(), roleAsync.run(), departmentAsync.run()])
   }
 
   async function save(payload: OidcConfigPayload): Promise<void> {
@@ -72,9 +78,26 @@ export function useOidcSettings(): UseOidcSettings {
       scopes: current.scopes,
       redirect_url: current.redirect_url,
       auto_provision: current.auto_provision,
-      rules: current.rules.map((r) => ({ expression: r.expression, role_id: r.role_id })),
+      role_rules: current.role_rules.map((r) => ({ expression: r.expression, role_id: r.role_id })),
+      department_rules: current.department_rules.map((r) => ({
+        expression: r.expression,
+        department_id: r.department_id,
+      })),
     })
   }
 
-  return { config, roles, loading, error, saving, probing, probeResult, load, save, probe, clearSecret }
+  return {
+    config,
+    roles,
+    departments,
+    loading,
+    error,
+    saving,
+    probing,
+    probeResult,
+    load,
+    save,
+    probe,
+    clearSecret,
+  }
 }

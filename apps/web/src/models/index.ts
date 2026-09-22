@@ -202,6 +202,14 @@ export interface OidcRule {
   role_id: number
 }
 
+/** 一条「组 → 部门」映射规则：命中即把账号所属部门设为 department_id（未命中则不改动）。 */
+export interface OidcDeptRule {
+  id: number
+  position: number
+  expression: string
+  department_id: number
+}
+
 /** OIDC 配置（GET /oidc/config；明文客户端密钥永不下发，只回 client_secret_set）。 */
 export interface OidcConfig {
   id: number
@@ -212,7 +220,8 @@ export interface OidcConfig {
   scopes: string
   redirect_url: string
   auto_provision: boolean
-  rules: OidcRule[]
+  role_rules: OidcRule[]
+  department_rules: OidcDeptRule[]
   updated_at: string
 }
 
@@ -220,6 +229,12 @@ export interface OidcConfig {
 export interface OidcRulePayload {
   expression: string
   role_id: number
+}
+
+/** 保存态的部门规则（同上）。 */
+export interface OidcDeptRulePayload {
+  expression: string
+  department_id: number
 }
 
 /** PUT /oidc/config 请求体。 */
@@ -232,7 +247,8 @@ export interface OidcConfigPayload {
   scopes: string
   redirect_url: string
   auto_provision: boolean
-  rules: OidcRulePayload[]
+  role_rules: OidcRulePayload[]
+  department_rules: OidcDeptRulePayload[]
 }
 
 /** 登录页可用的登录方式（GET /authentication，公共接口）。 */

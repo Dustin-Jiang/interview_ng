@@ -1,5 +1,6 @@
 /**
- * OIDC 组→角色规则的浏览器侧编译与试算（domain 层：纯函数，无请求、无 UI 状态）。
+ * OIDC 映射规则的浏览器侧编译与试算（domain 层：纯函数，无请求、无 UI 状态）。
+ * 角色规则与部门规则共用本模块：入参只要求 `{ expression }`，目标 id 字段由调用方自行解读。
  *
  * 与后端 `internal/oidcauth` 的求值语义保持一致：按顺序逐条求值、首个命中生效；
  * 命中的判定为「结果非 null、非 false、非空串、非空数组、非空对象」——数字（含 0）算命中。
@@ -10,21 +11,24 @@
 import { compile, TreeInterpreter } from '@jmespath-community/jmespath'
 import type { JSONValue } from '@jmespath-community/jmespath'
 
-import type { OidcRulePayload } from '@/models'
+/** 规则的最小形状：两类规则都满足（目标 id 字段名不同，由调用方读）。 */
+export interface OidcRuleLike {
+  expression: string
+}
 
 /** 编译后的规则：`position` 为规则在列表中的原始下标（0 起，展示为第 N 条）。 */
-export interface CompiledRule {
-  rule: OidcRulePayload
+export interface CompiledRule<T extends OidcRuleLike = OidcRuleLike> {
+  rule: T
   node: Parameters<typeof TreeInterpreter.search>[0]
   position: number
 }
 
 /** 编译规则表达式；返回成功编译的规则与逐条错误（键为规则下标，0 起）。 */
-export function compileRules(rules: readonly OidcRulePayload[]): {
-  compiled: CompiledRule[]
+export function compileRules<T extends OidcRuleLike>(rules: readonly T[]): {
+  compiled: CompiledRule<T>[]
   errors: Record<number, string>
 } {
-  const compiled: CompiledRule[] = []
+  const compiled: CompiledRule<T>[] = []
   const errors: Record<number, string> = {}
   rules.forEach((rule, position) => {
     const expression = rule.expression.trim()
@@ -65,11 +69,11 @@ export function isRuleHit(result: unknown): boolean {
   return true
 }
 
-/** 与后端 MatchRole 同语义：首个命中返回其规则与序号（1 起）；无命中 → null。 */
-export function matchRule(
-  compiled: readonly CompiledRule[],
+/** 与后端 match 同语义：首个命中返回其规则与序号（1 起）；无命中 → null。 */
+export function matchRule<T extends OidcRuleLike>(
+  compiled: readonly CompiledRule<T>[],
   claims: JSONValue,
-): { index: number; rule: OidcRulePayload } | null {
+): { index: number; rule: T } | null {
   for (const item of compiled) {
     if (isRuleHit(TreeInterpreter.search(item.node, claims))) {
       return { index: item.position + 1, rule: item.rule }

@@ -9,7 +9,7 @@ export const OIDC_ERROR_MESSAGES: Record<string, string> = {
   oidc_exchange_failed: '身份提供方拒绝了本次登录',
   oidc_nonce_invalid: '登录校验失败，请重新发起',
   oidc_claims_invalid: '身份提供方返回的凭据无法识别',
-  oidc_rule_eval_failed: '没有登录权限：账号信息未匹配到角色规则，请联系管理员',
+  oidc_rule_eval_failed: '没有登录权限：账号信息不满足登录规则，请联系管理员',
   oidc_role_unmapped: '没有登录权限：账号未匹配到任何角色，请联系管理员',
   oidc_user_unknown: '账号尚未开通，请联系管理员',
   oidc_username_taken: '用户名已被占用，请联系管理员',
