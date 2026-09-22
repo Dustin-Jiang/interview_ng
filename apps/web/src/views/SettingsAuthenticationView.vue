@@ -1,7 +1,8 @@
 <!--
   SettingsAuthenticationView —— 「登录认证」设置分区（users.manage）：
   单点登录（OIDC）连接参数（开关 / Issuer / 客户端 / Scopes / 回调地址 / 自动开通 + 连通性检测）
-  + 「声明 → 角色」与「声明 → 部门」两张 JMESPath 规则表（各自自上而下首个命中生效）
+  + 「声明 → 角色」与「声明 → 部门」两张 JMESPath 规则表（各自自上而下首个命中生效；
+  规则改动**即时落库**，连接参数仍走卡片里的「保存」）
   + 规则验证（粘贴 ID token 声明试算两类规则的命中结果）。
   客户端密钥只写不读：界面只显示「是否已配置」，不回收明文。
   回调地址只让改**主机**：路径固定为后端回调端点（OIDC_CALLBACK_PATH），管理员无从改错。
@@ -15,7 +16,7 @@ import { useConfirmAction } from '@/composables/useConfirmAction'
 import { useOidcSettings } from '@/composables/useOidcSettings'
 import { callbackOriginOf, normalizeCallbackOrigin } from '@/domain/oidc'
 import { toastError } from '@/lib/toast'
-import type { OidcConfigPayload, OidcDeptRulePayload, OidcRulePayload } from '@/models'
+import type { OidcConfig, OidcConfigPayload, OidcDeptRulePayload, OidcRulePayload } from '@/models'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -95,13 +96,51 @@ const secretPlaceholder = computed(() =>
   config.value?.client_secret_set ? '已配置（留空则不修改）' : '客户端密钥（公开客户端可留空）',
 )
 
+/** 由「已保存的配置」组装 PUT 体（PUT 是整体覆盖，缺省值即服务端现值；客户端密钥省略 = 保持）。 */
+function payloadOf(cfg: OidcConfig, overrides: Partial<OidcConfigPayload> = {}): OidcConfigPayload {
+  return {
+    enabled: cfg.enabled,
+    issuer: cfg.issuer,
+    client_id: cfg.client_id,
+    scopes: cfg.scopes,
+    redirect_url: cfg.redirect_url,
+    auto_provision: cfg.auto_provision,
+    role_rules: cfg.role_rules.map((r) => ({ expression: r.expression, role_id: r.role_id })),
+    department_rules: cfg.department_rules.map((r) => ({
+      expression: r.expression,
+      department_id: r.department_id,
+    })),
+    ...overrides,
+  }
+}
+
+/**
+ * 规则表改动**即时落库**：规则卡片没有自己的保存按钮，新增/编辑/删除/调序若只改草稿，
+ * 加完规则会以为已经存下了（实际还得回上方的连接参数卡片点「保存」）。
+ * 只覆盖被改动的规则数组——不顺手把连接参数里未保存的编辑一起写进去。
+ */
+async function persistRules(
+  overrides: Partial<Pick<OidcConfigPayload, 'role_rules' | 'department_rules'>>,
+): Promise<void> {
+  const cfg = config.value
+  if (!cfg) return
+  try {
+    await save(payloadOf(cfg, overrides))
+    toast.success('规则已保存')
+  } catch (e) {
+    toastError(e)
+  }
+}
+
 async function submit(): Promise<void> {
+  const cfg = config.value
   const origin = normalizeCallbackOrigin(form.value.callback_origin)
+  if (!cfg) return
   if (!origin) {
     toast.error('回调地址需以 http:// 或 https:// 开头，例如 https://interview.example.com')
     return
   }
-  const payload: OidcConfigPayload = {
+  const payload = payloadOf(cfg, {
     enabled: form.value.enabled,
     issuer: form.value.issuer.trim(),
     client_id: form.value.client_id.trim(),
@@ -111,7 +150,7 @@ async function submit(): Promise<void> {
     auto_provision: form.value.auto_provision,
     role_rules: form.value.role_rules,
     department_rules: form.value.department_rules,
-  }
+  })
   // 省略该字段 = 保持原密钥；清空请用「清除密钥」。
   if (form.value.client_secret) payload.client_secret = form.value.client_secret
   try {
@@ -264,6 +303,7 @@ const {
             empty-text="暂无规则，匹配不到规则的用户将被拒绝登录"
             :target-of="(r) => r.role_id"
             :make-rule="(expression, id) => ({ expression, role_id: id })"
+            @update:rules="persistRules({ role_rules: $event })"
           />
         </CardContent>
       </Card>
@@ -281,6 +321,7 @@ const {
             empty-text="暂无规则，登录不会改变账号现有部门"
             :target-of="(r) => r.department_id"
             :make-rule="(expression, id) => ({ expression, department_id: id })"
+            @update:rules="persistRules({ department_rules: $event })"
           />
         </CardContent>
       </Card>
