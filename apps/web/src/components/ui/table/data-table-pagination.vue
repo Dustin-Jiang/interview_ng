@@ -10,6 +10,10 @@ const props = defineProps<{ table: VueTable<DataTableFeatures, any> }>()
 
 // 原子读需在响应式作用域（computed）内，模板中直接调用亦可。
 const pagination = computed(() => props.table.atoms.pagination.get())
+
+// 空表（筛选后 0 行）总页数为 0，按 1 页展示，避免出现「第 1 / 0 页」。
+const pageCount = computed(() => Math.max(props.table.getPageCount(), 1))
+const currentPage = computed(() => Math.min(pagination.value.pageIndex + 1, pageCount.value))
 </script>
 
 <template>
@@ -33,7 +37,7 @@ const pagination = computed(() => props.table.atoms.pagination.get())
         </SelectContent>
       </Select>
       <span class="text-sm font-medium">
-        第 {{ pagination.pageIndex + 1 }} / {{ table.getPageCount() }} 页
+        第 {{ currentPage }} / {{ pageCount }} 页
       </span>
       <Button
         variant="outline"
