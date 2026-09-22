@@ -14,7 +14,6 @@ export interface UseOidcSettings {
   readonly roles: Ref<readonly Role[]>
   readonly departments: Ref<readonly Department[]>
   readonly loading: Ref<boolean>
-  readonly error: Ref<string | null>
   readonly saving: Ref<boolean>
   readonly probing: Ref<boolean>
   readonly probeResult: Ref<OidcProbeResult | null>
@@ -41,7 +40,6 @@ export function useOidcSettings(): UseOidcSettings {
   const loading = computed(
     () => configAsync.loading.value || roleAsync.loading.value || departmentAsync.loading.value,
   )
-  const error = computed(() => configAsync.error.value ?? roleAsync.error.value ?? departmentAsync.error.value)
 
   async function load(): Promise<void> {
     await Promise.all([configAsync.run(), roleAsync.run(), departmentAsync.run()])
@@ -91,7 +89,6 @@ export function useOidcSettings(): UseOidcSettings {
     roles,
     departments,
     loading,
-    error,
     saving,
     probing,
     probeResult,

@@ -23,7 +23,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Spinner } from '@/components/ui/spinner'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
-import ErrorAlert from '@/components/app/ErrorAlert.vue'
 import ListSkeleton from '@/components/app/ListSkeleton.vue'
 import OidcClaimsPreview from '@/components/app/OidcClaimsPreview.vue'
 import OidcRuleTable from '@/components/app/OidcRuleTable.vue'
@@ -35,7 +34,6 @@ const {
   roles,
   departments,
   loading,
-  error,
   saving,
   probing,
   probeResult,
@@ -152,8 +150,6 @@ const {
     <template #actions>
       <RefreshButton label="刷新登录认证配置" :loading="loading" @click="load" />
     </template>
-
-    <ErrorAlert v-if="error" :message="`配置加载失败：${error}`" retry-label="重试" @retry="load" />
 
     <ListSkeleton v-if="loading && !config" :rows="2" item-class="h-40 w-full rounded-xl" class="space-y-4" />
 
