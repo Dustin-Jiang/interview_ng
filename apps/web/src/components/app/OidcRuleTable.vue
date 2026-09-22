@@ -178,24 +178,23 @@ const columns = computed<ColumnDef<DataTableFeatures, T>[]>(
 </script>
 
 <template>
-  <div class="[&_th]:whitespace-nowrap">
-    <DataTableSection
-      :loading="false"
-      :items="props.rules"
-      :columns="columns"
-      :data="props.rules"
-      :empty-text="props.emptyText"
-      :empty-icon="ShieldCheck"
-      :skeleton-rows="2"
-    >
-      <template #toolbar>
-        <Button size="sm" @click="openCreate">
-          <Plus aria-hidden="true" />
-          新增规则
-        </Button>
-      </template>
-    </DataTableSection>
-  </div>
+  <DataTableSection
+    nowrap-headers
+    :loading="false"
+    :items="props.rules"
+    :columns="columns"
+    :data="props.rules"
+    :empty-text="props.emptyText"
+    :empty-icon="ShieldCheck"
+    :skeleton-rows="2"
+  >
+    <template #toolbar>
+      <Button size="sm" @click="openCreate">
+        <Plus aria-hidden="true" />
+        新增规则
+      </Button>
+    </template>
+  </DataTableSection>
 
   <FormDialog
     :open="dialogOpen"

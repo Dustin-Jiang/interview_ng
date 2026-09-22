@@ -167,33 +167,32 @@ const columns: ColumnDef<DataTableFeatures, PreviewRow>[] = columnHelper.columns
 </script>
 
 <template>
-  <!-- [&_th]：表头与数据列一致地不换行（个人简介列的数据仍可换行）。 -->
-  <div class="[&_th]:whitespace-nowrap">
-    <DataTableSection
-      title="预览"
-      :loading="false"
-      :items="allRows"
-      :columns="columns"
-      :data="rows"
-      empty-text="尚无映射结果"
-    >
-      <template #toolbar>
-        <!-- 标签即筛选：点击只看该类行，再点一次回到「总」（aria-pressed 表达选中态）。 -->
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            v-for="option in filterOptions"
-            :key="option.key"
-            type="button"
-            class="rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            :aria-pressed="filter === option.key"
-            @click="toggleFilter(option.key)"
-          >
-            <Badge :variant="option.variant" :class="cn(filter === option.key && 'ring-2 ring-ring')">
-              {{ option.label }} {{ option.count }}
-            </Badge>
-          </button>
-        </div>
-      </template>
-    </DataTableSection>
-  </div>
+  <!-- 表头与数据列一致地不换行（个人简介列的数据仍可换行）。 -->
+  <DataTableSection
+    title="预览"
+    nowrap-headers
+    :loading="false"
+    :items="allRows"
+    :columns="columns"
+    :data="rows"
+    empty-text="尚无映射结果"
+  >
+    <template #toolbar>
+      <!-- 标签即筛选：点击只看该类行，再点一次回到「总」（aria-pressed 表达选中态）。 -->
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          v-for="option in filterOptions"
+          :key="option.key"
+          type="button"
+          class="rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          :aria-pressed="filter === option.key"
+          @click="toggleFilter(option.key)"
+        >
+          <Badge :variant="option.variant" :class="cn(filter === option.key && 'ring-2 ring-ring')">
+            {{ option.label }} {{ option.count }}
+          </Badge>
+        </button>
+      </div>
+    </template>
+  </DataTableSection>
 </template>

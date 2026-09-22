@@ -11,6 +11,7 @@ import DataTable from '@/components/ui/table/data-table.vue'
 import type { DataTableFeatures } from '@/components/ui/table/features'
 import EmptyState from '@/components/app/EmptyState.vue'
 import ListSkeleton from '@/components/app/ListSkeleton.vue'
+import { cn } from '@/lib/utils'
 
 const props = withDefaults(
   defineProps<{
@@ -24,12 +25,15 @@ const props = withDefaults(
     emptyIcon?: Component
     /** 区块标题（省略则不输出标题行）。 */
     title?: string
+    /** 表头不换行（各列内容 nowrap + 容器横向滚动）。 */
+    nowrapHeaders?: boolean
     skeletonRows?: number
     skeletonItemClass?: string
   }>(),
   {
     emptyIcon: undefined,
     title: '',
+    nowrapHeaders: false,
     skeletonRows: 5,
     skeletonItemClass: 'h-12 w-full rounded-md',
   },
@@ -37,7 +41,7 @@ const props = withDefaults(
 </script>
 
 <template>
-  <div class="space-y-3">
+  <div :class="cn('space-y-3', props.nowrapHeaders && '[&_th]:whitespace-nowrap')">
     <div v-if="props.title || $slots.toolbar" class="flex flex-wrap items-center justify-between gap-3">
       <h2 v-if="props.title" class="text-sm font-semibold">{{ props.title }}</h2>
       <slot name="toolbar" />
