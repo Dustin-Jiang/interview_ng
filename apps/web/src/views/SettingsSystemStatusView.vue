@@ -182,7 +182,8 @@ function deptLabelOf(departmentId: number): string {
   return previewDepartments.value.find((d) => d.id === departmentId)?.name ?? `部门#${departmentId}`
 }
 
-// ---- DataTable 列定义：候选人 + 各部门决定（动态列）+ 汇总结论 ----
+// ---- DataTable 列定义：候选人 + 各部门决定（动态列）+ 竞拍情况 + 汇总结论 ----
+// 竞拍情况紧挨「录取情况 / 预览录取结果」：右端两列构成「出价 → 结果」的因果配对。
 const previewColumnHelper = createColumnHelper<DataTableFeatures, AdmissionPreviewRow>()
 
 const previewColumns = computed(() =>
@@ -191,6 +192,16 @@ const previewColumns = computed(() =>
       header: '候选人',
       cell: ({ getValue }) => h('div', { class: 'font-medium' }, getValue()),
     }),
+    ...previewDepartments.value.map((d, i) =>
+      previewColumnHelper.display({
+        id: `dept-${d.id}`,
+        header: d.name,
+        cell: ({ row }) => {
+          const p = ADMISSION_PRESENTATION[row.original.statuses[i]]
+          return h(Badge, { variant: p.badge }, () => p.label)
+        },
+      }),
+    ),
     ...(inAuctionPhase.value
       ? [
           previewColumnHelper.display({
@@ -201,7 +212,7 @@ const previewColumns = computed(() =>
               if (!list.length) return h('span', { class: 'text-muted-foreground' }, '无出价')
               return h(
                 'div',
-                { class: 'flex flex-wrap items-center gap-1' },
+                { class: 'flex items-center gap-1' },
                 list.map((b, i) =>
                   h(
                     Badge,
@@ -214,16 +225,6 @@ const previewColumns = computed(() =>
           }),
         ]
       : []),
-    ...previewDepartments.value.map((d, i) =>
-      previewColumnHelper.display({
-        id: `dept-${d.id}`,
-        header: d.name,
-        cell: ({ row }) => {
-          const p = ADMISSION_PRESENTATION[row.original.statuses[i]]
-          return h(Badge, { variant: p.badge }, () => p.label)
-        },
-      }),
-    ),
     previewColumnHelper.display({
       id: 'outcome',
       header: inAuctionPhase.value ? '预览录取结果' : '录取情况',
@@ -232,11 +233,11 @@ const previewColumns = computed(() =>
         // 无出价 → 回退到决定矩阵推出的结论。
         const final = finalsByCandidate.value.get(row.original.candidateId)
         if (inAuctionPhase.value && final) {
-          return h('div', { class: 'flex flex-wrap items-center gap-1' }, [
+          return h('div', { class: 'flex items-center gap-1' }, [
             h(
               Badge,
               { variant: 'default' },
-              () => `录取到 ${deptLabelOf(final.department_id)} · ${final.amount}`,
+              () => `${deptLabelOf(final.department_id)}`,
             ),
             ...(final.resolved ? [h(Badge, { variant: 'outline' }, () => '已结算')] : []),
           ])
@@ -383,7 +384,10 @@ onMounted(() => void load())
           暂无候选人
         </EmptyState>
 
-        <DataTable v-else :columns="previewColumns" :data="previewRows" />
+        <!-- 表头与单元格一律不换行：列多时由 DataTable 自身的横向滚动容器承载（默认 w-full 会把内容压到折行） -->
+        <div v-else class="[&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
+          <DataTable :columns="previewColumns" :data="previewRows" />
+        </div>
       </div>
     </template>
 
