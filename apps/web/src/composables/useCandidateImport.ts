@@ -3,7 +3,7 @@
  *
  * 三步状态机：① 选文件 → ② 字段映射 + 实时预览 → ③ 确认与提交；
  * 只允许回退（保留已选文件与已填映射），不可跳步；映射表达式输入 300ms 防抖后重算预览。
- * 解析与映射是 domain 层的纯函数，这里只负责流程、请求与持久化（预设）。
+ * 解析与映射是 domain 层的纯函数，这里只负责流程、请求与持久化（自动记住最后一次映射表达式）。
  */
 import { computed, onScopeDispose, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { toast } from 'vue-sonner'
@@ -19,14 +19,15 @@ import {
   type CandidateImportFieldKey,
   type CandidateImportMapping,
   type ImportOutcome,
-  type ImportPreset,
   type ImportSheet,
 } from '@/domain/import'
 import { toastError } from '@/lib/toast'
 import type { CandidateImportReport, CandidateImportRowError } from '@/models'
 
-/** 命名预设的本地存储键（前端偏好，不入库）。 */
-const PRESET_KEY = 'interview_ng_import_presets'
+/** 最后一次映射表达式的本地存储键（前端偏好，不入库）。 */
+const MAPPING_KEY = 'interview_ng_import_mapping'
+/** 已移除的命名预设键（历史数据，读到即清理）。 */
+const LEGACY_PRESET_KEY = 'interview_ng_import_presets'
 /** 拉取既有候选人的分页大小（服务端单页上限 200）。 */
 const PAGE_SIZE = 200
 /** 表达式输入防抖（与列表刷新同一档位）。 */
@@ -48,7 +49,6 @@ export interface UseCandidateImport {
   /** 既有学号索引的加载态 / 失败原因（失败即禁止提交，避免「新建/更新」统计失真）。 */
   readonly existingLoading: Ref<boolean>
   readonly existingError: Ref<string | null>
-  readonly presets: Ref<ImportPreset[]>
   readonly submitting: Ref<boolean>
   /** 落库报告（提交成功后有值）。 */
   readonly report: Ref<CandidateImportReport | null>
@@ -61,25 +61,29 @@ export interface UseCandidateImport {
   setExpression: (key: CandidateImportFieldKey, value: string) => void
   goStep: (step: number) => void
   reloadExisting: () => Promise<void>
-  savePreset: (name: string) => void
-  applyPreset: (name: string) => void
-  removePreset: (name: string) => void
   submit: () => Promise<void>
   /** 回到第一步并清空全部状态（提交完成后「继续导入下一批」）。 */
   reset: () => void
 }
 
-function isPresetList(value: unknown): value is ImportPreset[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (p) =>
-        typeof p === 'object' &&
-        p !== null &&
-        typeof (p as ImportPreset).name === 'string' &&
-        typeof (p as ImportPreset).mapping === 'object',
-    )
-  )
+/** 读取上次保存的映射表达式（形状不符或存储不可用时回退到默认表达式）。 */
+function readStoredMapping(): CandidateImportMapping {
+  const fallback = emptyMapping()
+  try {
+    localStorage.removeItem(LEGACY_PRESET_KEY)
+    const raw = localStorage.getItem(MAPPING_KEY)
+    if (!raw) return fallback
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return fallback
+    const stored = parsed as Record<string, unknown>
+    for (const field of CANDIDATE_IMPORT_FIELDS) {
+      const value = stored[field.key]
+      if (typeof value === 'string') fallback[field.key] = value
+    }
+  } catch {
+    // 存储不可用（隐私模式 / 数据损坏）：按默认表达式处理，不阻断导入。
+  }
+  return fallback
 }
 
 export function useCandidateImport(): UseCandidateImport {
@@ -87,13 +91,13 @@ export function useCandidateImport(): UseCandidateImport {
   const sheet = ref<ImportSheet | null>(null)
   const parsing = ref(false)
   const parseError = ref<string | null>(null)
-  const mapping = ref<CandidateImportMapping>(emptyMapping())
-  /** 防抖后的映射（预览只认它，避免每次按键都重算全表）。 */
-  const appliedMapping = ref<CandidateImportMapping>(emptyMapping())
+  // 初始值即「最后一次使用过的表达式」（localStorage），免去每次重新填写。
+  const mapping = ref<CandidateImportMapping>(readStoredMapping())
+  /** 防抖后的映射（预览只认它，避免每次按键都重算全表），同时持久化为「最后状态」。 */
+  const appliedMapping = ref<CandidateImportMapping>({ ...mapping.value })
   const existing = ref<ReadonlySet<string>>(new Set())
   const existingLoading = ref(false)
   const existingError = ref<string | null>(null)
-  const presets = ref<ImportPreset[]>(readPresets())
   const submitting = ref(false)
   const report = ref<CandidateImportReport | null>(null)
   const rowErrors = ref<CandidateImportRowError[]>([])
@@ -112,6 +116,7 @@ export function useCandidateImport(): UseCandidateImport {
     timer = setTimeout(() => {
       timer = null
       appliedMapping.value = { ...mapping.value }
+      persistMapping(appliedMapping.value)
     }, DEBOUNCE_MS)
   }, { deep: true })
 
@@ -188,47 +193,13 @@ export function useCandidateImport(): UseCandidateImport {
     step.value = next
   }
 
-  function readPresets(): ImportPreset[] {
+  /** 持久化当前表达式（静默降级：存储不可用时仅本次会话有效）。 */
+  function persistMapping(value: CandidateImportMapping): void {
     try {
-      const raw = localStorage.getItem(PRESET_KEY)
-      const parsed: unknown = raw ? JSON.parse(raw) : []
-      return isPresetList(parsed) ? parsed : []
+      localStorage.setItem(MAPPING_KEY, JSON.stringify(value))
     } catch {
-      return []
+      // 隐私模式 / 配额不足：不阻断导入主流程。
     }
-  }
-
-  function persistPresets(): void {
-    try {
-      localStorage.setItem(PRESET_KEY, JSON.stringify(presets.value))
-    } catch {
-      // 存储不可用（隐私模式 / 配额）：预设降级为仅本次会话有效，不阻断导入主流程。
-    }
-  }
-
-  function savePreset(name: string): void {
-    const trimmed = name.trim()
-    if (!trimmed) return
-    const next = presets.value.filter((p) => p.name !== trimmed)
-    next.push({ name: trimmed, mapping: { ...appliedMapping.value } })
-    presets.value = next.sort((a, b) => a.name.localeCompare(b.name))
-    persistPresets()
-  }
-
-  function applyPreset(name: string): void {
-    const preset = presets.value.find((p) => p.name === name)
-    if (!preset) return
-    const next = emptyMapping()
-    for (const field of CANDIDATE_IMPORT_FIELDS) {
-      next[field.key] = preset.mapping[field.key] ?? ''
-    }
-    mapping.value = next
-    appliedMapping.value = { ...next }
-  }
-
-  function removePreset(name: string): void {
-    presets.value = presets.value.filter((p) => p.name !== name)
-    persistPresets()
   }
 
   async function submit(): Promise<void> {
@@ -260,8 +231,6 @@ export function useCandidateImport(): UseCandidateImport {
     sheet.value = null
     parsing.value = false
     parseError.value = null
-    mapping.value = emptyMapping()
-    appliedMapping.value = emptyMapping()
     existing.value = new Set()
     existingError.value = null
     report.value = null
@@ -277,7 +246,6 @@ export function useCandidateImport(): UseCandidateImport {
     outcome,
     existingLoading,
     existingError,
-    presets,
     submitting,
     report,
     rowErrors,
@@ -287,9 +255,6 @@ export function useCandidateImport(): UseCandidateImport {
     setExpression,
     goStep,
     reloadExisting,
-    savePreset,
-    applyPreset,
-    removePreset,
     submit,
     reset,
   }

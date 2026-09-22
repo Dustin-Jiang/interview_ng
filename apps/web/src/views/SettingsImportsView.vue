@@ -21,7 +21,6 @@ const {
   outcome,
   existingLoading,
   existingError,
-  presets,
   submitting,
   report,
   rowErrors,
@@ -31,9 +30,6 @@ const {
   setExpression,
   goStep,
   reloadExisting,
-  savePreset,
-  applyPreset,
-  removePreset,
   submit,
   reset,
 } = useCandidateImport()
@@ -89,13 +85,9 @@ function stepDotClass(target: number): string {
         :sheet="sheet"
         :mapping="mapping"
         :outcome="outcome"
-        :presets="presets"
         :existing-loading="existingLoading"
         :existing-error="existingError"
         @expression="setExpression"
-        @apply-preset="applyPreset"
-        @save-preset="savePreset"
-        @remove-preset="removePreset"
         @retry-existing="reloadExisting"
       />
       <div class="flex items-center gap-2">

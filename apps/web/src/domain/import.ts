@@ -46,12 +46,6 @@ export type CandidateImportFieldKey = (typeof CANDIDATE_IMPORT_FIELDS)[number]['
 /** 映射：目标字段 → JMESPath 表达式。 */
 export type CandidateImportMapping = Record<CandidateImportFieldKey, string>
 
-/** 命名预设（一组表达式；持久化由调用方负责）。 */
-export interface ImportPreset {
-  name: string
-  mapping: CandidateImportMapping
-}
-
 /** 映射后的单行（与源表数据行一一对应、同序，便于三段对照）。 */
 export interface ImportMappedRow {
   /** 源文件行号。 */
