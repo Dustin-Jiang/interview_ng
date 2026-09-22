@@ -5,6 +5,7 @@ import { Plus, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useUsers } from '@/composables/useUsers'
+import { useEntityDialog } from '@/composables/useEntityDialog'
 import { useAuth } from '@/composables/useAuth'
 import { useConfirmAction } from '@/composables/useConfirmAction'
 import type { User } from '@/models'
@@ -31,69 +32,57 @@ onMounted(() => void load())
 const emptyText = computed(() => (keyword.value ? '没有匹配的面试官' : '暂无面试官'))
 
 // ---- 用户操作 ----
-const userDialogOpen = ref(false)
-const editingUser = ref<User | null>(null)
-const savingUser = ref(false)
-const userForm = ref({ username: '', name: '', password: '', role_ids: [] as number[], department_id: null as number | null })
-
-function openCreateUser() {
-  editingUser.value = null
-  userForm.value = { username: '', name: '', password: '', role_ids: [], department_id: departments.value[0]?.id ?? null }
-  savingUser.value = false
-  userDialogOpen.value = true
+/** 面试官表单草稿（新增与编辑共用）。 */
+interface UserForm {
+  username: string
+  name: string
+  password: string
+  role_ids: number[]
+  department_id: number | null
 }
 
-function openEditUser(u: User) {
-  editingUser.value = u
-  userForm.value = {
+// 新增 / 编辑面试官对话框（target 为空即新增）
+const {
+  open: userDialogOpen,
+  editing: editingUser,
+  form: userForm,
+  saving: savingUser,
+  openCreate: openCreateUser,
+  openEdit: openEditUser,
+  submit: submitUser,
+} = useEntityDialog<User, UserForm>({
+  blank: () => ({
+    username: '',
+    name: '',
+    password: '',
+    role_ids: [],
+    department_id: departments.value[0]?.id ?? null,
+  }),
+  toForm: (u) => ({
     username: u.username,
     name: u.name ?? '',
     password: '',
     role_ids: (u.roles ?? []).map((r) => r.id),
     department_id: u.department_id ?? null,
-  }
-  savingUser.value = false
-  userDialogOpen.value = true
-}
-
-async function submitUser() {
-  if (!userForm.value.username.trim()) {
-    toast.error('请输入用户名')
-    return
-  }
-  if (savingUser.value) return
-  try {
-    if (editingUser.value) {
-      savingUser.value = true
-      await updateUser(editingUser.value.id, {
-        username: userForm.value.username.trim(),
-        name: userForm.value.name,
-        role_ids: userForm.value.role_ids,
-        department_id: userForm.value.department_id,
-      })
-      toast.success('已保存')
-    } else {
-      if (!userForm.value.password) {
-        toast.error('请设置初始密码')
-        return
-      }
-      savingUser.value = true
-      await createUser({
-        username: userForm.value.username.trim(),
-        name: userForm.value.name,
-        password: userForm.value.password,
-        role_ids: userForm.value.role_ids,
-        department_id: userForm.value.department_id,
-      })
-      toast.success('面试官已创建')
+  }),
+  validate: (form, target) => {
+    if (!form.username.trim()) return '请输入用户名'
+    // 初始密码只在新建时设置；编辑改密走「重置密码」。
+    if (!target && !form.password) return '请设置初始密码'
+    return null
+  },
+  action: async (form, target) => {
+    const body = {
+      username: form.username.trim(),
+      name: form.name,
+      role_ids: form.role_ids,
+      department_id: form.department_id,
     }
-    userDialogOpen.value = false
-  } catch (e) {
-    toastError(e)
-  } finally {
-    savingUser.value = false
-  }
-}
+    if (target) await updateUser(target.id, body)
+    else await createUser({ ...body, password: form.password })
+  },
+  success: (_form, target) => (target ? '已保存' : '面试官已创建'),
+})
 
 // 删除面试官确认对话框（替代 window.confirm）。
 const {

@@ -1,20 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { toast } from 'vue-sonner'
 import { DoorOpen, Pencil, Plus, Trash2 } from 'lucide-vue-next'
 
 import { useRoomList } from '@/composables/useRoomList'
 import { useAuth } from '@/composables/useAuth'
 import { useBoardRefresh } from '@/composables/useBoardChannel'
 import { useConfirmAction } from '@/composables/useConfirmAction'
+import { useEntityDialog } from '@/composables/useEntityDialog'
 import { roomApi } from '@/api/http'
 import { PERMISSIONS, type CandidateStatus, type Room } from '@/models'
 import { roomPhaseOf } from '@/domain/status'
 import { roomLabel } from '@/domain/room'
 import { STATUS_PRESENTATION, EMPTY_PRESENTATION } from '@/presenters/status'
 import { formatDateTime } from '@/lib/format'
-import { toastError } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 
 import { Button } from '@/components/ui/button'
@@ -84,46 +83,30 @@ function statusOf(room: Room): { label: string; badge: 'outline' | 'secondary' |
 
 /** 房间显示名：统一走 domain/room（未命名 → 「未命名」，不显示编号）。 */
 
-// ---- 建房 / 改名对话框（同一表单两态：nameTarget 为空即新建） ----
-const nameDialogOpen = ref(false)
-const nameTarget = ref<Room | null>(null)
-const nameForm = ref('')
-const savingName = ref(false)
-
-function openCreate() {
-  nameTarget.value = null
-  nameForm.value = ''
-  savingName.value = false
-  nameDialogOpen.value = true
-}
-
-function openRename(room: Room) {
-  nameTarget.value = room
-  nameForm.value = room.name ?? ''
-  savingName.value = false
-  nameDialogOpen.value = true
-}
-
-async function submitName() {
-  if (savingName.value) return
-  const n = nameForm.value.trim()
-  savingName.value = true
-  try {
-    if (nameTarget.value) {
-      await roomApi.rename(nameTarget.value.id, n)
-      toast.success(n ? `已改名为「${n}」` : '已清除命名')
-    } else {
-      await roomApi.create(n)
-      toast.success(n ? `已创建房间「${n}」` : '已创建未命名房间')
-    }
-    nameDialogOpen.value = false
+// ---- 建房 / 改名对话框（同一表单两态：target 为空即新建） ----
+const {
+  open: nameDialogOpen,
+  editing: renaming,
+  form: nameForm,
+  saving: savingName,
+  openCreate,
+  openEdit: renameRoom,
+  submit: submitName,
+} = useEntityDialog<Room, string>({
+  blank: () => '',
+  toForm: (room) => room.name ?? '',
+  action: async (name, room) => {
+    const trimmed = name.trim()
+    if (room) await roomApi.rename(room.id, trimmed)
+    else await roomApi.create(trimmed)
     await load()
-  } catch (e) {
-    toastError(e)
-  } finally {
-    savingName.value = false
-  }
-}
+  },
+  success: (name, room) => {
+    const trimmed = name.trim()
+    if (room) return trimmed ? `已改名为「${trimmed}」` : '已清除命名'
+    return trimmed ? `已创建房间「${trimmed}」` : '已创建未命名房间'
+  },
+})
 
 // 删除空房确认对话框（替代 window.confirm）。
 const {
@@ -218,7 +201,7 @@ const {
               size="sm"
               class="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
               :aria-label="`改名：${roomLabel(room)}`"
-              @click="openRename(room)"
+              @click="renameRoom(room)"
             >
               <Pencil aria-hidden="true" />
               改名
@@ -241,8 +224,8 @@ const {
     <!-- 建房 / 改名对话框 -->
     <FormDialog
       :open="nameDialogOpen"
-      :title="nameTarget ? '房间改名' : '新建房间'"
-      :submit-text="nameTarget ? '保存' : '创建'"
+      :title="renaming ? '房间改名' : '新建房间'"
+      :submit-text="renaming ? '保存' : '创建'"
       size="sm"
       :loading="savingName"
       @update:open="nameDialogOpen = $event"

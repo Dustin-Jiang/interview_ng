@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue'
-import { toast } from 'vue-sonner'
+import { computed, h, onMounted } from 'vue'
 import { Plus, ShieldCheck } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useUsers } from '@/composables/useUsers'
+import { useEntityDialog } from '@/composables/useEntityDialog'
 import { useConfirmAction } from '@/composables/useConfirmAction'
 import { groupPermissionEntries, PERMISSION_ORDER, permissionGroup, type PermissionGroup } from '@/presenters/permissions'
 import type { Role } from '@/models'
-import { toastError } from '@/lib/toast'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -26,10 +25,41 @@ const { roles, loading, load, createRole, updateRole, deleteRole } = useUsers()
 onMounted(() => void load())
 
 // ---- 角色操作 ----
-const roleDialogOpen = ref(false)
-const editingRole = ref<Role | null>(null)
-const savingRole = ref(false)
-const roleForm = ref({ name: '', description: '', permissions: [] as string[] })
+/** 角色表单草稿（新增与编辑共用）。 */
+interface RoleForm {
+  name: string
+  description: string
+  permissions: string[]
+}
+
+// 新增 / 编辑角色对话框（target 为空即新增）
+const {
+  open: roleDialogOpen,
+  editing: editingRole,
+  form: roleForm,
+  saving: savingRole,
+  openCreate: openCreateRole,
+  openEdit: openEditRole,
+  submit: submitRole,
+} = useEntityDialog<Role, RoleForm>({
+  blank: () => ({ name: '', description: '', permissions: [] }),
+  toForm: (r) => ({
+    name: r.name,
+    description: r.description ?? '',
+    permissions: (r.permissions ?? []).map((p) => p.permission),
+  }),
+  validate: (form) => (form.name.trim() ? null : '请输入角色名'),
+  action: async (form, target) => {
+    const body = {
+      name: form.name.trim(),
+      description: form.description,
+      permissions: form.permissions,
+    }
+    if (target) await updateRole(target.id, body)
+    else await createRole(body)
+  },
+  success: (_form, target) => (target ? '角色已更新' : '角色已创建'),
+})
 
 // 角色删除确认对话框。
 const {
@@ -42,55 +72,6 @@ const {
   action: (r) => deleteRole(r.id),
   success: () => '角色已删除',
 })
-
-function openCreateRole() {
-  editingRole.value = null
-  roleForm.value = { name: '', description: '', permissions: [] }
-  savingRole.value = false
-  roleDialogOpen.value = true
-}
-
-function openEditRole(r: Role) {
-  editingRole.value = r
-  roleForm.value = {
-    name: r.name,
-    description: r.description ?? '',
-    permissions: (r.permissions ?? []).map((p) => p.permission),
-  }
-  savingRole.value = false
-  roleDialogOpen.value = true
-}
-
-async function submitRole() {
-  if (!roleForm.value.name.trim()) {
-    toast.error('请输入角色名')
-    return
-  }
-  if (savingRole.value) return
-  savingRole.value = true
-  try {
-    if (editingRole.value) {
-      await updateRole(editingRole.value.id, {
-        name: roleForm.value.name.trim(),
-        description: roleForm.value.description,
-        permissions: roleForm.value.permissions,
-      })
-      toast.success('角色已更新')
-    } else {
-      await createRole({
-        name: roleForm.value.name.trim(),
-        description: roleForm.value.description,
-        permissions: roleForm.value.permissions,
-      })
-      toast.success('角色已创建')
-    }
-    roleDialogOpen.value = false
-  } catch (e) {
-    toastError(e)
-  } finally {
-    savingRole.value = false
-  }
-}
 
 function toggleRolePerm(p: string) {
   const idx = roleForm.value.permissions.indexOf(p)
