@@ -163,6 +163,18 @@ func (s *InterviewService) SetBidStep(ctx context.Context, step int) error {
 	return s.store.SetBidStep(ctx, step)
 }
 
+// ---- 单点登录（OIDC）配置 ----
+
+// GetOidcConfig 返回 OIDC 配置（含按 position 升序的规则）。
+func (s *InterviewService) GetOidcConfig(ctx context.Context) (*dsmodel.OidcConfig, error) {
+	return s.store.GetOidcConfig(ctx)
+}
+
+// SetOidcConfig 覆盖保存 OIDC 配置与规则（clientSecret 为 nil 表示保持原密钥）。
+func (s *InterviewService) SetOidcConfig(ctx context.Context, cfg *dsmodel.OidcConfig, clientSecret *string) error {
+	return s.store.SetOidcConfig(ctx, cfg, clientSecret)
+}
+
 // ---- 候选人管理 ----
 
 // UpdateCandidate 编辑候选人资料字段（学号/姓名/简介/志愿/联系方式）。先落库后广播。

@@ -21,6 +21,7 @@ import (
 	"interview_ng/internal/broadcast"
 	"interview_ng/internal/handler"
 	dsmodel "interview_ng/internal/model"
+	"interview_ng/internal/oidcauth"
 	"interview_ng/internal/rbac"
 	"interview_ng/internal/seed"
 	"interview_ng/internal/service"
@@ -39,6 +40,7 @@ func newTestApp(t *testing.T) *gin.Engine {
 		&dsmodel.RoomMember{}, &dsmodel.Message{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
 		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
+		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -46,13 +48,13 @@ func newTestApp(t *testing.T) *gin.Engine {
 	if err := seed.Init(context.Background(), db, cache); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	am := auth.New("test-secret", 7*24*time.Hour, db, cache)
 	store := state.NewMemStateStore(db)
+	am := auth.New("test-secret", 7*24*time.Hour, db, cache, store)
 	b := broadcast.New()
 	svc := service.New(store, b)
 
 	r := gin.New()
-	handler.NewHTTPServer(svc, store, am).RegisterRoutes(r)
+	handler.NewHTTPServer(svc, store, am, oidcauth.New()).RegisterRoutes(r)
 	handler.NewWSServer(svc, b, store, am).RegisterRoutes(r)
 	return r
 }

@@ -15,6 +15,7 @@ import (
 	"interview_ng/internal/broadcast"
 	"interview_ng/internal/handler"
 	dsmodel "interview_ng/internal/model"
+	"interview_ng/internal/oidcauth"
 	"interview_ng/internal/rbac"
 	"interview_ng/internal/seed"
 	"interview_ng/internal/service"
@@ -36,6 +37,7 @@ func main() {
 		&dsmodel.RoomMember{}, &dsmodel.Message{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
 		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
+		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{},
 	); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
@@ -46,13 +48,14 @@ func main() {
 		log.Fatalf("seed: %v", err)
 	}
 
-	am := auth.New(envOr("JWT_SECRET", "dev-secret-change-me"), 7*24*time.Hour, db, cache)
-
 	store := state.NewMemStateStore(db)
+	am := auth.New(envOr("JWT_SECRET", "dev-secret-change-me"), 7*24*time.Hour, db, cache, store)
+
 	b := broadcast.New()
 	svc := service.New(store, b)
+	oidcSvc := oidcauth.New()
 
-	httpSrv := handler.NewHTTPServer(svc, store, am)
+	httpSrv := handler.NewHTTPServer(svc, store, am, oidcSvc)
 	wsSrv := handler.NewWSServer(svc, b, store, am)
 
 	r := gin.Default()

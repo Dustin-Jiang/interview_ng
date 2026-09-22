@@ -11,6 +11,7 @@ import (
 
 	dsmodel "interview_ng/internal/model"
 	"interview_ng/internal/rbac"
+	"interview_ng/internal/state"
 )
 
 // UserProfile 用户 + 角色 + 权限（/api/me 与登录响应）。
@@ -21,17 +22,18 @@ type UserProfile struct {
 }
 
 // Manager 负责登录、当前用户、改密与中间件。
-// 依赖：db（用户查询/改密）、rbac 缓存（权限即时解析）、JWT 密钥。
+// 依赖：db（用户查询/改密）、rbac 缓存（权限即时解析）、JWT 密钥、state（OIDC 用户开通/同步）。
 type Manager struct {
 	secret string
 	ttl    time.Duration
 	db     *gorm.DB
 	cache  *rbac.Cache
+	st     state.StateStore
 }
 
 // New 构建认证管理器。
-func New(secret string, ttl time.Duration, db *gorm.DB, cache *rbac.Cache) *Manager {
-	return &Manager{secret: secret, ttl: ttl, db: db, cache: cache}
+func New(secret string, ttl time.Duration, db *gorm.DB, cache *rbac.Cache, st state.StateStore) *Manager {
+	return &Manager{secret: secret, ttl: ttl, db: db, cache: cache, st: st}
 }
 
 // ErrUnauthorized 统一认证错误（不向客户端泄露具体原因）。
@@ -75,6 +77,99 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token s
 		return "", 0, nil, nil, e
 	}
 	return t, u.ID, m.cache.UserRoles(u.ID), m.cache.UserPermissions(u.ID), nil
+}
+
+// OidcPrincipal 是归一后的 OIDC 登录主体。
+type OidcPrincipal struct {
+	Subject  string   // IdP 的 sub（身份键）
+	Username string   // 自动开通时的用户名（DeriveUsername 结果）
+	Name     string   // 显示名（name 声明，可为空）
+	RoleIDs  []uint64 // 规则命中的角色（首个命中生效；空 = 未映射）
+}
+
+var (
+	// ErrOidcRoleUnmapped 账号未命中任何映射规则（决策：未映射即拒绝登录）。
+	ErrOidcRoleUnmapped = errors.New("账号未匹配到任何角色")
+	// ErrOidcUserNotFound 账号尚未开通且未开启自动开通。
+	ErrOidcUserNotFound = errors.New("账号尚未开通")
+)
+
+// LoginWithOidc 以 IdP 主体登录：按 sub 匹配本地用户；
+// 不存在且 autoProvision → 自动建号（用户名冲突先试 "<username>-<sub 前 6 位>"）；
+// 命中则同步显示名与角色（IdP 权威）→ 重载 RBAC → 签发同款 JWT。
+// 未映射到角色 → ErrOidcRoleUnmapped；未开通且禁止自动开通 → ErrOidcUserNotFound。
+func (m *Manager) LoginWithOidc(ctx context.Context, p OidcPrincipal, autoProvision bool) (token string, userID uint64, roles, perms []string, err error) {
+	if len(p.RoleIDs) == 0 {
+		return "", 0, nil, nil, ErrOidcRoleUnmapped
+	}
+	sub := p.Subject
+	u, err := m.st.FindUserByOidcSubject(ctx, sub)
+	switch {
+	case errors.Is(err, state.ErrNotFound):
+		if !autoProvision {
+			return "", 0, nil, nil, ErrOidcUserNotFound
+		}
+		newUser := &dsmodel.User{Username: p.Username, Name: p.Name, OidcSubject: &sub}
+		uid, createErr := m.st.CreateUser(ctx, newUser, p.RoleIDs)
+		if createErr != nil && isUsernameTaken(createErr) {
+			newUser.Username = fallbackUsername(p.Username, sub)
+			uid, createErr = m.st.CreateUser(ctx, newUser, p.RoleIDs)
+		}
+		if createErr != nil {
+			return "", 0, nil, nil, createErr
+		}
+		u = &dsmodel.User{ID: uid}
+	case err != nil:
+		return "", 0, nil, nil, err
+	default:
+		// IdP 是显示名与角色的权威：每次登录覆盖（name 声明缺失时保留原显示名）。
+		name := u.Name
+		if p.Name != "" {
+			name = p.Name
+		}
+		if syncErr := m.st.SyncOidcUser(ctx, u.ID, name, p.RoleIDs); syncErr != nil {
+			return "", 0, nil, nil, syncErr
+		}
+	}
+	if err := m.cache.ReloadUser(m.db, u.ID); err != nil {
+		return "", 0, nil, nil, err
+	}
+	t, err := IssueToken(m.secret, u.ID, u.TokenVersion, m.ttl)
+	if err != nil {
+		return "", 0, nil, nil, err
+	}
+	return t, u.ID, m.cache.UserRoles(u.ID), m.cache.UserPermissions(u.ID), nil
+}
+
+// isUsernameTaken 判定建号失败是否为用户名占用（state 层业务码）。
+func isUsernameTaken(err error) bool {
+	se, ok := err.(*state.Error)
+	return ok && se.Code == "username_taken"
+}
+
+// fallbackUsername 在用户名冲突时追加 "-<sub 前 6 位>"（总长不超过 users.username 的 64 字符）。
+func fallbackUsername(username, subject string) string {
+	const suffixLen = 7 // "-" + 6 位
+	if len(username) > 64-suffixLen {
+		username = username[:64-suffixLen]
+	}
+	if len(username) == 0 {
+		username = "oidc"
+	}
+	var b strings.Builder
+	for _, r := range subject {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+		if b.Len() == 6 {
+			break
+		}
+	}
+	suffix := b.String()
+	if suffix == "" {
+		suffix = "user"
+	}
+	return username + "-" + suffix
 }
 
 // Authenticate 校验 token（签名/过期/token_version），返回 userID。

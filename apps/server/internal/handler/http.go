@@ -8,6 +8,7 @@ import (
 
 	"interview_ng/internal/auth"
 	dsmodel "interview_ng/internal/model"
+	"interview_ng/internal/oidcauth"
 	"interview_ng/internal/service"
 	"interview_ng/internal/state"
 )
@@ -17,11 +18,12 @@ type HTTPServer struct {
 	svc  *service.InterviewService
 	st   state.StateStore
 	auth *auth.Manager
+	oidc *oidcauth.Service
 }
 
 // NewHTTPServer 构建 HTTP 服务器。
-func NewHTTPServer(svc *service.InterviewService, st state.StateStore, am *auth.Manager) *HTTPServer {
-	return &HTTPServer{svc: svc, st: st, auth: am}
+func NewHTTPServer(svc *service.InterviewService, st state.StateStore, am *auth.Manager, oidc *oidcauth.Service) *HTTPServer {
+	return &HTTPServer{svc: svc, st: st, auth: am, oidc: oidc}
 }
 
 // require 权限中间件简写。
@@ -32,6 +34,12 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	g := r.Group("/api")
 	g.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 	g.POST("/sessions", h.login)
+
+	// 登录方式与单点登录（OIDC）公开入口：授权跳转 + IdP 回调 + 一次性登录码换会话。
+	g.GET("/authentication", h.getAuthentication)
+	g.GET("/oidc/authorization", h.startOidcAuthorization)
+	g.GET("/oidc/sessions", h.oidcCallback)
+	g.POST("/oidc/sessions", h.createOidcSession)
 
 	authed := g.Group("")
 	authed.Use(h.auth.RequireAuth())
@@ -74,6 +82,11 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	authed.PUT("/roles/:id", h.require(dsmodel.PermUsersManage), h.updateRole)
 	authed.DELETE("/roles/:id", h.require(dsmodel.PermUsersManage), h.deleteRole)
 
+	// 单点登录配置（users.manage）：读取配置 / 覆盖保存 / 连通性检测。
+	authed.GET("/oidc/config", h.require(dsmodel.PermUsersManage), h.getOidcConfig)
+	authed.PUT("/oidc/config", h.require(dsmodel.PermUsersManage), h.putOidcConfig)
+	authed.POST("/oidc/probes", h.require(dsmodel.PermUsersManage), h.probeOidc)
+
 	// 部门：浏览任意登录（志愿选择器需要部门名单），增删改 users.manage
 	authed.GET("/departments", h.listDepartments)
 	authed.POST("/departments", h.require(dsmodel.PermUsersManage), h.createDepartment)
@@ -114,6 +127,11 @@ func (h *HTTPServer) login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
 		return
 	}
+	h.writeSession(c, token, uid, roles, perms)
+}
+
+// writeSession 输出与 POST /api/sessions 完全一致的会话响应（密码登录与 OIDC 兑换共用）。
+func (h *HTTPServer) writeSession(c *gin.Context, token string, uid uint64, roles, perms []string) {
 	profile, err := h.auth.Me(c.Request.Context(), uid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
