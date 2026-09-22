@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -218,9 +219,8 @@ func (s *MemStateStore) CheckIn(ctx context.Context, candidateID uint64) (*Event
 	if err := guardTransition(c.Status, dsmodel.StatusCheckedInPendingAssign); err != nil {
 		return nil, err
 	}
-	if err := s.db.WithContext(ctx).Model(c).Updates(map[string]any{
-		"status": dsmodel.StatusCheckedInPendingAssign,
-	}).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(c).
+		Updates(statusUpdates(dsmodel.StatusCheckedInPendingAssign, time.Now())).Error; err != nil {
 		return nil, err
 	}
 	ev := &Event{Type: EventCandidateSignedIn, Data: struct{ CandidateID uint64 }{candidateID}}
@@ -228,25 +228,44 @@ func (s *MemStateStore) CheckIn(ctx context.Context, candidateID uint64) (*Event
 	return ev, nil
 }
 
-func (s *MemStateStore) CreateCandidate(ctx context.Context, studentNo, name, profile string) (*Event, error) {
+// normalizeCandidateInfo 归一化候选人资料字段：学号走统一校验（非法规格 → 400 态错），
+// 文本字段裁剪首尾空白（空白即空串），bool 直存。
+func normalizeCandidateInfo(info CandidateInfo) (dsmodel.Candidate, error) {
+	no, err := normalizeStudentNo(info.StudentNo)
+	if err != nil {
+		return dsmodel.Candidate{}, err
+	}
+	return dsmodel.Candidate{
+		StudentNo:    no,
+		Name:         strings.TrimSpace(info.Name),
+		Profile:      strings.TrimSpace(info.Profile),
+		FirstChoice:  strings.TrimSpace(info.FirstChoice),
+		SecondChoice: strings.TrimSpace(info.SecondChoice),
+		AcceptAdjust: info.AcceptAdjust,
+		Phone:        strings.TrimSpace(info.Phone),
+		QQ:           strings.TrimSpace(info.QQ),
+		Email:        strings.TrimSpace(info.Email),
+	}, nil
+}
+
+func (s *MemStateStore) CreateCandidate(ctx context.Context, info CandidateInfo) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	no, err := normalizeStudentNo(studentNo)
+	c, err := normalizeCandidateInfo(info)
 	if err != nil {
 		return nil, err
 	}
-	taken, err := s.studentNoTakenLocked(ctx, no, 0)
+	taken, err := s.studentNoTakenLocked(ctx, c.StudentNo, 0)
 	if err != nil {
 		return nil, err
 	}
 	if taken {
 		return nil, ErrStudentNoExists
 	}
-	c := &dsmodel.Candidate{StudentNo: no, Name: name, Profile: profile, Status: dsmodel.StatusNotCheckedIn}
-	if err := s.db.WithContext(ctx).Create(c).Error; err != nil {
+	c.Status = dsmodel.StatusNotCheckedIn
+	if err := s.db.WithContext(ctx).Create(&c).Error; err != nil {
 		return nil, err
 	}
-	// 全局事件（RoomID=0）：管理面新建候选人，供看板通道感知名单变化。
 	ev := &Event{Type: EventCandidateCreated, Data: CandidateRef{c.ID}}
 	s.emit(0, ev)
 	return ev, nil
@@ -254,10 +273,10 @@ func (s *MemStateStore) CreateCandidate(ctx context.Context, studentNo, name, pr
 
 // ImportCandidates 批量导入候选人。三段式：
 //  1. 整批校验（一次列出全部问题行，全或无）；
-//  2. 单事务 upsert（按学号命中即更新姓名/简介，未命中即新建；批内重复后者覆盖前者）；
+//  2. 单事务 upsert（按学号命中即更新资料列，未命中即新建；批内重复后者覆盖前者）；
 //  3. 事务提交后逐条广播（先落库后广播）。
 //
-// 只写 student_no/name/profile —— 候选人的运行态（状态机 / 房间绑定 / 消息 /
+// 只写资料列（见 CandidateInfo）—— 候选人的运行态（状态机 / 房间绑定 / 消息 /
 // 录取决定 / 出价）一律不动。
 func (s *MemStateStore) ImportCandidates(ctx context.Context, rows []CandidateImportRow) (*ImportReport, error) {
 	s.mu.Lock()
@@ -269,8 +288,10 @@ func (s *MemStateStore) ImportCandidates(ctx context.Context, rows []CandidateIm
 		return nil, &Error{Code: "import_too_large", Msg: fmt.Sprintf("单次导入最多 %d 行", MaxImportRows)}
 	}
 
-	// 1) 整批校验：学号必填且纯数字、姓名必填；收集全部问题行（不是遇到第一个就返回）。
+	// 1) 整批校验 + 归一化：学号必填且纯数字、姓名必填；文本字段裁剪空白；
+	// 收集全部问题行（不是遇到第一个就返回）。
 	nos := make([]string, len(rows))
+	cols := make([]dsmodel.Candidate, len(rows))
 	var rowErrs []RowError
 	for i, r := range rows {
 		no, err := dsmodel.ValidateStudentNo(r.StudentNo)
@@ -278,11 +299,23 @@ func (s *MemStateStore) ImportCandidates(ctx context.Context, rows []CandidateIm
 			rowErrs = append(rowErrs, RowError{Index: i, Msg: err.Error()})
 			continue
 		}
-		if r.Name == "" {
+		name := strings.TrimSpace(r.Name)
+		if name == "" {
 			rowErrs = append(rowErrs, RowError{Index: i, Msg: "姓名不能为空"})
 			continue
 		}
 		nos[i] = no
+		cols[i] = dsmodel.Candidate{
+			StudentNo:    no,
+			Name:         name,
+			Profile:      strings.TrimSpace(r.Profile),
+			FirstChoice:  strings.TrimSpace(r.FirstChoice),
+			SecondChoice: strings.TrimSpace(r.SecondChoice),
+			AcceptAdjust: r.AcceptAdjust,
+			Phone:        strings.TrimSpace(r.Phone),
+			QQ:           strings.TrimSpace(r.QQ),
+			Email:        strings.TrimSpace(r.Email),
+		}
 	}
 	if len(rowErrs) > 0 {
 		return nil, &ImportError{Rows: rowErrs}
@@ -308,7 +341,16 @@ func (s *MemStateStore) ImportCandidates(ctx context.Context, rows []CandidateIm
 			}
 			if hit {
 				if err := tx.Model(&dsmodel.Candidate{}).Where("id = ?", id).
-					Updates(map[string]any{"name": rows[i].Name, "profile": rows[i].Profile}).Error; err != nil {
+					Updates(map[string]any{
+						"name":          cols[i].Name,
+						"profile":       cols[i].Profile,
+						"first_choice":  cols[i].FirstChoice,
+						"second_choice": cols[i].SecondChoice,
+						"accept_adjust": cols[i].AcceptAdjust,
+						"phone":         cols[i].Phone,
+						"qq":            cols[i].QQ,
+						"email":         cols[i].Email,
+					}).Error; err != nil {
 					return err
 				}
 				inBatch[no] = id
@@ -317,13 +359,9 @@ func (s *MemStateStore) ImportCandidates(ctx context.Context, rows []CandidateIm
 				report.Events = append(report.Events, &Event{Type: EventCandidateUpdated, Data: CandidateRef{id}})
 				continue
 			}
-			c := &dsmodel.Candidate{
-				StudentNo: no,
-				Name:      rows[i].Name,
-				Profile:   rows[i].Profile,
-				Status:    dsmodel.StatusNotCheckedIn,
-			}
-			if err := tx.Create(c).Error; err != nil {
+			c := cols[i]
+			c.Status = dsmodel.StatusNotCheckedIn
+			if err := tx.Create(&c).Error; err != nil {
 				return err
 			}
 			inBatch[no] = c.ID
@@ -386,7 +424,7 @@ func (s *MemStateStore) MovePhase(ctx context.Context, roomID, operatorID uint64
 	}
 	// 推进到 COMPLETED（完成）即自动清房：房间解绑候选人（rooms.candidate_id 置空），
 	// 房间转空闲可继续拉取下一位；消息仍按候选人归档保留。
-	updates := map[string]any{"status": to}
+	updates := statusUpdates(to, time.Now())
 	if to == dsmodel.StatusCompleted {
 		if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", roomID).
 			UpdateColumn("candidate_id", nil).Error; err != nil {
@@ -859,12 +897,12 @@ func (s *MemStateStore) syncAdmissionStatuses(ctx context.Context) error {
 	inScope := "status IN ('COMPLETED', 'ADMISSION_PENDING', 'ADMITTED')"
 	settled := "SELECT COUNT(*) FROM candidate_admissions a WHERE a.candidate_id = candidates.id AND a.status = 'admitted'"
 	if err := s.db.WithContext(ctx).Exec(
-		"UPDATE candidates SET status = 'ADMITTED', updated_at = CURRENT_TIMESTAMP WHERE "+inScope+" AND ("+settled+") = 1",
+		"UPDATE candidates SET status = 'ADMITTED', updated_at = CURRENT_TIMESTAMP WHERE " + inScope + " AND (" + settled + ") = 1",
 	).Error; err != nil {
 		return err
 	}
 	return s.db.WithContext(ctx).Exec(
-		"UPDATE candidates SET status = 'ADMISSION_PENDING', updated_at = CURRENT_TIMESTAMP WHERE "+inScope+" AND ("+settled+") <> 1",
+		"UPDATE candidates SET status = 'ADMISSION_PENDING', updated_at = CURRENT_TIMESTAMP WHERE " + inScope + " AND (" + settled + ") <> 1",
 	).Error
 }
 
@@ -882,25 +920,36 @@ func (s *MemStateStore) SetBidStep(ctx context.Context, step int) error {
 
 //---- 候选人管理 ----
 
-func (s *MemStateStore) UpdateCandidate(ctx context.Context, id uint64, studentNo, name, profile string) (*Event, error) {
+func (s *MemStateStore) UpdateCandidate(ctx context.Context, id uint64, info CandidateInfo) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := s.ensureCandidate(ctx, id); err != nil {
 		return nil, err
 	}
-	no, err := normalizeStudentNo(studentNo)
+	c, err := normalizeCandidateInfo(info)
 	if err != nil {
 		return nil, err
 	}
-	taken, err := s.studentNoTakenLocked(ctx, no, id)
+	taken, err := s.studentNoTakenLocked(ctx, c.StudentNo, id)
 	if err != nil {
 		return nil, err
 	}
 	if taken {
 		return nil, ErrStudentNoExists
 	}
+	// map 形式的 Updates：零值列（空串 / false）也要覆盖，资料字段全量写。
 	if err := s.db.WithContext(ctx).Model(&dsmodel.Candidate{}).Where("id = ?", id).
-		Updates(map[string]any{"student_no": no, "name": name, "profile": profile}).Error; err != nil {
+		Updates(map[string]any{
+			"student_no":    c.StudentNo,
+			"name":          c.Name,
+			"profile":       c.Profile,
+			"first_choice":  c.FirstChoice,
+			"second_choice": c.SecondChoice,
+			"accept_adjust": c.AcceptAdjust,
+			"phone":         c.Phone,
+			"qq":            c.QQ,
+			"email":         c.Email,
+		}).Error; err != nil {
 		return nil, err
 	}
 	ev := &Event{Type: EventCandidateUpdated, Data: CandidateRef{id}}
@@ -908,6 +957,29 @@ func (s *MemStateStore) UpdateCandidate(ctx context.Context, id uint64, studentN
 	return ev, nil
 }
 
+// UpdateCandidatePreferences 只改志愿与调剂三列：其余资料（学号/姓名/简介/联系方式）
+// 与运行态（状态机 / 房间绑定 / 消息 / 录取决定 / 出价）一律不动。
+func (s *MemStateStore) UpdateCandidatePreferences(ctx context.Context, id uint64, prefs CandidatePreferences) (*Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.ensureCandidate(ctx, id); err != nil {
+		return nil, err
+	}
+	// map 形式的 Updates：清空志愿（空串）、取消调剂（false）也要落库。
+	if err := s.db.WithContext(ctx).Model(&dsmodel.Candidate{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"first_choice":  strings.TrimSpace(prefs.FirstChoice),
+			"second_choice": strings.TrimSpace(prefs.SecondChoice),
+			"accept_adjust": prefs.AcceptAdjust,
+		}).Error; err != nil {
+		return nil, err
+	}
+	ev := &Event{Type: EventCandidateUpdated, Data: CandidateRef{id}}
+	s.emit(0, ev)
+	return ev, nil
+}
+
+// DeleteCandidate 删除候选人：解绑房间、连带删消息档案与录取/出价记录。
 func (s *MemStateStore) DeleteCandidate(ctx context.Context, id uint64) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -921,6 +993,7 @@ func (s *MemStateStore) DeleteCandidate(ctx context.Context, id uint64) (*Event,
 			return nil, err
 		}
 	}
+
 	// 连带删消息档案（级联：删人即删其记录）
 	if err := s.db.WithContext(ctx).Where("candidate_id = ?", id).Delete(&dsmodel.Message{}).Error; err != nil {
 		return nil, err
@@ -956,7 +1029,7 @@ func (s *MemStateStore) ResetCandidateStatus(ctx context.Context, id uint64, to 
 	backward := to == dsmodel.StatusNotCheckedIn || to == dsmodel.StatusCheckedInPendingAssign
 
 	var roomID uint64
-	updates := map[string]any{"status": to}
+	updates := statusUpdates(to, time.Now())
 	switch {
 	case forward:
 		room, err := s.roomByCandidate(ctx, id)
@@ -1052,25 +1125,31 @@ func validAdmissionStatus(s dsmodel.AdmissionStatus) bool {
 
 //---- 捡漏阶段（按预算竞拍） ----
 
-// admittedCount 统计部门已确认录取（admitted）人数。
+// admittedCount 统计部门**已确认录取**人数：只算唯一录取（封盘）的候选人。
+// 争议（≥2 家 admitted）候选人尚未定归属，要靠捡漏竞拍决胜负——不能提前占名额、缩预算基数。
 func (s *MemStateStore) admittedCount(ctx context.Context, departmentID uint64) (int, error) {
 	var n int64
-	if err := s.db.WithContext(ctx).Model(&dsmodel.CandidateAdmission{}).
+	err := s.db.WithContext(ctx).Model(&dsmodel.CandidateAdmission{}).
 		Where("department_id = ? AND status = ?", departmentID, dsmodel.AdmissionAdmitted).
-		Count(&n).Error; err != nil {
+		Where("(SELECT COUNT(*) FROM candidate_admissions c WHERE c.candidate_id = candidate_admissions.candidate_id AND c.status = ?) = 1",
+			dsmodel.AdmissionAdmitted).
+		Count(&n).Error
+	if err != nil {
 		return 0, err
 	}
 	return int(n), nil
 }
 
-// deptSpent 统计部门当前出价总额（预算占用）。
-// 已结算赢家的出价不计入：该候选人录取本身已缩减预算，再计出价会双重扣减。
+// deptSpent 统计部门当前出价占用（预算扣除项）。
+// 只有**唯一录取（封盘）且赢家正是本部门**的出价不计入——该候选人的录取已通过 admittedCount
+// 缩减预算基数，再计出价会双重扣减；争议候选人的出价仍是在价竞拍，必须占用预算。
 func (s *MemStateStore) deptSpent(ctx context.Context, departmentID uint64) (int, error) {
 	var n *int64
 	if err := s.db.WithContext(ctx).Model(&dsmodel.Bid{}).
 		Where("department_id = ? AND NOT EXISTS (SELECT 1 FROM candidate_admissions a "+
-			"WHERE a.candidate_id = bids.candidate_id AND a.department_id = bids.department_id AND a.status = ?)",
-			departmentID, dsmodel.AdmissionAdmitted).
+			"WHERE a.candidate_id = bids.candidate_id AND a.department_id = bids.department_id AND a.status = ? "+
+			"AND (SELECT COUNT(*) FROM candidate_admissions c WHERE c.candidate_id = a.candidate_id AND c.status = ?) = 1)",
+			departmentID, dsmodel.AdmissionAdmitted, dsmodel.AdmissionAdmitted).
 		Select("COALESCE(SUM(amount),0)").Scan(&n).Error; err != nil {
 		return 0, err
 	}
@@ -1137,12 +1216,12 @@ func (s *MemStateStore) ListLeftoverBids(ctx context.Context, departmentID *uint
 }
 
 // UpsertLeftoverBid 记录/覆盖本部门对候选人的出价。
-// 约束：仅捡漏阶段；候选人未结算；新总额（含本次出价）不得超过部门预算。
+// 约束：仅捡漏阶段；候选人未结算；出价 ≥ 0（0 是合法出价）；新总额（含本次出价）不得超过部门预算。
 func (s *MemStateStore) UpsertLeftoverBid(ctx context.Context, candidateID, departmentID uint64, amount int) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if amount <= 0 {
-		return nil, &Error{Code: "invalid_amount", Msg: "出价须为正数"}
+	if amount < 0 {
+		return nil, &Error{Code: "invalid_amount", Msg: "出价不能为负数"}
 	}
 	if _, err := s.ensureCandidate(ctx, candidateID); err != nil {
 		return nil, err
@@ -1175,15 +1254,20 @@ func (s *MemStateStore) UpsertLeftoverBid(ctx context.Context, candidateID, depa
 		return nil, err
 	}
 	budget := dsmodel.LeftoverBudget(dept.ExpectedCount, admitted)
-	// 当前占用（若覆盖旧出价则先扣除旧额）
+	// 当前占用（若覆盖旧出价则先扣除旧额）。用 found 而非金额判断是否存在：
+	// 0 是合法出价，不能再拿 oldAmount > 0 当「是否已出价」的哨兵。
 	var old dsmodel.Bid
 	oldAmount := 0
-	err = s.db.WithContext(ctx).
+	found := false
+	switch err := s.db.WithContext(ctx).
 		Where("candidate_id = ? AND department_id = ?", candidateID, departmentID).
-		First(&old).Error
-	if err == nil {
+		First(&old).Error; {
+	case err == nil:
 		oldAmount = old.Amount
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		found = true
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		// 本部门尚未对该候选人出价
+	default:
 		return nil, err
 	}
 	spent, err := s.deptSpent(ctx, departmentID)
@@ -1194,7 +1278,7 @@ func (s *MemStateStore) UpsertLeftoverBid(ctx context.Context, candidateID, depa
 		return nil, &Error{Code: "budget_exceeded", Msg: "超出部门剩余预算"}
 	}
 	var bid dsmodel.Bid
-	if oldAmount > 0 {
+	if found {
 		bid = old
 		if err := s.db.WithContext(ctx).Model(&bid).Update("amount", amount).Error; err != nil {
 			return nil, err
@@ -1385,10 +1469,14 @@ func (s *MemStateStore) ListLeftoverResults(ctx context.Context) ([]*dsmodel.Lef
 
 //---- 房间管理 ----
 
-func (s *MemStateStore) CreateRoom(ctx context.Context) (*Event, error) {
+func (s *MemStateStore) CreateRoom(ctx context.Context, name string) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r := &dsmodel.Room{}
+	n, err := dsmodel.ValidateRoomName(name)
+	if err != nil {
+		return nil, &Error{Code: "room_name_invalid", Msg: err.Error()}
+	}
+	r := &dsmodel.Room{Name: n}
 	if err := s.db.WithContext(ctx).Create(r).Error; err != nil {
 		return nil, err
 	}
@@ -1422,6 +1510,27 @@ func (s *MemStateStore) DeleteRoom(ctx context.Context, id uint64) (*Event, erro
 	return ev, nil
 }
 
+// RenameRoom 修改房间名（空串=清除命名）。事件为全局（RoomID=0，载荷带房间 id）：
+// 看板通道据此重拉房间列表，房间通道按载荷自取本房改名。
+func (s *MemStateStore) RenameRoom(ctx context.Context, id uint64, name string) (*Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.ensureRoom(ctx, id); err != nil {
+		return nil, err
+	}
+	n, err := dsmodel.ValidateRoomName(name)
+	if err != nil {
+		return nil, &Error{Code: "room_name_invalid", Msg: err.Error()}
+	}
+	if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", id).
+		Update("name", n).Error; err != nil {
+		return nil, err
+	}
+	ev := &Event{Type: EventRoomRenamed, Data: RoomRef{id}}
+	s.emit(0, ev)
+	return ev, nil
+}
+
 func (s *MemStateStore) PullCandidate(ctx context.Context, roomID, candidateID uint64) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1446,7 +1555,8 @@ func (s *MemStateStore) PullCandidate(ctx context.Context, roomID, candidateID u
 		UpdateColumn("candidate_id", candidateID).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.WithContext(ctx).Model(c).Update("status", dsmodel.StatusAssigned).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(c).
+		Updates(statusUpdates(dsmodel.StatusAssigned, time.Now())).Error; err != nil {
 		return nil, err
 	}
 	ev := &Event{Type: EventCandidateAssigned, Data: struct {
@@ -1510,4 +1620,18 @@ func validStatus(s dsmodel.CandidateStatus) bool {
 		}
 	}
 	return false
+}
+
+// statusUpdates 组装候选人状态迁移的写库列：状态本身 + 面试计时打点。
+// interview_started_at 的语义 = 当前这次面试的开始时刻（NULL = 不在面试中）：
+// 进入 IN_PROGRESS 打点，其余状态一律清空；重新进入会重新打点。
+// 走批量 SQL 的状态更新（syncAdmissionStatuses、捡漏结算）不在「面试中」路径上，无需打点。
+func statusUpdates(to dsmodel.CandidateStatus, now time.Time) map[string]any {
+	updates := map[string]any{"status": to}
+	if to == dsmodel.StatusInProgress {
+		updates["interview_started_at"] = now
+	} else {
+		updates["interview_started_at"] = nil
+	}
+	return updates
 }

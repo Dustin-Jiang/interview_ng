@@ -34,10 +34,10 @@ type StateStore interface {
 	CheckIn(ctx context.Context, candidateID uint64) (*Event, error)
 	// CreateCandidate 新建候选人（初始状态 NOT_CHECKED_IN），返回创建事件（载荷 CandidateRef）。
 	// 学号必填且唯一（纯数字，见 model.ValidateStudentNo）；重复 → ErrStudentNoExists。
-	CreateCandidate(ctx context.Context, studentNo, name, profile string) (*Event, error)
+	CreateCandidate(ctx context.Context, info CandidateInfo) (*Event, error)
 	// ImportCandidates 批量导入候选人（管理员数据导入的落库端）：按学号 upsert，
 	// 单事务【全或无】——任一行不合法即整批不落库并返回行级错误报告（*ImportError）；
-	// 批内重复学号后者覆盖前者；只写 student_no/name/profile，
+	// 批内重复学号后者覆盖前者；只写资料字段（CandidateInfo），
 	// 候选人的运行态（状态机 / 房间绑定 / 消息 / 录取决定 / 出价）一律不动。
 	ImportCandidates(ctx context.Context, rows []CandidateImportRow) (*ImportReport, error)
 	// MovePhase 推进阶段：ASSIGNED -> IN_PROGRESS -> COMPLETED。
@@ -100,10 +100,13 @@ type StateStore interface {
 
 	// ---- 候选人管理 ----
 
-	// UpdateCandidate 编辑候选人学号/姓名/简介，返回更新事件（载荷 CandidateRef）。
+	// UpdateCandidate 编辑候选人资料字段（CandidateInfo 全量覆盖），返回更新事件（载荷 CandidateRef）。
 	// 学号可改（改到他人已占用的学号 → ErrStudentNoExists）；学号是身份键，
 	// 修改不影响候选人的运行态（房间绑定 / 消息 / 录取决定 / 出价均随 id 保留）。
-	UpdateCandidate(ctx context.Context, id uint64, studentNo, name, profile string) (*Event, error)
+	UpdateCandidate(ctx context.Context, id uint64, info CandidateInfo) (*Event, error)
+	// UpdateCandidatePreferences 只更新志愿与调剂三列（不触碰其他资料与运行态），
+	// 返回更新事件（载荷 CandidateRef）；候选人不存在 → ErrNotFound。
+	UpdateCandidatePreferences(ctx context.Context, id uint64, prefs CandidatePreferences) (*Event, error)
 	// DeleteCandidate 删除候选人：连带删其消息档案并解绑房间（房间保留为空记录），
 	// 返回删除事件（载荷 CandidateRef）。
 	DeleteCandidate(ctx context.Context, id uint64) (*Event, error)
@@ -139,10 +142,12 @@ type StateStore interface {
 
 	// ---- 房间管理 ----
 
-	// CreateRoom 手动创建空房间（独立物理会议室记录），返回创建事件（载荷 RoomRef）。
-	CreateRoom(ctx context.Context) (*Event, error)
+	// CreateRoom 手动创建房间（name 可选别名，空串=未命名），返回创建事件（载荷 RoomRef）。
+	CreateRoom(ctx context.Context, name string) (*Event, error)
 	// DeleteRoom 删除空房间（无候选人绑定、无成员时允许），返回删除事件（载荷 RoomRef）。
 	DeleteRoom(ctx context.Context, id uint64) (*Event, error)
+	// RenameRoom 修改房间名（空串=清除命名），返回改名事件（载荷 RoomRef）。
+	RenameRoom(ctx context.Context, id uint64, name string) (*Event, error)
 	// PullCandidate 房间内面试官拉取候选人：CHECKED_IN_PENDING_ASSIGN -> ASSIGNED 并绑定房间。
 	PullCandidate(ctx context.Context, roomID, candidateID uint64) (*Event, error)
 
@@ -176,12 +181,32 @@ var (
 // MaxImportRows 单次导入的行数上限（前端亦按此预检，服务端兜底）。
 const MaxImportRows = 2000
 
+// CandidateInfo 是候选人的资料字段全集（新建/编辑/导入共用；运行态不在此列）。
+// 学号为身份键（必填、纯数字、唯一）；志愿与联系方式均为可选，落库前统一 TrimSpace。
+type CandidateInfo struct {
+	StudentNo    string `json:"student_no"`
+	Name         string `json:"name"`
+	Profile      string `json:"profile"`
+	FirstChoice  string `json:"first_choice"`  // 第一志愿
+	SecondChoice string `json:"second_choice"` // 第二志愿
+	AcceptAdjust bool   `json:"accept_adjust"` // 是否接受调剂
+	Phone        string `json:"phone"`         // 手机号
+	QQ           string `json:"qq"`            // QQ 号
+	Email        string `json:"email"`         // 邮箱
+}
+
 // CandidateImportRow 是批量导入的一行输入：前端在浏览器内解析 Excel 并映射后的规范化字段
-// （服务端不解析表格，只做校验与落库）。
+// （服务端不解析表格，只做校验与落库）。内嵌 CandidateInfo，JSON 仍为扁平字段。
 type CandidateImportRow struct {
-	StudentNo string `json:"student_no"`
-	Name      string `json:"name"`
-	Profile   string `json:"profile"`
+	CandidateInfo
+}
+
+// CandidatePreferences 是候选人的志愿与调剂三项（独立于资料全量编辑：
+// 持 candidates.preferences 的面试官可改这三项，无法触碰姓名/学号/联系方式与运行态）。
+type CandidatePreferences struct {
+	FirstChoice  string `json:"first_choice"`  // 第一志愿
+	SecondChoice string `json:"second_choice"` // 第二志愿
+	AcceptAdjust bool   `json:"accept_adjust"` // 是否接受调剂
 }
 
 // ImportOutcome 单行导入结果（status: created / updated）。

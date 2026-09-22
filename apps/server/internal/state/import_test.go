@@ -18,7 +18,7 @@ func TestCreateCandidateStudentNoValidation(t *testing.T) {
 
 	// 非法学号：空、纯空白、含非数字、含内部空白、超长
 	for _, raw := range []string{"", "   ", "12a3", "12 34", "1.5", "-1", strings.Repeat("9", 65)} {
-		if _, err := st.CreateCandidate(ctx, raw, "张三", ""); err == nil {
+		if _, err := st.CreateCandidate(ctx, info3(raw, "张三", "")); err == nil {
 			t.Fatalf("student_no %q: 期望拒绝，实际通过", raw)
 		}
 	}
@@ -34,7 +34,7 @@ func TestCreateCandidateStudentNoValidation(t *testing.T) {
 		"０００１":             "0001",
 		"\u30000042\u3000": "0042",
 	} {
-		ev, err := st.CreateCandidate(ctx, raw, "李四", "")
+		ev, err := st.CreateCandidate(ctx, info3(raw, "李四", ""))
 		if err != nil {
 			t.Fatalf("create %q: %v", raw, err)
 		}
@@ -59,14 +59,14 @@ func TestCandidateStudentNoUnique(t *testing.T) {
 
 	// 新增撞号（含等价归一化写法）
 	for _, raw := range []string{"0001", " 0001 ", "０００１"} {
-		_, err := st.CreateCandidate(ctx, raw, "丙", "")
+		_, err := st.CreateCandidate(ctx, info3(raw, "丙", ""))
 		if !errors.Is(err, state.ErrStudentNoExists) {
 			t.Fatalf("create %q: got %v, want ErrStudentNoExists", raw, err)
 		}
 	}
 
 	// 编辑撞他人号 → 拒绝，且原值不变
-	if _, err := st.UpdateCandidate(ctx, b, "0001", "乙", ""); !errors.Is(err, state.ErrStudentNoExists) {
+	if _, err := st.UpdateCandidate(ctx, b, info3("0001", "乙", "")); !errors.Is(err, state.ErrStudentNoExists) {
 		t.Fatalf("update to taken: got %v", err)
 	}
 	if c, _ := st.GetCandidate(ctx, b); c.StudentNo != "0002" {
@@ -74,7 +74,7 @@ func TestCandidateStudentNoUnique(t *testing.T) {
 	}
 
 	// 编辑保留自己的学号 → 允许
-	if _, err := st.UpdateCandidate(ctx, a, "0001", "甲改", "简介"); err != nil {
+	if _, err := st.UpdateCandidate(ctx, a, info3("0001", "甲改", "简介")); err != nil {
 		t.Fatalf("update self student_no: %v", err)
 	}
 	if c, _ := st.GetCandidate(ctx, a); c.StudentNo != "0001" || c.Name != "甲改" {
@@ -82,7 +82,7 @@ func TestCandidateStudentNoUnique(t *testing.T) {
 	}
 
 	// 编辑改到未占用的学号 → 允许
-	if _, err := st.UpdateCandidate(ctx, a, "0009", "甲改", ""); err != nil {
+	if _, err := st.UpdateCandidate(ctx, a, info3("0009", "甲改", "")); err != nil {
 		t.Fatalf("update free student_no: %v", err)
 	}
 	if c, _ := st.GetCandidate(ctx, a); c.StudentNo != "0009" {
@@ -107,8 +107,8 @@ func TestImportCandidatesUpsert(t *testing.T) {
 	}
 
 	report, err := st.ImportCandidates(ctx, []state.CandidateImportRow{
-		{StudentNo: "0010", Name: "新名", Profile: "新简介"},
-		{StudentNo: "0011", Name: "新建", Profile: ""},
+		{CandidateInfo: info3("0010", "新名", "新简介")},
+		{CandidateInfo: info3("0011", "新建", "")},
 	})
 	if err != nil {
 		t.Fatalf("import: %v", err)
@@ -142,7 +142,7 @@ func TestImportCandidatesUpsert(t *testing.T) {
 
 	// 值相同也写：仍然报 updated（候选人的最新一次提交为准）
 	again, err := st.ImportCandidates(ctx, []state.CandidateImportRow{
-		{StudentNo: "0010", Name: "新名", Profile: "新简介"},
+		{CandidateInfo: info3("0010", "新名", "新简介")},
 	})
 	if err != nil {
 		t.Fatalf("import again: %v", err)
@@ -159,8 +159,8 @@ func TestImportCandidatesBatchDuplicateLastWins(t *testing.T) {
 	st := newTestStore(t)
 
 	report, err := st.ImportCandidates(ctx, []state.CandidateImportRow{
-		{StudentNo: "0020", Name: "先", Profile: "p1"},
-		{StudentNo: " 0020 ", Name: "后", Profile: "p2"},
+		{CandidateInfo: info3("0020", "先", "p1")},
+		{CandidateInfo: info3(" 0020 ", "后", "p2")},
 	})
 	if err != nil {
 		t.Fatalf("import: %v", err)
@@ -191,10 +191,10 @@ func TestImportCandidatesAtomicReject(t *testing.T) {
 	st := newTestStore(t)
 
 	_, err := st.ImportCandidates(ctx, []state.CandidateImportRow{
-		{StudentNo: "0030", Name: "合法", Profile: ""},
-		{StudentNo: "", Name: "缺学号", Profile: ""},
-		{StudentNo: "0031", Name: "", Profile: ""},
-		{StudentNo: "00A1", Name: "学号非法", Profile: ""},
+		{CandidateInfo: info3("0030", "合法", "")},
+		{CandidateInfo: info3("", "缺学号", "")},
+		{CandidateInfo: info3("0031", "", "")},
+		{CandidateInfo: info3("00A1", "学号非法", "")},
 	})
 	var ie *state.ImportError
 	if !errors.As(err, &ie) {
@@ -220,7 +220,7 @@ func TestImportCandidatesAtomicReject(t *testing.T) {
 	}
 	rows := make([]state.CandidateImportRow, state.MaxImportRows+1)
 	for i := range rows {
-		rows[i] = state.CandidateImportRow{StudentNo: "0040", Name: "同号"}
+		rows[i] = state.CandidateImportRow{CandidateInfo: info3("0040", "同号", "")}
 	}
 	if _, err := st.ImportCandidates(ctx, rows); err == nil {
 		t.Fatal("超限批次应被拒绝")
@@ -251,11 +251,68 @@ func TestListCandidatesSearchByStudentNo(t *testing.T) {
 	}
 }
 
+// info3 构造仅含学号/姓名/简介的资料集（其余志愿/联系方式字段留空，测试辅助）。
+func info3(studentNo, name, profile string) state.CandidateInfo {
+	return state.CandidateInfo{StudentNo: studentNo, Name: name, Profile: profile}
+}
+
 // mustCreateCandidateWithNo 指定学号创建候选人并返回 id（测试辅助）。
 func mustCreateCandidateWithNo(ctx context.Context, st state.StateStore, studentNo, name, profile string) uint64 {
-	ev, err := st.CreateCandidate(ctx, studentNo, name, profile)
+	ev, err := st.CreateCandidate(ctx, info3(studentNo, name, profile))
 	if err != nil {
 		panic(err)
 	}
 	return state.CandidateIDOf(ev)
+}
+
+// TestCandidateInfoFields 资料字段（志愿/调剂/联系方式）随新建与编辑全量落库：
+// 文本字段裁剪空白；编辑可清空可选字段（含 accept_adjust 的 false 零值覆盖）；
+// 批量导入同样写入新列。
+func TestCandidateInfoFields(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	full := state.CandidateInfo{
+		StudentNo: "0060", Name: " 张三 ", Profile: " 后端 ",
+		FirstChoice: " 智能科学与技术 ", SecondChoice: "软件工程",
+		AcceptAdjust: true, Phone: " 13800000000 ", QQ: " 10001 ", Email: " zs@example.com ",
+	}
+	ev, err := st.CreateCandidate(ctx, full)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := state.CandidateIDOf(ev)
+	c, err := st.GetCandidate(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if c.Name != "张三" || c.Profile != "后端" || c.FirstChoice != "智能科学与技术" ||
+		c.SecondChoice != "软件工程" || !c.AcceptAdjust ||
+		c.Phone != "13800000000" || c.QQ != "10001" || c.Email != "zs@example.com" {
+		t.Fatalf("新建资料字段未全量落库/裁剪: %+v", c)
+	}
+
+	// 编辑清空全部可选字段（零值必须覆盖旧值）
+	if _, err := st.UpdateCandidate(ctx, id, info3("0060", "张三", "")); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	c, _ = st.GetCandidate(ctx, id)
+	if c.FirstChoice != "" || c.SecondChoice != "" || c.AcceptAdjust ||
+		c.Phone != "" || c.QQ != "" || c.Email != "" {
+		t.Fatalf("编辑应全量覆盖（零值清空可选字段）: %+v", c)
+	}
+
+	// 导入同样写入新列
+	rows := []state.CandidateImportRow{{CandidateInfo: state.CandidateInfo{
+		StudentNo: "0061", Name: "李四",
+		FirstChoice: "网络空间安全", AcceptAdjust: true, Phone: "13900000000",
+	}}}
+	if _, err := st.ImportCandidates(ctx, rows); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	list, _ := st.ListCandidates(ctx, "", "0061", 10, 0)
+	if len(list) != 1 || list[0].FirstChoice != "网络空间安全" || !list[0].AcceptAdjust ||
+		list[0].Phone != "13900000000" || list[0].Email != "" {
+		t.Fatalf("导入新列未落库: %+v", list)
+	}
 }

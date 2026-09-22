@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -37,7 +38,7 @@ func newTestStore(t *testing.T) state.StateStore {
 // 学号自动生成（保证唯一且为纯数字）；学号自身的校验规则由专门用例覆盖。
 func mustCreateCandidate(ctx context.Context, st state.StateStore, name, profile string) uint64 {
 	seq := testStudentNo.Add(1)
-	ev, err := st.CreateCandidate(ctx, fmt.Sprintf("%08d", seq), name, profile)
+	ev, err := st.CreateCandidate(ctx, info3(fmt.Sprintf("%08d", seq), name, profile))
 	if err != nil {
 		panic(err)
 	}
@@ -49,7 +50,7 @@ var testStudentNo atomic.Uint64
 
 // mustCreateRoom 创建空房并返回其 id（测试辅助）。
 func mustCreateRoom(ctx context.Context, st state.StateStore) uint64 {
-	ev, err := st.CreateRoom(ctx)
+	ev, err := st.CreateRoom(ctx, "")
 	if err != nil {
 		panic(err)
 	}
@@ -244,8 +245,8 @@ func TestLeftoverBiddingAndResolve(t *testing.T) {
 		t.Fatalf("set phase: %v", err)
 	}
 
-	// 非法金额与不存在的候选人/部门
-	if _, err := st.UpsertLeftoverBid(ctx, c1, deptA, 0); err == nil {
+	// 非法金额（负数）与不存在的候选人/部门
+	if _, err := st.UpsertLeftoverBid(ctx, c1, deptA, -1); err == nil {
 		t.Fatalf("expected invalid amount error")
 	}
 	if _, err := st.UpsertLeftoverBid(ctx, 99999, deptA, 100); err == nil {
@@ -547,7 +548,7 @@ func TestAdmissionStatusStages(t *testing.T) {
 	if _, err := st.CheckIn(ctx, c); err != nil {
 		t.Fatalf("checkin: %v", err)
 	}
-	ev, err := st.CreateRoom(ctx)
+	ev, err := st.CreateRoom(ctx, "")
 	if err != nil {
 		t.Fatalf("create room: %v", err)
 	}
@@ -672,7 +673,7 @@ func TestPhaseSwitchSyncsAdmissionStatuses(t *testing.T) {
 		if _, err := st.CheckIn(ctx, c); err != nil {
 			t.Fatalf("checkin %d: %v", c, err)
 		}
-		roomEv, err := st.CreateRoom(ctx)
+		roomEv, err := st.CreateRoom(ctx, "")
 		if err != nil {
 			t.Fatalf("create room: %v", err)
 		}
@@ -738,5 +739,214 @@ func TestPhaseSwitchSyncsAdmissionStatuses(t *testing.T) {
 	got, err := st.GetCandidate(ctx, contested)
 	if err != nil || got.Status != dsmodel.StatusAdmitted {
 		t.Fatalf("contested after settle=%+v err=%v", got, err)
+	}
+}
+
+// 面试计时打点：进入「面试中」写入 interview_started_at，离开即清空，重新进入重新打点。
+// 该字段独立于 updated_at —— 资料编辑会刷新 updated_at，计时起点不能依赖它。
+func TestInterviewStartedAt(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	id := mustCreateCandidate(ctx, st, "计时", "简介")
+
+	startedAt := func() *time.Time {
+		t.Helper()
+		c, err := st.GetCandidate(ctx, id)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		return c.InterviewStartedAt
+	}
+	mustNil := func(stage string) {
+		t.Helper()
+		if got := startedAt(); got != nil {
+			t.Fatalf("%s：interview_started_at 应为空，实得 %v", stage, got)
+		}
+	}
+
+	mustNil("创建后")
+	if _, err := st.CheckIn(ctx, id); err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	roomID := mustCreateRoom(ctx, st)
+	if _, err := st.PullCandidate(ctx, roomID, id); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	mustNil("待面试")
+
+	// 推进阶段需房间成员身份（无主持人概念）
+	if _, _, err := st.JoinRoom(ctx, roomID, 1); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+
+	// 进入面试中 → 打点
+	lo := time.Now().Add(-time.Second)
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("move in_progress: %v", err)
+	}
+	first := startedAt()
+	if first == nil {
+		t.Fatal("进入面试中应打点 interview_started_at")
+	}
+	if first.Before(lo) || first.After(time.Now().Add(time.Second)) {
+		t.Fatalf("打点时刻应落在本次迁移附近：%v", first)
+	}
+
+	// 资料编辑刷新 updated_at，但不得改动计时起点
+	c, err := st.GetCandidate(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if _, err := st.UpdateCandidate(ctx, id, info3(c.StudentNo, "计时改", "简介改")); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got := startedAt(); got == nil || !got.Equal(*first) {
+		t.Fatalf("资料编辑不应改动计时起点：%v → %v", first, got)
+	}
+
+	// 离开面试中 → 清空；重新进入 → 重新打点
+	time.Sleep(2 * time.Millisecond)
+	if _, err := st.ResetCandidateStatus(ctx, id, dsmodel.StatusAssigned); err != nil {
+		t.Fatalf("reset assigned: %v", err)
+	}
+	mustNil("重置回待面试")
+	if _, err := st.ResetCandidateStatus(ctx, id, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("reset in_progress: %v", err)
+	}
+	second := startedAt()
+	if second == nil || !second.After(*first) {
+		t.Fatalf("重新进入面试中应重新打点：%v → %v", first, second)
+	}
+
+	// 完成 → 清空
+	if _, err := st.ResetCandidateStatus(ctx, id, dsmodel.StatusCompleted); err != nil {
+		t.Fatalf("reset completed: %v", err)
+	}
+	mustNil("面试已结束")
+}
+
+// 出价允许 0：0 是合法出价（落库可见）；重复提交 0 走更新而不是重复插入（唯一索引不炸）；
+// 0 ↔ 正数 之间来回改价都只有一条记录；负数仍被拒绝。
+func TestZeroBidAllowed(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	dept, err := st.CreateDepartment(ctx, "零价组", "", 10)
+	if err != nil {
+		t.Fatalf("create dept: %v", err)
+	}
+	cand := mustCreateCandidate(ctx, st, "零价候选人", "")
+	mustCompleteCandidate(ctx, st, cand)
+	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseLeftover); err != nil {
+		t.Fatalf("set phase: %v", err)
+	}
+
+	if _, err := st.UpsertLeftoverBid(ctx, cand, dept, -1); err == nil {
+		t.Fatal("负数出价应被拒绝")
+	}
+
+	bidOf := func() int {
+		t.Helper()
+		bids, err := st.ListLeftoverBids(ctx, &dept)
+		if err != nil {
+			t.Fatalf("list bids: %v", err)
+		}
+		if len(bids) != 1 {
+			t.Fatalf("应恰好一条出价，实得 %d 条：%+v", len(bids), bids)
+		}
+		return bids[0].Amount
+	}
+
+	if _, err := st.UpsertLeftoverBid(ctx, cand, dept, 0); err != nil {
+		t.Fatalf("0 出价应被接受: %v", err)
+	}
+	if got := bidOf(); got != 0 {
+		t.Fatalf("出价应为 0，实得 %d", got)
+	}
+	// 重复提交 0：必须走更新分支（历史缺陷：oldAmount > 0 当存在性哨兵 → 重复插入撞唯一索引）
+	if _, err := st.UpsertLeftoverBid(ctx, cand, dept, 0); err != nil {
+		t.Fatalf("重复 0 出价应走更新: %v", err)
+	}
+	if got := bidOf(); got != 0 {
+		t.Fatalf("重复 0 后仍应为 0，实得 %d", got)
+	}
+	if _, err := st.UpsertLeftoverBid(ctx, cand, dept, 150); err != nil {
+		t.Fatalf("0 改价为正数: %v", err)
+	}
+	if got := bidOf(); got != 150 {
+		t.Fatalf("改价后应为 150，实得 %d", got)
+	}
+	if _, err := st.UpsertLeftoverBid(ctx, cand, dept, 0); err != nil {
+		t.Fatalf("改回 0: %v", err)
+	}
+	if got := bidOf(); got != 0 {
+		t.Fatalf("改回 0 后应为 0，实得 %d", got)
+	}
+}
+
+// 争议候选人的预算口径：不算已录取（不缩预算基数）、其出价照常占用预算；
+// 只有唯一录取（封盘）的赢家候选人才计入已录取并释放自己的出价占用。
+func TestLeftoverBudgetForContestedAdmissions(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	deptA, err := st.CreateDepartment(ctx, "部门A", "", 10)
+	if err != nil {
+		t.Fatalf("create deptA: %v", err)
+	}
+	deptB, err := st.CreateDepartment(ctx, "部门B", "", 10)
+	if err != nil {
+		t.Fatalf("create deptB: %v", err)
+	}
+	contested := mustCreateCandidate(ctx, st, "争议者", "")
+	solo := mustCreateCandidate(ctx, st, "唯一录取者", "")
+
+	// A、B 两家同时手动录取 contested → 争议
+	if err := st.UpsertCandidateAdmission(ctx, contested, deptA, dsmodel.AdmissionAdmitted); err != nil {
+		t.Fatalf("admit A: %v", err)
+	}
+	if err := st.UpsertCandidateAdmission(ctx, contested, deptB, dsmodel.AdmissionAdmitted); err != nil {
+		t.Fatalf("admit B: %v", err)
+	}
+	if err := st.SetSystemStatus(ctx, dsmodel.SystemPhaseLeftover); err != nil {
+		t.Fatalf("set leftover: %v", err)
+	}
+	// A 对争议候选人出价 100（争议未封盘 → 允许出价）
+	if _, err := st.UpsertLeftoverBid(ctx, contested, deptA, 100); err != nil {
+		t.Fatalf("bid A contested: %v", err)
+	}
+	// B 先对 solo 出价 150（此时尚未录取 → 允许出价），随后 B 唯一录取 solo（封盘）→ 该出价应随录取释放
+	if _, err := st.UpsertLeftoverBid(ctx, solo, deptB, 150); err != nil {
+		t.Fatalf("bid B solo: %v", err)
+	}
+	if err := st.UpsertCandidateAdmission(ctx, solo, deptB, dsmodel.AdmissionAdmitted); err != nil {
+		t.Fatalf("admit B solo: %v", err)
+	}
+
+	ov, err := st.LeftoverOverview(ctx, nil, true)
+	if err != nil {
+		t.Fatalf("overview: %v", err)
+	}
+	byID := map[uint64]dsmodel.DepartmentLeftover{}
+	for _, d := range ov.Departments {
+		byID[d.ID] = d
+	}
+	a := byID[deptA]
+	if a.AdmittedCount != 0 {
+		t.Fatalf("争议候选人不应计入已录取：%+v", a)
+	}
+	if a.Budget != 1000 {
+		t.Fatalf("争议候选人不应缩预算基数（期望 10*100=1000）：%+v", a)
+	}
+	if a.Spent == nil || *a.Spent != 100 {
+		t.Fatalf("争议候选人的出价应占用预算：%+v", a)
+	}
+	b := byID[deptB]
+	if b.AdmittedCount != 1 {
+		t.Fatalf("唯一录取应计入已录取：%+v", b)
+	}
+	if b.Budget != 900 {
+		t.Fatalf("唯一录取应缩预算基数（期望 (10-1)*100=900）：%+v", b)
+	}
+	if b.Spent == nil || *b.Spent != 0 {
+		t.Fatalf("唯一录取赢家的出价应释放：%+v", b)
 	}
 }

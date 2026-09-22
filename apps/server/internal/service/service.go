@@ -37,8 +37,8 @@ func (s *InterviewService) CheckIn(ctx context.Context, candidateID uint64) erro
 }
 
 // CreateCandidate 新建候选人（未签到）。先落库，成功后广播。
-func (s *InterviewService) CreateCandidate(ctx context.Context, studentNo, name, profile string) (*state.Event, error) {
-	ev, err := s.store.CreateCandidate(ctx, studentNo, name, profile)
+func (s *InterviewService) CreateCandidate(ctx context.Context, info state.CandidateInfo) (*state.Event, error) {
+	ev, err := s.store.CreateCandidate(ctx, info)
 	if err != nil {
 		return nil, err
 	}
@@ -165,9 +165,19 @@ func (s *InterviewService) SetBidStep(ctx context.Context, step int) error {
 
 // ---- 候选人管理 ----
 
-// UpdateCandidate 编辑候选人学号/姓名/简介。先落库后广播。
-func (s *InterviewService) UpdateCandidate(ctx context.Context, id uint64, studentNo, name, profile string) error {
-	ev, err := s.store.UpdateCandidate(ctx, id, studentNo, name, profile)
+// UpdateCandidate 编辑候选人资料字段（学号/姓名/简介/志愿/联系方式）。先落库后广播。
+func (s *InterviewService) UpdateCandidate(ctx context.Context, id uint64, info state.CandidateInfo) error {
+	ev, err := s.store.UpdateCandidate(ctx, id, info)
+	if err != nil {
+		return err
+	}
+	s.broad.Publish(ev)
+	return nil
+}
+
+// UpdateCandidatePreferences 修改候选人志愿与调剂（独立小权限，不触碰其他资料）。先落库后广播。
+func (s *InterviewService) UpdateCandidatePreferences(ctx context.Context, id uint64, prefs state.CandidatePreferences) error {
+	ev, err := s.store.UpdateCandidatePreferences(ctx, id, prefs)
 	if err != nil {
 		return err
 	}
@@ -207,14 +217,24 @@ func (s *InterviewService) ResetCandidateStatus(ctx context.Context, id uint64, 
 
 // ---- 房间管理 ----
 
-// CreateRoom 新建空房。先落库，成功后广播。
-func (s *InterviewService) CreateRoom(ctx context.Context) (*state.Event, error) {
-	ev, err := s.store.CreateRoom(ctx)
+// CreateRoom 新建房间（name 可选，空串=未命名）。先落库，成功后广播。
+func (s *InterviewService) CreateRoom(ctx context.Context, name string) (*state.Event, error) {
+	ev, err := s.store.CreateRoom(ctx, name)
 	if err != nil {
 		return nil, err
 	}
 	s.broad.Publish(ev)
 	return ev, nil
+}
+
+// RenameRoom 修改房间名（空串=清除命名）。先落库，成功后广播。
+func (s *InterviewService) RenameRoom(ctx context.Context, id uint64, name string) error {
+	ev, err := s.store.RenameRoom(ctx, id, name)
+	if err != nil {
+		return err
+	}
+	s.broad.Publish(ev)
+	return nil
 }
 
 // DeleteRoom 删除空房。先落库，成功后广播。

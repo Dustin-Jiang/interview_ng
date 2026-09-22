@@ -65,12 +65,22 @@ type Candidate struct {
 	// StudentNo 学号：候选人的身份键（纯数字、唯一）。
 	// 文本列存数字串以保前导零（`00123` ≠ `123`）；校验统一走 ValidateStudentNo，
 	// 唯一性由唯一索引兜底。
-	StudentNo string          `gorm:"size:64;not null;uniqueIndex" json:"student_no"`
-	Name      string          `gorm:"size:128" json:"name"`
-	Profile   string          `gorm:"type:text" json:"profile"`
-	Status    CandidateStatus `gorm:"size:32;index" json:"status"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	StudentNo string `gorm:"size:64;not null;uniqueIndex" json:"student_no"`
+	Name      string `gorm:"size:128" json:"name"`
+	Profile   string `gorm:"type:text" json:"profile"`
+	// 报考志愿与联系方式：均为可选资料字段（空白归一化为空串），AutoMigrate 直接加列。
+	FirstChoice  string          `gorm:"size:128" json:"first_choice"`  // 第一志愿
+	SecondChoice string          `gorm:"size:128" json:"second_choice"` // 第二志愿
+	AcceptAdjust bool            `json:"accept_adjust"`                 // 是否接受调剂
+	Phone        string          `gorm:"size:32" json:"phone"`          // 手机号
+	QQ           string          `gorm:"size:32" json:"qq"`             // QQ 号
+	Email        string          `gorm:"size:254" json:"email"`         // 邮箱
+	Status       CandidateStatus `gorm:"size:32;index" json:"status"`
+	// InterviewStartedAt 当前这次面试的开始时刻：进入「面试中」时打点，离开该状态即置空。
+	// 前端计时以此为准——UpdatedAt 会被任何资料编辑刷新，不能当计时起点。
+	InterviewStartedAt *time.Time `json:"interview_started_at"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 // StudentNoMaxLen 学号长度上限（纯数字，1–64 位）。

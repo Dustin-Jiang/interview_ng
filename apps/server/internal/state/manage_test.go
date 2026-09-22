@@ -2,6 +2,8 @@ package state_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	dsmodel "interview_ng/internal/model"
@@ -537,5 +539,115 @@ func TestCandidateAdmissionByDepartment(t *testing.T) {
 	afterDel, _ := st.ListCandidateAdmissions(ctx, nil)
 	if len(afterDel) != 0 {
 		t.Fatalf("admissions should be cascaded, got %+v", afterDel)
+	}
+}
+
+// TestRoomNaming 房间命名：创建可带名（裁剪空白落库）；RenameRoom 全量覆盖
+// （空串=清除命名）；超长拒绝（room_name_invalid）；不存在房间 not_found；
+// 事件为 room_renamed 且载荷带房间 id。
+func TestRoomNaming(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	ev, err := st.CreateRoom(ctx, "  面试间A  ")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := state.RoomIDOf(ev)
+	r, err := st.GetRoom(ctx, id)
+	if err != nil || r.Name != "面试间A" {
+		t.Fatalf("创建名应裁剪落库: %+v err=%v", r, err)
+	}
+	// 缺省创建仍可不命名
+	if r2, err := st.GetRoom(ctx, mustCreateRoom(ctx, st)); err != nil || r2.Name != "" {
+		t.Fatalf("未命名房间 name 应为空串: %+v err=%v", r2, err)
+	}
+
+	if rev, err := st.RenameRoom(ctx, id, "终面间"); err != nil ||
+		rev.Type != state.EventRoomRenamed || state.RoomIDOf(rev) != id {
+		t.Fatalf("改名事件: %v %+v", err, rev)
+	}
+	if r, _ = st.GetRoom(ctx, id); r.Name != "终面间" {
+		t.Fatalf("改名未生效: %+v", r)
+	}
+	if _, err := st.RenameRoom(ctx, id, "   "); err != nil {
+		t.Fatalf("清除命名: %v", err)
+	}
+	if r, _ = st.GetRoom(ctx, id); r.Name != "" {
+		t.Fatalf("空白应清除命名: %+v", r)
+	}
+
+	if _, err := st.RenameRoom(ctx, id, strings.Repeat("名", dsmodel.RoomNameMaxLen+1)); err == nil {
+		t.Fatal("超长房间名应拒绝")
+	} else if se, ok := err.(*state.Error); !ok || se.Code != "room_name_invalid" {
+		t.Fatalf("超长错误码: %v", err)
+	}
+	if _, err := st.RenameRoom(ctx, 9999, "X"); err != state.ErrNotFound {
+		t.Fatalf("不存在房间: got %v want ErrNotFound", err)
+	}
+}
+
+// 志愿与调剂可独立更新：只改这三列，其他资料与运行态（状态机 / 房间绑定）不受影响，
+// 且空值同样覆盖（清空志愿 / 取消调剂）。
+func TestUpdateCandidatePreferences(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	ev, err := st.CreateCandidate(ctx, state.CandidateInfo{
+		StudentNo: "000123", Name: "志愿", Profile: "简介",
+		FirstChoice: "技术部", SecondChoice: "电脑诊所部", AcceptAdjust: true,
+		Phone: "13800000000", QQ: "12345", Email: "a@b.c",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := ev.Data.(state.CandidateRef).CandidateID
+	if _, err := st.CheckIn(ctx, id); err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	roomID := mustCreateRoom(ctx, st)
+	if _, err := st.PullCandidate(ctx, roomID, id); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+
+	upd, err := st.UpdateCandidatePreferences(ctx, id, state.CandidatePreferences{
+		FirstChoice:  " 数字媒体中心 ", // 落库前去空白
+		SecondChoice: "技术保障中心",
+		AcceptAdjust: false, // false 也要覆盖
+	})
+	if err != nil {
+		t.Fatalf("update preferences: %v", err)
+	}
+	if upd.Type != state.EventCandidateUpdated {
+		t.Fatalf("事件类型 = %s，期望 %s", upd.Type, state.EventCandidateUpdated)
+	}
+
+	c, err := st.GetCandidate(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if c.FirstChoice != "数字媒体中心" || c.SecondChoice != "技术保障中心" || c.AcceptAdjust {
+		t.Fatalf("志愿/调剂未更新：%+v", c)
+	}
+	if c.StudentNo != "000123" || c.Name != "志愿" || c.Profile != "简介" ||
+		c.Phone != "13800000000" || c.QQ != "12345" || c.Email != "a@b.c" {
+		t.Fatalf("其他资料被改动：%+v", c)
+	}
+	if c.Status != dsmodel.StatusAssigned {
+		t.Fatalf("状态被改动：%s", c.Status)
+	}
+	room, err := st.GetRoom(ctx, roomID)
+	if err != nil || room.CandidateID == nil || *room.CandidateID != id {
+		t.Fatalf("房间绑定被改动：%+v err=%v", room, err)
+	}
+
+	if _, err := st.UpdateCandidatePreferences(ctx, id, state.CandidatePreferences{}); err != nil {
+		t.Fatalf("clear preferences: %v", err)
+	}
+	if c, _ = st.GetCandidate(ctx, id); c.FirstChoice != "" || c.SecondChoice != "" || c.AcceptAdjust {
+		t.Fatalf("清空未生效：%+v", c)
+	}
+
+	if _, err := st.UpdateCandidatePreferences(ctx, 999999, state.CandidatePreferences{FirstChoice: "x"}); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("未知候选人应 ErrNotFound，实得 %v", err)
 	}
 }
