@@ -1,12 +1,14 @@
 /**
- * useRosterSelection —— 名册「选中 + 排序切换 + 键盘导航」组合式函数。
+ * useRosterSelection —— 名册「选中 + 上一个/下一个」组合式函数（**纯状态，不注册全局键盘**）。
  * 收编「候选人查看」与「捡漏竞拍」两页同构的选择态：
  *  - 选中项随筛选结果自动回退（选中项被筛掉时落到首位可见项）；
  *  - 条目路由参数 `/…/:candidateId` 解析后待列表就绪落地（在名册内则选中并进入详情）；
- *  - 上一个 / 下一个（←/→ 全局键，输入控件聚焦时不拦截）与移动端两段式状态。
+ *  - 移动端两段式状态。
+ * 键位由各页自己决定（见下方各处 window 处理）：两页统一 **↑/↓ 切换候选人**，
+ * 捡漏页另把 **←/→ 用于调整报价**、Enter 保存——因此这里不再持有任何全局键。
  * 筛选条件本身（关键词 / 状态）由调用方维护，本函数只消费「筛选后的列表」。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 
 import { useMasterDetail } from '@/composables/useMasterDetail'
 
@@ -17,8 +19,6 @@ export interface RosterSelectionOptions<T extends { id: number }> {
   lookup?: (id: number) => T | null
   /** 数据是否已就绪：未就绪时空列表不消费深链待选项（避免被首帧空列表提前落地）。 */
   ready?: () => boolean
-  /** 全局键的额外快捷键；返回 true 表示已消费本次按键。 */
-  extraKeys?: (e: KeyboardEvent) => boolean
 }
 
 export interface UseRosterSelection<T extends { id: number }> {
@@ -26,8 +26,6 @@ export interface UseRosterSelection<T extends { id: number }> {
   readonly selected: ComputedRef<T | null>
   /** 选中并进入详情（点击名册项）。 */
   select: (item: T) => void
-  /** 仅移动选中高亮（列表内方向键），不切换移动端视图。 */
-  highlight: (item: T) => void
   readonly canPrev: ComputedRef<boolean>
   readonly canNext: ComputedRef<boolean>
   goPrev: () => void
@@ -37,18 +35,6 @@ export interface UseRosterSelection<T extends { id: number }> {
   closeDetail: () => void
   /** 从路由参数恢复待选条目（列表就绪后自动落地）。 */
   presetSelection: (raw: unknown) => void
-}
-
-/** 全局方向键忽略输入控件聚焦（搜索框、数字输入等）。 */
-function isEditableTarget(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null
-  if (!el) return false
-  return (
-    el.tagName === 'INPUT' ||
-    el.tagName === 'TEXTAREA' ||
-    el.tagName === 'SELECT' ||
-    el.isContentEditable
-  )
 }
 
 export function useRosterSelection<T extends { id: number }>(
@@ -71,6 +57,7 @@ export function useRosterSelection<T extends { id: number }>(
     () => selectedIndex.value !== -1 && selectedIndex.value < opts.items().length - 1,
   )
 
+  /** 仅移动选中（不切换移动端视图）：点击选中、列表回退与深链落地共用。 */
   function highlight(item: T): void {
     selectedId.value = item.id
   }
@@ -122,25 +109,10 @@ export function useRosterSelection<T extends { id: number }>(
     { immediate: true },
   )
 
-  // 键盘 ←/→ 切换候选人；输入控件聚焦时不拦截。
-  function onGlobalKeydown(e: KeyboardEvent) {
-    if (isEditableTarget(e.target)) return
-    if (opts.extraKeys?.(e)) return
-    if (e.key === 'ArrowLeft') {
-      goPrev()
-      return
-    }
-    if (e.key === 'ArrowRight') goNext()
-  }
-
-  onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
-  onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
-
   return {
     selectedId,
     selected,
     select,
-    highlight,
     canPrev,
     canNext,
     goPrev,

@@ -1,11 +1,12 @@
 <!--
   RosterList —— 左栏候选人名册（滚动区 + listbox + 骨架/错误/空态）。
   收编「候选人查看」与「捡漏竞拍」两侧逐字节相同的名册实现：
-  整行可点、roving tabindex（仅选中项可 Tab）、↑/↓ 在列表内移动并回填焦点。
+  整行可点；键盘只有一个 Tab 停靠点（选中项，roving tabindex），列表内切换候选人走全局 ←/→
+  （`useRosterSelection`）。**不做 ↑/↓ 列表导航**——方向键留给页面控件（如捡漏页的报价步进）。
   徽章与元信息差异由 #badges / #meta 插槽交由调用方渲染。
 -->
 <script setup lang="ts" generic="T extends { id: number; name: string; profile?: string | null }">
-import { nextTick, ref, type Component } from 'vue'
+import { nextTick, ref, watch, type Component } from 'vue'
 
 import { Avatar, AvatarFallback, avatarVariants } from '@/components/ui/avatar'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -44,34 +45,39 @@ const props = withDefaults(
 const emit = defineEmits<{
   /** 点击选中（调用方通常会切到详情视图）。 */
   select: [item: T]
-  /** 键盘高亮移动（仅移动选中高亮，不切换移动端视图）。 */
-  highlight: [item: T]
   retry: []
   'empty-action': []
 }>()
 
 const rosterEl = ref<HTMLElement | null>(null)
 
-/** ↑/↓ 移动选中并回填焦点（roving tabindex）。 */
-function onKeydown(e: KeyboardEvent) {
-  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
-  e.preventDefault()
-  const list = props.items
-  const idx = list.findIndex((c) => c.id === props.selectedId)
-  if (idx === -1) return
-  const next = list[idx + (e.key === 'ArrowDown' ? 1 : -1)]
-  if (!next) return
-  emit('highlight', next)
-  void nextTick(() => {
-    const options = rosterEl.value?.querySelectorAll<HTMLElement>('[role="option"]')
-    options?.[list.findIndex((c) => c.id === next.id)]?.focus()
-  })
-}
+/**
+ * 选中变更（←/→ 切换、深链恢复、外部程序化选中）时把选中项滚入名册视野。
+ * block: nearest——仅当项越出可视区才移动（已在视野内不跳动）；只滚动不移动焦点。
+ */
+watch(
+  () => props.selectedId,
+  (id) => {
+    if (id == null) return
+    void nextTick(() => {
+      const idx = props.items.findIndex((c) => c.id === id)
+      if (idx === -1) return
+      const options = rosterEl.value?.querySelectorAll<HTMLElement>('[role="option"]')
+      options?.[idx]?.scrollIntoView({ block: 'nearest' })
+    })
+  },
+)
 </script>
 
 <template>
-  <ScrollArea class="min-h-0 flex-1">
-    <div ref="rosterEl" role="listbox" :aria-label="props.listLabel" class="space-y-1 p-2" @keydown="onKeydown">
+  <!--
+    viewport-class：reka 给滚动内容层内联 min-width: fit-content——短列表无害，但本名册含
+    truncate（nowrap）简介列，fit-content 会按全文宽度（可达数千 px）撑开整栏，宽度溢出且
+    省略号失效。以 !important 收回为 0：内容层恒随视口宽，简介/姓名在行内正常截断，
+    真正超宽的内容仍由 viewport 的横向滚动兜底。
+  -->
+  <ScrollArea class="min-h-0 flex-1" viewport-class="[&>div]:!min-w-0">
+    <div ref="rosterEl" role="listbox" :aria-label="props.listLabel" class="space-y-1 p-2">
       <!-- 首屏骨架 -->
       <ListSkeleton
         v-if="props.skeleton"
@@ -99,7 +105,7 @@ function onKeydown(e: KeyboardEvent) {
         </template>
       </EmptyState>
 
-      <!-- 列表项：整行可点、键盘可达（roving tabindex + 方向键） -->
+      <!-- 列表项：整行可点；Tab 停靠选中项（roving tabindex），切换走 ←/→ 全局键 -->
       <button
         v-for="c in props.items"
         :key="c.id"
