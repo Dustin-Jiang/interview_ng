@@ -1,7 +1,7 @@
 /**
  * useRoomChat —— 单房间实时聊天组合式函数（函数式 ViewModel）。
  * 封装 WsChannel（WS Service）为响应式状态：房间 / 消息 / 连接 / 错误 / 阶段。
- *
+ * 事件/回执经 domain 纯函数转换为不可变状态；房间改名、候选人资料更新等全局事件按需局部刷新。
  * 组合式职责（替代原 Pinia store）：
  *  - 接受一个 roomId（可响应式），watch 其变化自动切换连接；
  *  - 连接后先发 auth（JWT），鉴权成功才进入业务阶段；
@@ -82,6 +82,18 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
       if (ev.type === 'candidate_assigned' && toRoom != null && toRoom === activeId) {
         void reloadRoom()
       }
+      return
+    }
+    // room_renamed（全局事件，载荷带房间 id）→ 本房改名则重拉快照
+    if (ev.type === 'room_renamed') {
+      const rid = (ev.data as { room_id?: number } | undefined)?.room_id
+      if (rid != null && rid === activeId) void reloadRoom()
+      return
+    }
+    // candidate_updated（全局，载荷 {candidate_id}）→ 本房候选人的资料/志愿变化：重拉快照
+    if (ev.type === 'candidate_updated') {
+      const cid = (ev.data as { candidate_id?: number } | undefined)?.candidate_id
+      if (cid != null && cid === room.value?.candidate?.id) void reloadRoom()
       return
     }
     // 其余事件仅处理本房间的（room_id=0 的全局事件无房间语义，忽略）
@@ -243,7 +255,7 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
 
   /** 拉取"已签到待分配"候选人池（房间侧栏"拉取候选人"列表）。 */
   async function refreshPullPool(): Promise<void> {
-    const res = await candidateApi.list({ status: 'CHECKED_IN_PENDING_ASSIGN' })
+    const res = await candidateApi.listAll({ status: 'CHECKED_IN_PENDING_ASSIGN' })
     pullPool.value = res.items
   }
 

@@ -1,25 +1,22 @@
 <script setup lang="ts">
 import { computed, nextTick, onScopeDispose, ref, watch } from 'vue'
-import { ArrowLeft, MessageSquare, Send, Timer, UserPlus, UserRound } from 'lucide-vue-next'
+import { ArrowLeft, MessageSquare, Send, Timer, UserRound } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 
 import { useRoomChat } from '@/composables/useRoomChat'
-import { useAuth } from '@/composables/useAuth'
 import { nextPhaseOf } from '@/domain/status'
+import { roomLabel } from '@/domain/room'
 import { senderLabel } from '@/domain/messages'
-import { CANDIDATE_STATUSES, PERMISSIONS, type CandidateStatus } from '@/models'
-import { STATUS_PRESENTATION } from '@/presenters/status'
+import type { CandidateStatus } from '@/models'
 import { formatDateTime } from '@/lib/format'
 import { toastError } from '@/lib/toast'
 
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { IconBadge } from '@/components/ui/icon-badge'
 import { Spinner } from '@/components/ui/spinner'
 import { chatBubbleVariants } from '@/components/ui/tokens'
 import EmptyState from '@/components/app/EmptyState.vue'
+import RoomSidebar from '@/components/app/RoomSidebar.vue'
 import { cn } from '@/lib/utils'
 
 const props = defineProps<{ roomId: number }>()
@@ -38,9 +35,8 @@ const {
   sendMessage,
   movePhase,
   pullCandidate,
+  reloadRoom,
 } = useRoomChat(() => props.roomId)
-
-const { hasPermission } = useAuth()
 
 const draft = ref('')
 
@@ -49,13 +45,31 @@ const nextPhase = computed<CandidateStatus | null>(() => nextPhaseOf(phase.value
 
 const hasCandidate = computed(() => !!room.value?.candidate)
 
-// ---- 阶段计时器：待面试 / 面试中 显示已耗时（起点 = 候选人状态变更时间） ----
-const TIMER_PHASES: readonly CandidateStatus[] = ['ASSIGNED', 'IN_PROGRESS']
-const showTimer = computed(() => phase.value != null && TIMER_PHASES.includes(phase.value))
-/** 计时起点（候选人 updated_at，状态机每次迁移都会刷新）。 */
+// ---- 阶段计时器：仅在「面试中」计时，起点 = 切到面试中的那一刻 ----
+const showTimer = computed(() => phase.value === 'IN_PROGRESS')
+
+/**
+ * 本端观测到的「切到面试中」时刻。
+ * 房间快照里的 candidate.interview_started_at 会被后续阶段事件沿用旧值（phaseRoom 只改 status），
+ * 因此只有首帧快照（未观测到迁移）才退回后端打点。
+ */
+const observedStart = ref<number | null>(null)
+/** 首帧快照装载的状态不算「切换」，否则中途打开页面会把计时清零。 */
+let phaseSeen = false
+
+watch(() => phase.value, (now) => {
+  if (!phaseSeen) {
+    phaseSeen = true
+    return
+  }
+  observedStart.value = now === 'IN_PROGRESS' ? Date.now() : null
+})
+
+/** 计时起点：优先本端观测时刻，其次后端打点 interview_started_at（页面在面试中途打开）。 */
 const phaseStartedAt = computed(() => {
-  const u = room.value?.candidate?.updated_at
-  const t = u ? new Date(u).getTime() : NaN
+  if (observedStart.value != null) return observedStart.value
+  const stamped = room.value?.candidate?.interview_started_at
+  const t = stamped ? new Date(stamped).getTime() : NaN
   return Number.isFinite(t) ? t : null
 })
 
@@ -143,11 +157,6 @@ watch(
 watch(connecting, (v, prev) => {
   if (prev && !v) void scrollToBottom()
 })
-
-// ---- 状态机步骤条：当前档高亮，已完成档打勾填充。 ----
-const phaseIndex = computed(() =>
-  phase.value ? CANDIDATE_STATUSES.indexOf(phase.value) : -1,
-)
 </script>
 
 <template>
@@ -166,7 +175,7 @@ const phaseIndex = computed(() =>
         <ArrowLeft class="h-4 w-4" />
       </Button>
       <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true" />
-      <span class="min-w-0 flex-1 truncate font-semibold text-foreground">房间 #{{ props.roomId }}</span>
+      <span class="min-w-0 flex-1 truncate font-semibold text-foreground">{{ roomLabel(room) }}</span>
       <Spinner v-if="connecting" class="h-3.5 w-3.5 shrink-0" />
       <!-- 连接状态点：语义色 token（success/destructive）。 -->
       <span
@@ -176,13 +185,13 @@ const phaseIndex = computed(() =>
         aria-hidden="true"
       ></span>
       <span role="status" class="shrink-0">{{ connecting ? '连接中…' : connected ? '已连接' : '未连接' }}</span>
-      <!-- 阶段计时器：待面试 / 面试中 显示已耗时 -->
+      <!-- 阶段计时器：面试中显示已耗时 -->
       <template v-if="showTimer">
         <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true" />
         <span
           class="flex shrink-0 items-center gap-1.5 font-medium tabular-nums text-foreground"
           role="timer"
-          :aria-label="`本阶段已进行 ${elapsedLabel}`"
+          :aria-label="`面试已进行 ${elapsedLabel}`"
         >
           <Timer class="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
           {{ elapsedLabel }}
@@ -200,135 +209,17 @@ const phaseIndex = computed(() =>
 
     <!-- 主区域：聊天 + 侧栏（小屏上下堆叠） -->
     <div class="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
-      <aside
-        class="order-last flex w-full shrink-0 flex-col border-t lg:order-first lg:h-full lg:w-80 lg:border-t-0"
-      >
-        <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-4 pt-16">
-          <!-- 候选人信息 -->
-          <Card>
-            <CardContent class="space-y-3 p-4">
-              <div class="flex items-center gap-3">
-                <IconBadge size="md" tone="primary" :class="hasCandidate ? '' : 'bg-muted text-muted-foreground'">
-                  <UserRound aria-hidden="true" />
-                </IconBadge>
-                <div class="min-w-0">
-                  <p class="truncate font-medium" :class="hasCandidate ? '' : 'text-muted-foreground'">
-                    {{ room?.candidate?.name ?? '空房' }}
-                  </p>
-                  <p class="text-xs text-muted-foreground">{{ hasCandidate ? '候选人' : '等待拉取候选人' }}</p>
-                </div>
-              </div>
-              <div class="space-y-1 text-sm">
-                <div class="flex justify-between">
-                  <span class="text-muted-foreground">房间</span>
-                  <span class="font-mono">#{{ props.roomId }}</span>
-                </div>
-                <div v-if="room?.candidate?.profile" class="flex justify-between gap-3">
-                  <span class="shrink-0 text-muted-foreground">简介</span>
-                  <span class="whitespace-pre-line break-words text-right">{{ room.candidate.profile }}</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+      <RoomSidebar
+        :room="room"
+        :phase="phase"
+        :next-phase="nextPhase"
+        :pull-pool="pullPool"
+        :connecting="connecting"
+        @pull="handlePull"
+        @advance="advance"
+        @saved="reloadRoom"
+      />
 
-          <!-- 拉取候选人 -->
-          <Card v-if="hasPermission(PERMISSIONS.CANDIDATES_ASSIGN) && !hasCandidate">
-            <CardContent class="space-y-3 p-4">
-              <p class="flex items-center gap-2 text-sm font-medium">
-                <UserPlus class="h-4 w-4" aria-hidden="true" />
-                拉取候选人
-              </p>
-              <EmptyState
-                v-if="pullPool.length === 0"
-                bare
-                :icon="UserRound"
-                class="py-6"
-              >
-                暂无已签到的候选人
-              </EmptyState>
-              <ul v-else class="space-y-2">
-                <li
-                  v-for="c in pullPool"
-                  :key="c.id"
-                  class="flex items-center justify-between gap-2 rounded-md bg-muted p-2"
-                >
-                  <span class="min-w-0 truncate text-sm">
-                    {{ c.name }}
-                    <span v-if="c.profile" class="text-xs text-muted-foreground">· {{ c.profile }}</span>
-                  </span>
-                  <Button size="sm" variant="outline" @click="handlePull(c.id)">拉取</Button>
-                </li>
-              </ul>
-            </CardContent>
-          </Card>
-
-          <!-- 状态 + 阶段控制 -->
-          <Card v-if="hasCandidate">
-            <CardContent class="space-y-3 p-4">
-              <div class="flex items-center justify-between">
-                <p class="text-sm font-medium">当前状态</p>
-                <Badge v-if="phase" :variant="STATUS_PRESENTATION[phase].badge">
-                  {{ STATUS_PRESENTATION[phase].label }}
-                </Badge>
-                <Badge v-else variant="outline">—</Badge>
-              </div>
-
-              <!-- 状态机竖向步骤条：已完成实心、当前高亮、未达置灰 -->
-              <ol class="flex flex-col" aria-label="面试状态机进度">
-                <li
-                  v-for="(s, i) in CANDIDATE_STATUSES"
-                  :key="s"
-                  class="flex gap-3"
-                >
-                  <!-- 节点列：圆点 + 连接线 -->
-                  <div class="flex flex-col items-center">
-                    <span
-                      class="mt-1 flex h-3 w-3 shrink-0 items-center justify-center rounded-full border-2"
-                      :class="
-                        i < phaseIndex
-                          ? 'border-primary bg-primary'
-                          : i === phaseIndex
-                            ? 'border-primary bg-background ring-4 ring-primary/15'
-                            : 'border-muted-foreground/30 bg-transparent'
-                      "
-                      aria-hidden="true"
-                    />
-                    <span
-                      v-if="i < CANDIDATE_STATUSES.length - 1"
-                      class="min-h-4 w-0.5 flex-1"
-                      :class="i < phaseIndex ? 'bg-primary' : 'bg-border'"
-                      aria-hidden="true"
-                    />
-                  </div>
-                  <!-- 标签列 -->
-                  <span
-                    class="pb-4 text-xs leading-none"
-                    :class="
-                      i === phaseIndex
-                        ? 'font-semibold text-foreground'
-                        : i < phaseIndex
-                          ? 'text-muted-foreground'
-                          : 'text-muted-foreground/60'
-                    "
-                    :aria-current="i === phaseIndex ? 'step' : undefined"
-                  >
-                    {{ STATUS_PRESENTATION[s].label }}
-                  </span>
-                </li>
-              </ol>
-
-              <Button
-                v-if="hasPermission(PERMISSIONS.ROOMS_MOVE_PHASE)"
-                class="w-full"
-                :disabled="!nextPhase || connecting"
-                @click="advance"
-              >
-                推进到「{{ nextPhase ? STATUS_PRESENTATION[nextPhase].label : '—' }}」
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </aside>
       <!-- 聊天面板：定高（撑满剩余空间，内部滚动），有边框浮动卡片 -->
       <div class="flex min-w-0 flex-1 flex-col p-4">
         <div class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-background">

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import { DoorOpen, Plus, Trash2 } from 'lucide-vue-next'
+import { DoorOpen, Pencil, Plus, Trash2 } from 'lucide-vue-next'
 
 import { useRoomList } from '@/composables/useRoomList'
 import { useAuth } from '@/composables/useAuth'
@@ -11,6 +11,7 @@ import { useConfirmAction } from '@/composables/useConfirmAction'
 import { roomApi } from '@/api/http'
 import { PERMISSIONS, type CandidateStatus, type Room } from '@/models'
 import { roomPhaseOf } from '@/domain/status'
+import { roomLabel } from '@/domain/room'
 import { STATUS_PRESENTATION, EMPTY_PRESENTATION } from '@/presenters/status'
 import { formatDateTime } from '@/lib/format'
 import { toastError } from '@/lib/toast'
@@ -18,9 +19,12 @@ import { cn } from '@/lib/utils'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { tileVariants } from '@/components/ui/tokens'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import EmptyState from '@/components/app/EmptyState.vue'
+import FormDialog from '@/components/app/FormDialog.vue'
 import ListSkeleton from '@/components/app/ListSkeleton.vue'
 import PageShell from '@/components/app/PageShell.vue'
 import RefreshButton from '@/components/app/RefreshButton.vue'
@@ -55,6 +59,7 @@ useBoardRefresh(
   [
     'room_created',
     'room_deleted',
+    'room_renamed',
     'candidate_assigned',
     'candidate_deleted',
     'room_phase_changed',
@@ -77,13 +82,46 @@ function statusOf(room: Room): { label: string; badge: 'outline' | 'secondary' |
   return s ? STATUS_PRESENTATION[s] : EMPTY_PRESENTATION
 }
 
-async function createRoom() {
+/** 房间显示名：统一走 domain/room（未命名 → 「未命名」，不显示编号）。 */
+
+// ---- 建房 / 改名对话框（同一表单两态：nameTarget 为空即新建） ----
+const nameDialogOpen = ref(false)
+const nameTarget = ref<Room | null>(null)
+const nameForm = ref('')
+const savingName = ref(false)
+
+function openCreate() {
+  nameTarget.value = null
+  nameForm.value = ''
+  savingName.value = false
+  nameDialogOpen.value = true
+}
+
+function openRename(room: Room) {
+  nameTarget.value = room
+  nameForm.value = room.name ?? ''
+  savingName.value = false
+  nameDialogOpen.value = true
+}
+
+async function submitName() {
+  if (savingName.value) return
+  const n = nameForm.value.trim()
+  savingName.value = true
   try {
-    const res = await roomApi.create()
-    toast.success(`已创建房间 #${res.id}`)
+    if (nameTarget.value) {
+      await roomApi.rename(nameTarget.value.id, n)
+      toast.success(n ? `已改名为「${n}」` : '已清除命名')
+    } else {
+      await roomApi.create(n)
+      toast.success(n ? `已创建房间「${n}」` : '已创建未命名房间')
+    }
+    nameDialogOpen.value = false
     await load()
   } catch (e) {
     toastError(e)
+  } finally {
+    savingName.value = false
   }
 }
 
@@ -99,7 +137,7 @@ const {
     await roomApi.remove(room.id)
     await load()
   },
-  success: (room) => `已删除房间 #${room.id}`,
+  success: (room) => `已删除${roomLabel(room)}`,
 })
 </script>
 
@@ -118,7 +156,7 @@ const {
       <Button
         v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE)"
         size="sm"
-        @click="createRoom"
+        @click="openCreate"
       >
         <Plus aria-hidden="true" />
         新建房间
@@ -130,7 +168,7 @@ const {
     <EmptyState v-if="!loading && rooms.length === 0" :icon="DoorOpen">
       暂无面试房间
       <template v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE)" #action>
-        <Button size="sm" variant="outline" @click="createRoom">
+        <Button size="sm" variant="outline" @click="openCreate">
           <Plus aria-hidden="true" />
           新建第一个房间
         </Button>
@@ -155,12 +193,12 @@ const {
         <!-- 可点击主区：进入房间（独立按钮，避免与操作区嵌套） -->
         <button
           class="flex min-w-0 flex-1 cursor-pointer p-4 text-left outline-none"
-          :aria-label="`进入房间 #${room.id}`"
+          :aria-label="`进入${roomLabel(room)}`"
           @click="openRoom(room.id)"
         >
           <span class="flex w-full items-start justify-between gap-2">
             <span class="min-w-0">
-              <span class="block truncate font-medium">房间 #{{ room.id }}</span>
+              <span class="block truncate font-medium">{{ roomLabel(room) }}</span>
               <span class="mt-0.5 block truncate text-sm text-muted-foreground">
                 {{ room.candidate?.name ?? '空闲' }}
               </span>
@@ -173,19 +211,53 @@ const {
         <!-- 卡片脚注：时间与操作分离，不再重叠 -->
         <div class="flex items-center justify-between border-t bg-muted/30 px-4 py-2">
           <time class="text-xs text-muted-foreground">{{ formatDateTime(room.created_at) }}</time>
-          <Button
-            v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE) && !room.candidate"
-            variant="ghost"
-            size="sm"
-            class="h-7 gap-1 px-2 text-xs text-destructive hover:text-destructive"
-            @click="requestDelete(room)"
-          >
-            <Trash2 aria-hidden="true" />
-            删除空房
-          </Button>
+          <span class="flex items-center gap-1">
+            <Button
+              v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE)"
+              variant="ghost"
+              size="sm"
+              class="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+              :aria-label="`改名：${roomLabel(room)}`"
+              @click="openRename(room)"
+            >
+              <Pencil aria-hidden="true" />
+              改名
+            </Button>
+            <Button
+              v-if="hasPermission(PERMISSIONS.ROOMS_MANAGE) && !room.candidate"
+              variant="ghost"
+              size="sm"
+              class="h-7 gap-1 px-2 text-xs text-destructive hover:text-destructive"
+              @click="requestDelete(room)"
+            >
+              <Trash2 aria-hidden="true" />
+              删除空房
+            </Button>
+          </span>
         </div>
       </div>
     </div>
+
+    <!-- 建房 / 改名对话框 -->
+    <FormDialog
+      :open="nameDialogOpen"
+      :title="nameTarget ? '房间改名' : '新建房间'"
+      :submit-text="nameTarget ? '保存' : '创建'"
+      size="sm"
+      :loading="savingName"
+      @update:open="nameDialogOpen = $event"
+      @submit="submitName"
+    >
+      <div class="grid gap-2">
+        <Label for="room-name">房间名</Label>
+        <Input
+          id="room-name"
+          v-model="nameForm"
+          :maxlength="64"
+          @keydown.enter="submitName"
+        />
+      </div>
+    </FormDialog>
 
     <!-- 删除空房确认 -->
     <ConfirmDialog
