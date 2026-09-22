@@ -440,22 +440,37 @@ func TestOidcRuleEvalFailure(t *testing.T) {
 			t.Fatalf("保存配置: %d %v", code, out)
 		}
 	}
-	callbackErr := func() string {
+	callbackLocation := func() string {
 		t.Helper()
 		start := startOidc(t, r, idp)
-		loc := rawGET(t, r, "/api/oidc/sessions?code="+start.code+"&state="+start.state).Header().Get("Location")
-		_, errCode, _ := strings.Cut(loc, "oidc_error=")
-		return errCode
+		return rawGET(t, r, "/api/oidc/sessions?code="+start.code+"&state="+start.state).Header().Get("Location")
+	}
+	// 求值失败 = 直接拒绝登录：既不签发登录码，也不建号（建号/签 token 都在匹配之后）。
+	noLoginNoProvision := func(t *testing.T, loc string) {
+		t.Helper()
+		if strings.Contains(loc, "oidc_code=") {
+			t.Fatalf("拒绝登录时不得签发登录码: %s", loc)
+		}
+		code, out := doJSON(t, r, "GET", "/api/users?q=oidc-user", "", admin)
+		items, _ := out["items"].([]any)
+		if code != http.StatusOK || len(items) != 0 {
+			t.Fatalf("拒绝登录时不得建号: %d %v", code, out)
+		}
 	}
 
 	put(fragile)
-	if got := callbackErr(); got != "oidc_rule_eval_failed" {
-		t.Fatalf("对缺失声明求值失败应回专门错误码，实得 %q", got)
+	loc := callbackLocation()
+	if !strings.Contains(loc, "oidc_error=oidc_rule_eval_failed") {
+		t.Fatalf("对缺失声明求值失败应回专门错误码: %s", loc)
 	}
+	noLoginNoProvision(t, loc)
+
 	put(guarded)
-	if got := callbackErr(); got != "oidc_role_unmapped" {
-		t.Fatalf("先判类型的写法应判为「未命中任何规则」，实得 %q", got)
+	loc = callbackLocation()
+	if !strings.Contains(loc, "oidc_error=oidc_role_unmapped") {
+		t.Fatalf("先判类型的写法应判为「未命中任何规则」: %s", loc)
 	}
+	noLoginNoProvision(t, loc)
 }
 
 // TestOidcProbe 连通性检测：可达 → 端点摘要；不可达 → 400。
