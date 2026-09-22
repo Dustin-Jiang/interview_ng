@@ -2,25 +2,27 @@ package model
 
 import "time"
 
-// Permission 权限名常量 —— RBAC 目录定稿（11 枚）。
+// Permission 权限名常量 —— RBAC 目录定稿（12 枚）。
 const (
-	PermUsersManage         = "users.manage"          // 面试官/角色管理
-	PermCandidatesManage    = "candidates.manage"     // 编辑/删除候选人、重置状态
-	PermCandidatesBrowseAll = "candidates.browse_all" // 跨部门浏览候选人录取状态与捡漏出价
-	PermCandidatesCreate    = "candidates.create"     // 新建候选人
-	PermCandidatesCheckin   = "candidates.checkin"    // 候选人签到
-	PermCandidatesAssign    = "candidates.assign"     // 拉取候选人进房
-	PermRoomsView           = "rooms.view"            // 浏览房间列表/详情
-	PermRoomsChat           = "rooms.chat"            // 进房/发消息
-	PermRoomsMovePhase      = "rooms.move_phase"      // 推进阶段
-	PermRoomsManage         = "rooms.manage"          // 房间成员管理、建空房、删空房
-	PermAdmissionRecord     = "admissions.record"     // 记录本部门录取决定
+	PermUsersManage           = "users.manage"           // 面试官/角色管理
+	PermCandidatesManage      = "candidates.manage"      // 编辑/删除候选人、重置状态
+	PermCandidatesPreferences = "candidates.preferences" // 修改候选人志愿与调剂
+	PermCandidatesBrowseAll   = "candidates.browse_all"  // 跨部门浏览候选人录取状态与捡漏出价
+	PermCandidatesCreate      = "candidates.create"      // 新建候选人
+	PermCandidatesCheckin     = "candidates.checkin"     // 候选人签到
+	PermCandidatesAssign      = "candidates.assign"      // 拉取候选人进房
+	PermRoomsView             = "rooms.view"             // 浏览房间列表/详情
+	PermRoomsChat             = "rooms.chat"             // 进房/发消息
+	PermRoomsMovePhase        = "rooms.move_phase"       // 推进阶段
+	PermRoomsManage           = "rooms.manage"           // 房间成员管理、建空房、删空房
+	PermAdmissionRecord       = "admissions.record"      // 记录本部门录取决定
 )
 
 // AllPermissions 全部权限名（用于校验角色权限组输入）。
 var AllPermissions = []string{
 	PermUsersManage,
 	PermCandidatesManage,
+	PermCandidatesPreferences,
 	PermCandidatesBrowseAll,
 	PermCandidatesCreate,
 	PermCandidatesCheckin,

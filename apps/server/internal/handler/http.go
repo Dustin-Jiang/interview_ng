@@ -50,11 +50,14 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	authed.PUT("/candidates/:id", h.require(dsmodel.PermCandidatesManage), h.updateCandidate)
 	authed.DELETE("/candidates/:id", h.require(dsmodel.PermCandidatesManage), h.deleteCandidate)
 	authed.PUT("/candidates/:id/status", h.require(dsmodel.PermCandidatesManage), h.resetCandidateStatus)
+	// 志愿与调剂：独立于资料全量编辑（面试官默认持有），只改这三项。
+	authed.PATCH("/candidates/:id/preferences", h.require(dsmodel.PermCandidatesPreferences), h.updateCandidatePreferences)
 
 	// 房间（浏览 rooms.view，管理 rooms.manage，拉取 candidates.assign）
 	authed.GET("/rooms", h.require(dsmodel.PermRoomsView), h.listRooms)
 	authed.GET("/rooms/:id", h.require(dsmodel.PermRoomsView), h.getRoom)
 	authed.POST("/rooms", h.require(dsmodel.PermRoomsManage), h.createRoom)
+	authed.PATCH("/rooms/:id", h.require(dsmodel.PermRoomsManage), h.renameRoom)
 	authed.DELETE("/rooms/:id", h.require(dsmodel.PermRoomsManage), h.deleteRoom)
 	authed.POST("/rooms/:id/members", h.require(dsmodel.PermRoomsManage), h.addRoomMember)
 	authed.DELETE("/rooms/:id/members/:userId", h.require(dsmodel.PermRoomsManage), h.removeRoomMember)
@@ -71,8 +74,8 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	authed.PUT("/roles/:id", h.require(dsmodel.PermUsersManage), h.updateRole)
 	authed.DELETE("/roles/:id", h.require(dsmodel.PermUsersManage), h.deleteRole)
 
-	// 部门（users.manage）
-	authed.GET("/departments", h.require(dsmodel.PermUsersManage), h.listDepartments)
+	// 部门：浏览任意登录（志愿选择器需要部门名单），增删改 users.manage
+	authed.GET("/departments", h.listDepartments)
 	authed.POST("/departments", h.require(dsmodel.PermUsersManage), h.createDepartment)
 	authed.PUT("/departments/:id", h.require(dsmodel.PermUsersManage), h.updateDepartment)
 	authed.DELETE("/departments/:id", h.require(dsmodel.PermUsersManage), h.deleteDepartment)
@@ -189,10 +192,9 @@ func (h *HTTPServer) listCandidateMessages(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": out})
 }
 
+// createCandidateReq 新建候选人：请求体即扁平的资料字段全集（state.CandidateInfo）。
 type createCandidateReq struct {
-	StudentNo string `json:"student_no"`
-	Name      string `json:"name"`
-	Profile   string `json:"profile"`
+	state.CandidateInfo
 }
 
 func (h *HTTPServer) createCandidate(c *gin.Context) {
@@ -201,7 +203,7 @@ func (h *HTTPServer) createCandidate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
 	}
-	ev, err := h.svc.CreateCandidate(c.Request.Context(), req.StudentNo, req.Name, req.Profile)
+	ev, err := h.svc.CreateCandidate(c.Request.Context(), req.CandidateInfo)
 	if err != nil {
 		status, msg := stateErr(err)
 		c.JSON(status, gin.H{"error": msg})
@@ -245,10 +247,9 @@ func (h *HTTPServer) checkin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// updateCandidateReq 编辑候选人：请求体即扁平的资料字段全集（state.CandidateInfo，全量覆盖）。
 type updateCandidateReq struct {
-	StudentNo string `json:"student_no"`
-	Name      string `json:"name"`
-	Profile   string `json:"profile"`
+	state.CandidateInfo
 }
 
 func (h *HTTPServer) updateCandidate(c *gin.Context) {
@@ -258,7 +259,36 @@ func (h *HTTPServer) updateCandidate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
 	}
-	if err := h.svc.UpdateCandidate(c.Request.Context(), id, req.StudentNo, req.Name, req.Profile); err != nil {
+	if err := h.svc.UpdateCandidate(c.Request.Context(), id, req.CandidateInfo); err != nil {
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// updateCandidatePreferencesReq 志愿与调剂三项：bool 无法区分「缺省」，
+// 因此请求体须给出这三项的完整取值（不做部分省略）。
+type updateCandidatePreferencesReq struct {
+	FirstChoice  string `json:"first_choice"`
+	SecondChoice string `json:"second_choice"`
+	AcceptAdjust bool   `json:"accept_adjust"`
+}
+
+// updateCandidatePreferences 修改候选人志愿与调剂（独立权限，不动其他资料）。
+func (h *HTTPServer) updateCandidatePreferences(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	var req updateCandidatePreferencesReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	err := h.svc.UpdateCandidatePreferences(c.Request.Context(), id, state.CandidatePreferences{
+		FirstChoice:  req.FirstChoice,
+		SecondChoice: req.SecondChoice,
+		AcceptAdjust: req.AcceptAdjust,
+	})
+	if err != nil {
 		status, msg := stateErr(err)
 		c.JSON(status, gin.H{"error": msg})
 		return
@@ -317,13 +347,42 @@ func (h *HTTPServer) listRooms(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": out})
 }
 
+// createRoomReq 建房间请求体：name 可选（空/缺省=未命名）。
+type createRoomReq struct {
+	Name string `json:"name"`
+}
+
 func (h *HTTPServer) createRoom(c *gin.Context) {
-	ev, err := h.svc.CreateRoom(c.Request.Context())
+	// 请求体允许缺省（旧客户端无体调用），绑定失败按未命名处理。
+	var req createRoomReq
+	_ = c.ShouldBindJSON(&req)
+	ev, err := h.svc.CreateRoom(c.Request.Context(), req.Name)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"id": state.RoomIDOf(ev)})
+}
+
+type renameRoomReq struct {
+	Name string `json:"name"`
+}
+
+// renameRoom 修改房间名（PATCH 部分更新；空串=清除命名）。
+func (h *HTTPServer) renameRoom(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	var req renameRoomReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	if err := h.svc.RenameRoom(c.Request.Context(), id, req.Name); err != nil {
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (h *HTTPServer) deleteRoom(c *gin.Context) {

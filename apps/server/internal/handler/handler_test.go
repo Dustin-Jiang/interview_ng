@@ -562,7 +562,7 @@ func TestDepartmentManageAndPermission(t *testing.T) {
 	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
-	// 管理员为全局系统角色，不隶属任何部门（默认部门已由种子创建，但不归属 admin）
+	// 管理员为全局系统角色，不隶属任何部门（种子不预置部门）
 	_, out = doJSON(t, r, "GET", "/api/me", "", token)
 	if user, _ := out["user"].(map[string]any); user["department"] != nil {
 		t.Fatalf("admin should not have a department: %v", out)
@@ -639,7 +639,7 @@ func TestDepartmentManageAndPermission(t *testing.T) {
 		t.Fatalf("delete in-use department: got %d %v", code, out)
 	}
 
-	// 无 users.manage 权限用户（interviewer 角色）访问部门接口 → 403
+	// 无 users.manage 权限用户（interviewer 角色）：可读部门（志愿选择器用），但不可增删改
 	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	code, itvRole := doJSON(t, r, "POST", "/api/roles", `{"name":"itv2","description":"","permissions":["rooms.view"]}`, token)
 	if code != http.StatusCreated {
@@ -649,8 +649,14 @@ func TestDepartmentManageAndPermission(t *testing.T) {
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"itv2u","name":"","password":"pass","role_ids":[`+itoa(roleID)+`]}`, token)
 	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"itv2u","password":"pass"}`, "")
 	tokenB := out["token"].(string)
-	if code, _ := doJSON(t, r, "GET", "/api/departments", "", tokenB); code != http.StatusForbidden {
-		t.Fatalf("interviewer list departments: got %d", code)
+	if code, got := doJSON(t, r, "GET", "/api/departments", "", tokenB); code != http.StatusOK {
+		t.Fatalf("interviewer list departments: got %d %v", code, got)
+	}
+	if code, _ := doJSON(t, r, "POST", "/api/departments", `{"name":"越权组"}`, tokenB); code != http.StatusForbidden {
+		t.Fatalf("interviewer create department: got %d", code)
+	}
+	if code, _ := doJSON(t, r, "DELETE", "/api/departments/"+itoa(deptID), "", tokenB); code != http.StatusForbidden {
+		t.Fatalf("interviewer delete department: got %d", code)
 	}
 }
 
@@ -738,7 +744,7 @@ func TestCandidateAdmissionByDepartmentAndPermission(t *testing.T) {
 	_, out = doJSON(t, r, "POST", "/api/departments", `{"name":"前端组","description":""}`, token)
 	deptB := int(out["id"].(float64))
 
-	// 建两名面试官：后端组 admin 归属（现有 admin 归属默认部门）、前端组只读
+	// 建两名面试官：一名归后端组（可记录录取决定）、一名归前端组（只读）
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"feAdmin","name":"前端管理员","password":"pass","role_ids":[],"department_id":`+itoa(deptA)+`}`, token)
 	uidA := int(out["id"].(float64))
 	// 给 uidA 授 admissions.record 与 rooms.view（可记录录取决定）
@@ -1056,5 +1062,213 @@ func TestLeftoverBiddingEndpoints(t *testing.T) {
 	}
 	if it := items[0].(map[string]any); int(it["department_id"].(float64)) != deptA || it["amount"].(float64) != 800 {
 		t.Fatalf("results[0]=%v", it)
+	}
+}
+
+// TestRoomNamingREST 房间命名往返：创建带名（裁剪空白）、PATCH 改名与清除、
+// 超长 400、无体旧调用兼容（未命名）。
+func TestRoomNamingREST(t *testing.T) {
+	r := newTestApp(t)
+	token := adminToken(t, r)
+
+	_, out := doJSON(t, r, "POST", "/api/rooms", `{"name":" 终面间 "}`, token)
+	id := int(out["id"].(float64))
+	if id == 0 {
+		t.Fatalf("create: %v", out)
+	}
+	if code, got := doJSON(t, r, "GET", "/api/rooms/"+itoa(id), "", token); code != http.StatusOK || got["name"] != "终面间" {
+		t.Fatalf("创建带名: %d %v", code, got)
+	}
+
+	if code, _ := doJSON(t, r, "PATCH", "/api/rooms/"+itoa(id), `{"name":"初面间"}`, token); code != http.StatusOK {
+		t.Fatalf("改名应 200: %d", code)
+	}
+	if _, got := doJSON(t, r, "GET", "/api/rooms/"+itoa(id), "", token); got["name"] != "初面间" {
+		t.Fatalf("改名未生效: %v", got)
+	}
+	if code, _ := doJSON(t, r, "PATCH", "/api/rooms/"+itoa(id), `{"name":""}`, token); code != http.StatusOK {
+		t.Fatalf("清除命名应 200: %d", code)
+	}
+	if _, got := doJSON(t, r, "GET", "/api/rooms/"+itoa(id), "", token); got["name"] != "" {
+		t.Fatalf("清除未生效: %v", got)
+	}
+
+	if code, _ := doJSON(t, r, "PATCH", "/api/rooms/"+itoa(id), `{"name":"`+strings.Repeat("名", 65)+`"}`, token); code != http.StatusBadRequest {
+		t.Fatalf("超长名应 400: %d", code)
+	}
+	// 无体创建（兼容旧调用）→ 未命名
+	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
+	id2 := int(out["id"].(float64))
+	if code, got := doJSON(t, r, "GET", "/api/rooms/"+itoa(id2), "", token); code != http.StatusOK || got["name"] != "" {
+		t.Fatalf("无体创建应得未命名房: %d %v", code, got)
+	}
+}
+
+// 面试计时字段经 REST 暴露：进入面试中打点、面试结束后清空（前端据此计时）。
+func TestInterviewStartedAtREST(t *testing.T) {
+	r := newTestApp(t)
+	token := adminToken(t, r)
+
+	_, created := doJSON(t, r, "POST", "/api/candidates", `{"student_no":"700001","name":"计时"}`, token)
+	cid := int(created["id"].(float64))
+	if cid == 0 {
+		t.Fatalf("创建候选人失败: %v", created)
+	}
+	candPath := "/api/candidates/" + itoa(cid)
+	if code, got := doJSON(t, r, "GET", candPath, "", token); code != http.StatusOK || got["interview_started_at"] != nil {
+		t.Fatalf("初始应为空: %d %v", code, got["interview_started_at"])
+	}
+	if code, _ := doJSON(t, r, "PUT", candPath+"/check-in", "", token); code != http.StatusOK {
+		t.Fatalf("签到应 200: %d", code)
+	}
+	_, room := doJSON(t, r, "POST", "/api/rooms", `{"name":""}`, token)
+	rid := int(room["id"].(float64))
+	if code, _ := doJSON(t, r, "PUT", "/api/rooms/"+itoa(rid)+"/candidate", `{"candidate_id":`+itoa(cid)+`}`, token); code != http.StatusOK {
+		t.Fatalf("拉取应 200: %d", code)
+	}
+	if code, got := doJSON(t, r, "PUT", candPath+"/status", `{"status":"IN_PROGRESS"}`, token); code != http.StatusOK {
+		t.Fatalf("进入面试中应 200: %d %v", code, got)
+	}
+	if _, got := doJSON(t, r, "GET", candPath, "", token); got["interview_started_at"] == nil {
+		t.Fatalf("进入面试中应打点: %v", got)
+	}
+	if code, _ := doJSON(t, r, "PUT", candPath+"/status", `{"status":"COMPLETED"}`, token); code != http.StatusOK {
+		t.Fatalf("完成应 200: %d", code)
+	}
+	if _, done := doJSON(t, r, "GET", candPath, "", token); done["interview_started_at"] != nil {
+		t.Fatalf("面试结束后应清空: %v", done["interview_started_at"])
+	}
+}
+
+// 志愿与调剂接口：interviewer 预置角色默认持有 candidates.preferences；
+// 无该权限的角色被拒（403），且该接口无法改动其他资料字段。
+func TestCandidatePreferencesREST(t *testing.T) {
+	r := newTestApp(t)
+	admin := adminToken(t, r)
+
+	_, created := doJSON(t, r, "POST", "/api/candidates",
+		`{"student_no":"700101","name":"志愿","phone":"13800000000","first_choice":"技术部","accept_adjust":true}`, admin)
+	cid := int(created["id"].(float64))
+	candPath := "/api/candidates/" + itoa(cid)
+
+	// interviewer 预置角色应默认带该权限
+	_, roles := doJSON(t, r, "GET", "/api/roles", "", admin)
+	itvRole := 0
+	for _, raw := range roles["items"].([]any) {
+		role := raw.(map[string]any)
+		if role["name"] != "interviewer" {
+			continue
+		}
+		itvRole = int(role["id"].(float64))
+		has := false
+		for _, p := range role["permissions"].([]any) {
+			perm := p.(map[string]any)
+			if perm["permission"] == dsmodel.PermCandidatesPreferences {
+				has = true
+			}
+		}
+		if !has {
+			t.Fatalf("interviewer 角色缺少 %s：%v", dsmodel.PermCandidatesPreferences, role["permissions"])
+		}
+	}
+	if itvRole == 0 {
+		t.Fatal("未找到 interviewer 角色")
+	}
+
+	_, u := doJSON(t, r, "POST", "/api/users",
+		`{"username":"itv1","name":"面试官","password":"pass","role_ids":[`+itoa(itvRole)+`]}`, admin)
+	if int(u["id"].(float64)) == 0 {
+		t.Fatalf("创建面试官失败: %v", u)
+	}
+	_, sess := doJSON(t, r, "POST", "/api/sessions", `{"username":"itv1","password":"pass"}`, "")
+	itv, _ := sess["token"].(string)
+	if itv == "" {
+		t.Fatalf("面试官登录失败: %v", sess)
+	}
+
+	if code, got := doJSON(t, r, "PATCH", candPath+"/preferences",
+		`{"first_choice":"数字媒体中心","second_choice":"技术保障中心","accept_adjust":false}`, itv); code != http.StatusOK {
+		t.Fatalf("面试官改志愿应 200: %d %v", code, got)
+	}
+	_, after := doJSON(t, r, "GET", candPath, "", itv)
+	if after["first_choice"] != "数字媒体中心" || after["second_choice"] != "技术保障中心" || after["accept_adjust"] != false {
+		t.Fatalf("志愿/调剂未生效: %v", after)
+	}
+	if after["name"] != "志愿" || after["phone"] != "13800000000" {
+		t.Fatalf("其他资料被改动: %v", after)
+	}
+	// 面试官无 candidates.manage：整份资料编辑仍应被拒
+	if code, _ := doJSON(t, r, "PUT", candPath, `{"student_no":"700101","name":"改名"}`, itv); code != http.StatusForbidden {
+		t.Fatalf("面试官改资料应 403: %d", code)
+	}
+
+	// 无该权限的角色 → 403
+	_, roleOut := doJSON(t, r, "POST", "/api/roles", `{"name":"reader2","description":"","permissions":["rooms.view"]}`, admin)
+	rid := int(roleOut["id"].(float64))
+	doJSON(t, r, "POST", "/api/users", `{"username":"reader2","name":"只读","password":"pass","role_ids":[`+itoa(rid)+`]}`, admin)
+	_, rs := doJSON(t, r, "POST", "/api/sessions", `{"username":"reader2","password":"pass"}`, "")
+	if code, _ := doJSON(t, r, "PATCH", candPath+"/preferences", `{"first_choice":"x"}`, rs["token"].(string)); code != http.StatusForbidden {
+		t.Fatalf("无权限应 403: %d", code)
+	}
+
+	// 未知候选人 → 404
+	if code, _ := doJSON(t, r, "PATCH", "/api/candidates/999999/preferences", `{"first_choice":"x"}`, admin); code != http.StatusNotFound {
+		t.Fatalf("未知候选人应 404: %d", code)
+	}
+}
+
+// 出价 0 的 HTTP 契约：0 合法（200 且列表可见 amount=0，重复提交仍是同一条），负数 400。
+func TestZeroBidOverHTTP(t *testing.T) {
+	r := newTestApp(t)
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	_, out = doJSON(t, r, "POST", "/api/departments", `{"name":"零价组","expected_count":1}`, token)
+	dept := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"zeroBidder","description":"","permissions":["admissions.record"]}`, token)
+	role := int(out["id"].(float64))
+	doJSON(t, r, "POST", "/api/users", `{"username":"zeroA","name":"零价出价人","password":"pass","role_ids":[`+itoa(role)+`],"department_id":`+itoa(dept)+`}`, token)
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"zeroA","password":"pass"}`, "")
+	bidder, _ := out["token"].(string)
+	if bidder == "" {
+		t.Fatalf("零价出价人登录失败: %v", out)
+	}
+
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024099","name":"零价候选人"}`, token)
+	cand := int(out["id"].(float64))
+	if code, _ := doJSON(t, r, "PATCH", "/api/system/status", `{"phase":"leftover"}`, token); code != http.StatusOK {
+		t.Fatal("切到捡漏阶段失败")
+	}
+
+	if code, _ := doJSON(t, r, "PUT", "/api/leftover/bids/"+itoa(cand), `{"amount":-1}`, bidder); code != http.StatusBadRequest {
+		t.Fatalf("负数出价应 400: %d", code)
+	}
+	if code, got := doJSON(t, r, "PUT", "/api/leftover/bids/"+itoa(cand), `{"amount":0}`, bidder); code != http.StatusOK {
+		t.Fatalf("0 出价应 200: %d %v", code, got)
+	}
+	if code, _ := doJSON(t, r, "PUT", "/api/leftover/bids/"+itoa(cand), `{"amount":0}`, bidder); code != http.StatusOK {
+		t.Fatalf("重复 0 出价应 200（更新既有记录）: %d", code)
+	}
+	amounts := func() []float64 {
+		t.Helper()
+		code, out := doJSON(t, r, "GET", "/api/leftover/bids", "", bidder)
+		if code != http.StatusOK {
+			t.Fatalf("bids: %d", code)
+		}
+		items, _ := out["items"].([]any)
+		got := make([]float64, 0, len(items))
+		for _, it := range items {
+			got = append(got, it.(map[string]any)["amount"].(float64))
+		}
+		return got
+	}
+	if got := amounts(); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("出价列表应为 [0]，实得 %v", got)
+	}
+	if code, _ := doJSON(t, r, "PUT", "/api/leftover/bids/"+itoa(cand), `{"amount":300}`, bidder); code != http.StatusOK {
+		t.Fatalf("0 改价应 200: %d", code)
+	}
+	if got := amounts(); len(got) != 1 || got[0] != 300 {
+		t.Fatalf("改价后应为 [300]（单条记录），实得 %v", got)
 	}
 }

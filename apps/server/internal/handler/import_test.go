@@ -90,6 +90,37 @@ func TestCandidateStudentNoConflict(t *testing.T) {
 	}
 }
 
+// TestCandidateInfoFieldsJSON 资料字段（志愿/调剂/联系方式）走扁平 JSON 契约：
+// 创建即落库并由 GET 回显；编辑全量覆盖（零值清空）。
+func TestCandidateInfoFieldsJSON(t *testing.T) {
+	r := newTestApp(t)
+	token := adminToken(t, r)
+
+	body := `{"student_no":"0070","name":"张三","first_choice":"智能科学与技术","second_choice":"软件工程",` +
+		`"accept_adjust":true,"phone":"13800000000","qq":"10001","email":"zs@example.com"}`
+	_, out := doJSON(t, r, "POST", "/api/candidates", body, token)
+	id := int(out["id"].(float64))
+	_, got := doJSON(t, r, "GET", "/api/candidates/"+itoa(id), "", token)
+	if got["first_choice"] != "智能科学与技术" || got["second_choice"] != "软件工程" ||
+		got["accept_adjust"] != true || got["phone"] != "13800000000" ||
+		got["qq"] != "10001" || got["email"] != "zs@example.com" {
+		t.Fatalf("创建未回显新字段: %v", got)
+	}
+
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(id), `{"student_no":"0070","name":"张三"}`, token); code != http.StatusOK {
+		t.Fatalf("编辑应 200: %d", code)
+	}
+	_, got = doJSON(t, r, "GET", "/api/candidates/"+itoa(id), "", token)
+	for _, k := range []string{"first_choice", "second_choice", "phone", "qq", "email"} {
+		if got[k] != "" {
+			t.Fatalf("编辑应清空可选字段 %s: %v", k, got)
+		}
+	}
+	if got["accept_adjust"] != false {
+		t.Fatalf("accept_adjust 零值应覆盖为 false: %v", got)
+	}
+}
+
 // TestImportCandidatesEndpoint 导入接口端到端：整批成功 → 行级报告；
 // 再次导入同学号覆盖资料（运行态不变）；学号可被关键词检索命中。
 func TestImportCandidatesEndpoint(t *testing.T) {
