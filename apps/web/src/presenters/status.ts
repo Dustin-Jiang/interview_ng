@@ -43,13 +43,17 @@ export const ADMISSION_PRESENTATION: Record<
   withdrawn: { label: '放弃', badge: 'secondary' },
 }
 
-/** 录取汇总结论的展示元数据：admitted 档文案拼接部门名（录取到 X）。 */
+/**
+ * 录取汇总结论的展示元数据。
+ * admitted 档只给部门名：所在列（「录取情况 / 预览录取结果」）的表头已说明语义，
+ * 再加「录取到」前缀是重复——与竞拍阶段的预览结果列写法保持一致。
+ */
 export function admissionOutcomePresentation(
   o: AdmissionOutcome,
 ): { label: string; badge: NonNullable<BadgeVariants['variant']> } {
   switch (o.kind) {
     case 'admitted':
-      return { label: `录取到 ${o.departmentName}`, badge: 'default' }
+      return { label: o.departmentName, badge: 'default' }
     case 'none':
       return { label: '未录取', badge: 'outline' }
     case 'conflict':
