@@ -245,7 +245,8 @@ function onPreferencesSaved(): void {
                 <SlidersHorizontal class="h-4 w-4" aria-hidden="true" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent class="w-72">
+            <!-- 手机上占满可用宽度（左右各留 1rem），≥sm 回到 18rem -->
+            <PopoverContent class="w-[calc(100vw-2rem)] sm:w-72">
               <div class="space-y-3">
                 <SearchInput v-model="keyword" full placeholder="搜索学号 / 姓名 / 简介…" />
                 <CandidateStatusSelect v-model="statusFilter" allow-all />
@@ -291,7 +292,10 @@ function onPreferencesSaved(): void {
           </Badge>
         </template>
         <template #meta="{ item }">
-          <span v-if="item.room_id" class="shrink-0">{{ roomLabelOf(item.room_id) }}</span>
+          <!-- 房间名最长 64 字符：限宽 + 截断，避免名册行被撑宽 -->
+          <span v-if="item.room_id" class="min-w-0 max-w-[45%] shrink-0 truncate">
+            {{ roomLabelOf(item.room_id) }}
+          </span>
         </template>
       </RosterList>
     </template>
@@ -308,26 +312,29 @@ function onPreferencesSaved(): void {
           :badge="{ label: STATUS_PRESENTATION[selected.status].label, variant: STATUS_PRESENTATION[selected.status].badge }"
         >
           <template #actions>
-            <Button
-              v-if="canEditPreferences"
-              size="sm"
-              variant="outline"
-              class="shrink-0"
-              @click="openPreferences"
-            >
-              <Pencil aria-hidden="true" />
-              改志愿
-            </Button>
-            <Button
-              v-if="selected.room_id"
-              size="sm"
-              variant="outline"
-              class="shrink-0"
-              @click="goRoom(selected)"
-            >
-              <ExternalLink aria-hidden="true" />
-              进入{{ roomLabelOf(selected.room_id) }}
-            </Button>
+            <!-- 动作区可收缩换行（手机上两个按钮纵向堆叠），长房间名不再撑破资料卡 -->
+            <div class="flex min-w-0 max-w-full flex-wrap justify-end gap-2">
+              <Button
+                v-if="canEditPreferences"
+                size="sm"
+                variant="outline"
+                class="shrink-0"
+                @click="openPreferences"
+              >
+                <Pencil aria-hidden="true" />
+                改志愿
+              </Button>
+              <Button
+                v-if="selected.room_id"
+                size="sm"
+                variant="outline"
+                class="min-w-0 max-w-full"
+                @click="goRoom(selected)"
+              >
+                <ExternalLink aria-hidden="true" />
+                <span class="truncate">进入{{ roomLabelOf(selected.room_id) }}</span>
+              </Button>
+            </div>
           </template>
 
           <!-- 信息行：值样式与候选人管理 DataTable 单元格一致——数字类 tabular-nums（非等宽）、
@@ -338,12 +345,12 @@ function onPreferencesSaved(): void {
               <span class="whitespace-nowrap tabular-nums">{{ selected.student_no }}</span>
             </div>
             <div v-if="selected.first_choice" class="flex items-center justify-between gap-3">
-              <span class="text-muted-foreground">第一志愿</span>
-              <span>{{ selected.first_choice }}</span>
+              <span class="shrink-0 text-muted-foreground">第一志愿</span>
+              <span class="min-w-0 break-words text-right">{{ selected.first_choice }}</span>
             </div>
             <div v-if="selected.second_choice" class="flex items-center justify-between gap-3">
-              <span class="text-muted-foreground">第二志愿</span>
-              <span>{{ selected.second_choice }}</span>
+              <span class="shrink-0 text-muted-foreground">第二志愿</span>
+              <span class="min-w-0 break-words text-right">{{ selected.second_choice }}</span>
             </div>
             <div v-if="selected.first_choice || selected.second_choice" class="flex items-center justify-between gap-3">
               <span class="text-muted-foreground">接受调剂</span>
@@ -362,10 +369,14 @@ function onPreferencesSaved(): void {
               <span class="break-all tabular-nums text-right">{{ selected.email }}</span>
             </div>
             <div class="flex items-center justify-between gap-3">
-              <span class="text-muted-foreground">房间</span>
-              <span v-if="selected.room_id">
-                <Button variant="link" class="h-auto p-0" @click="goRoom(selected)">
-                  {{ roomLabelOf(selected.room_id) }}
+              <span class="shrink-0 text-muted-foreground">房间</span>
+              <span v-if="selected.room_id" class="flex min-w-0 flex-1 justify-end">
+                <Button
+                  variant="link"
+                  class="h-auto min-w-0 max-w-full p-0 max-lg:min-h-11"
+                  @click="goRoom(selected)"
+                >
+                  <span class="truncate">{{ roomLabelOf(selected.room_id) }}</span>
                 </Button>
               </span>
               <span v-else class="text-muted-foreground">—</span>

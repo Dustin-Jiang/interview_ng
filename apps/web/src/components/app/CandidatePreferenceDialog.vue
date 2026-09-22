@@ -154,7 +154,11 @@ async function submit(): Promise<void> {
           </SelectContent>
         </Select>
       </div>
-      <label class="flex items-center gap-2 text-sm" :for="`${uid}-adjust`">
+      <!-- 整行可点 + 触控高度 ≥44px（复选框本身仍是 16px 视觉尺寸） -->
+      <label
+        class="flex min-h-11 cursor-pointer items-center gap-2 text-sm"
+        :for="`${uid}-adjust`"
+      >
         <input
           :id="`${uid}-adjust`"
           v-model="form.accept_adjust"

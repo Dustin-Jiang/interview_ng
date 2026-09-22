@@ -116,7 +116,7 @@ function submitOnEnter() {
     />
   </div>
   <label
-    class="flex w-fit cursor-pointer items-center gap-2 text-sm font-medium"
+    class="flex min-h-11 cursor-pointer items-center gap-2 text-sm font-medium"
     :for="`${props.idPrefix}-accept-adjust`"
   >
     <input

@@ -14,11 +14,13 @@ const props = defineProps<{
 
 <template>
   <div class="flex items-center gap-2 p-3">
-    <h1 class="flex min-w-0 items-center gap-2 truncate text-base font-semibold tracking-tight">
+    <!-- 标题在 flex 行内：文字必须包一层 truncate 节点，否则溢出时只会被裁掉而不出省略号 -->
+    <h1 class="flex min-w-0 items-center gap-2 text-base font-semibold tracking-tight">
       <component :is="props.icon" class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-      {{ props.title }}
+      <span class="truncate">{{ props.title }}</span>
     </h1>
     <slot name="meta" />
+    <!-- 右侧动作：恒不收缩（标题先让位），手机上两个图标按钮各 44px 仍可容纳 -->
     <span class="ml-auto flex shrink-0 items-center gap-1">
       <slot name="actions" />
     </span>

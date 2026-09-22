@@ -120,13 +120,14 @@ watch(
       <span class="min-w-0 flex-1">
         <span class="flex items-center justify-between gap-2">
           <span class="min-w-0 truncate text-sm font-medium">{{ c.name }}</span>
-          <!-- 徽章插槽：候选人状态 / 本部门录取决定 / 出价与成交结果 -->
-          <span v-if="$slots.badges" class="flex shrink-0 items-center gap-1">
+          <!-- 徽章插槽：候选人状态 / 本部门录取决定 / 出价与成交结果。
+               允许收缩与换行（长部门名 + 多枚徽章时不再把整行撑宽）。 -->
+          <span v-if="$slots.badges" class="flex min-w-0 flex-wrap items-center justify-end gap-1">
             <slot name="badges" :item="c" />
           </span>
         </span>
         <span class="mt-0.5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span class="min-w-0 truncate">{{ c.profile || '无简介' }}</span>
+          <span class="min-w-0 flex-1 truncate">{{ c.profile || '无简介' }}</span>
           <!-- 元信息插槽：房间号等 -->
           <slot name="meta" :item="c" />
         </span>

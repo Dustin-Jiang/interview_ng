@@ -224,8 +224,8 @@ function searchQuery(): Record<string, string> {
         @retry="reloadAll"
       >
         <template #badges="{ item }">
-          <Badge v-for="b in rosterBadges(item)" :key="b.label" :variant="b.variant">
-            {{ b.label }}
+          <Badge v-for="b in rosterBadges(item)" :key="b.label" :variant="b.variant" class="max-w-full">
+            <span class="truncate">{{ b.label }}</span>
           </Badge>
         </template>
       </RosterList>
@@ -305,9 +305,10 @@ function searchQuery(): Record<string, string> {
       <template v-else>
         <CandidateDetailHeader :candidate="selected" :badge="selectedResultBadge">
           <div class="space-y-2 pt-4 text-sm">
-            <!-- 出价：可出价时行内编辑（←/→ 步进、Enter / 按钮保存），否则只读展示 -->
-            <div class="flex items-center justify-between gap-3">
-              <span class="text-muted-foreground">出价</span>
+            <!-- 出价：可出价时行内编辑（←/→ 步进、Enter / 按钮保存），否则只读展示。
+                 手机上「标签 / 步进组」可折行，避免 w-20 输入框 + 三个按钮撑破卡片 -->
+            <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <span class="shrink-0 text-muted-foreground">出价</span>
               <template v-if="bidEditable">
                 <div class="flex items-center gap-1">
                   <Button
@@ -369,8 +370,9 @@ function searchQuery(): Record<string, string> {
                     v-for="(b, i) in allBidsByCandidate.get(selected.id)"
                     :key="b.id"
                     :variant="i === 0 ? 'default' : 'secondary'"
+                    class="max-w-full"
                   >
-                    {{ deptName(b.department_id) }} · {{ b.amount }}
+                    <span class="truncate">{{ deptName(b.department_id) }} · {{ b.amount }}</span>
                   </Badge>
                 </template>
                 <span v-else class="text-sm text-muted-foreground">-</span>
