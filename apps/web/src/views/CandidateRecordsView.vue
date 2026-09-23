@@ -135,7 +135,7 @@ function filterQuery(): Record<string, string> {
   return query
 }
 
-// ---- 录取决定（录取/捡漏阶段展示；按部门分别记录） ----
+// ---- 录取决定（面试阶段起即可表态；按部门分别记录） ----
 const {
   loading: admissionsLoading,
   canBrowseAll,
@@ -431,7 +431,8 @@ function onPreferencesSaved(): void {
             </div>
           </div>
 
-          <!-- 录取决定：录取阶段展示。本部门用段式控件切换；跨部门浏览时补充其他部门决定 -->
+          <!-- 录取决定：面试阶段起即可表态（结算阶段不展示）。本部门用段式控件切换；
+               跨部门浏览（candidates.browse_all）时补充其他部门决定 -->
           <template v-if="showControls">
             <div class="mt-4 space-y-3">
               <div v-if="canBrowseAll && othersOf.length" class="flex flex-wrap items-center gap-2">

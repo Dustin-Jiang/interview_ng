@@ -3,7 +3,18 @@
  * 由「候选人 × 部门 × 录取决定」三份原始数据推导预览矩阵与每位候选人的汇总结论。
  * 无关 Vue，无副作用；输入不被修改。
  */
-import type { AdmissionStatus } from '@/models'
+import type { AdmissionStatus, SystemPhase } from '@/models'
+
+/**
+ * 该系统阶段是否允许各部门记录录取决定（「录取 / 放弃 / 待定」）。
+ * **面试阶段起就可以表态**——面试现场就能给出结论，不必等到录取阶段；结算阶段不允许：
+ * 那时竞拍已自动结算、录取档已批量同步，手动改没有意义（与「出价在结算阶段只读」同一口径）。
+ * 服务端**不设阶段门**（`UpsertCandidateAdmission` 只校验候选人 / 部门 / 状态），
+ * 阶段只决定界面是否给出入口——故这条策略是唯一判据，界面各处以它为准，别各自判断。
+ */
+export function isAdmissionRecordingPhase(phase: SystemPhase | null): boolean {
+  return phase === 'interview' || phase === 'admission' || phase === 'leftover'
+}
 
 /** 候选人的录取汇总结论。 */
 export type AdmissionOutcome =

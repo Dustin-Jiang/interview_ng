@@ -1,6 +1,6 @@
 /**
  * useAdmissions —— 录取决定（按部门记录）+ 系统阶段组合式函数。
- * 供「候选人查看」页使用：录取/捡漏阶段展示本部门决定控件；
+ * 供「候选人查看」页使用：**面试阶段起**（面试 / 录取 / 捡漏）展示本部门决定控件（结算阶段不展示）；
  * 持 candidates.browse_all 时展示各部门决定与部门归属。
  * 阶段读取与决定列表都在本函数内自管理（阶段变化 / 权限变化即时生效）。
  */
@@ -8,6 +8,7 @@ import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { toast } from 'vue-sonner'
 
 import { admissionApi, departmentApi } from '@/api/http'
+import { isAdmissionRecordingPhase } from '@/domain/admission'
 import { useAuth } from '@/composables/useAuth'
 import { useSystemStatus } from '@/composables/useSystemStatus'
 import { PERMISSIONS, type AdmissionStatus, type Candidate, type CandidateAdmission, type SystemPhase } from '@/models'
@@ -31,7 +32,7 @@ export interface UseAdmissions {
   readonly canBrowseAll: ComputedRef<boolean>
   /** 是否可记录录取决定（admissions.record）。 */
   readonly canRecord: ComputedRef<boolean>
-  /** 是否展示录取控件：录取/捡漏阶段 + 有可看内容（本部门记录或跨部门权限）。 */
+  /** 是否展示录取控件：面试 / 录取 / 捡漏阶段 + 有可看内容（本部门记录或跨部门权限）。 */
   readonly showControls: ComputedRef<boolean>
   /** 本部门对某候选人的决定（名册徽章用）。 */
   readonly statusOf: (candidateId: number) => AdmissionStatus | undefined
@@ -57,7 +58,8 @@ export function useAdmissions(selected: () => Candidate | null): UseAdmissions {
   const canRecord = computed(() => hasPermission(PERMISSIONS.ADMISSIONS_RECORD))
 
   const showControls = computed(() => {
-    if (phase.value !== 'admission' && phase.value !== 'leftover') return false
+    // 阶段策略在 domain 层（面试阶段起即可表态，结算阶段不给入口），此处只叠加「有没有可看内容」。
+    if (!isAdmissionRecordingPhase(phase.value)) return false
     if (canBrowseAll.value) return true
     return !!user.value?.department_id
   })
@@ -129,7 +131,7 @@ export function useAdmissions(selected: () => Candidate | null): UseAdmissions {
     }
   }
 
-  // 进入录取/捡漏阶段后才拉取决定列表。
+  // 控件可见（面试阶段起）后拉取决定列表；不可见时不请求（结算阶段/无部门且无跨部门权限）。
   watch(showControls, (on) => {
     if (on) void loadAdmissions()
   })
