@@ -202,6 +202,17 @@ function goRoom(c: Candidate) {
   void router.push({ name: 'room', params: { roomId: String(c.room_id) } })
 }
 
+/**
+ * 「面试房间」展示名：面试结束时记录的、这场面试所在房间。
+ * 优先用当时留下的名字快照（房间之后改名/删除，也仍是「当时在哪间面的」）；
+ * 快照为空（当时未命名）时按 id 反查房间列表。没有记录（还没面完）→ 空串，整行不渲染。
+ */
+const interviewRoomLabel = computed(() => {
+  const c = selected.value
+  if (!c) return ''
+  return c.interview_room_name || roomLabelOf(c.interview_room_id)
+})
+
 // ---- 志愿与调剂：独立小权限（面试官默认持有），改完按 id 重拉名册即刷新详情 ----
 const canEditPreferences = computed(() => hasPermission(PERMISSIONS.CANDIDATES_PREFERENCES))
 const preferenceTarget = ref<Candidate | null>(null)
@@ -380,6 +391,12 @@ function onPreferencesSaved(): void {
                 </Button>
               </span>
               <span v-else class="text-muted-foreground">—</span>
+            </div>
+            <!-- 面试房间：面试结束那一刻记录（此时房间已与候选人解绑，故用当时的名字快照展示）。
+                 没面完的候选人没有这条记录，整行不显示。 -->
+            <div v-if="interviewRoomLabel" class="flex items-center justify-between gap-3">
+              <span class="shrink-0 text-muted-foreground">面试房间</span>
+              <span class="min-w-0 break-words text-right">{{ interviewRoomLabel }}</span>
             </div>
             <div class="flex items-center justify-between gap-3">
               <span class="text-muted-foreground">创建时间</span>

@@ -84,8 +84,14 @@ type Candidate struct {
 	// 也在档内按它排列——所以被拉进房间、开始面试等流转都不清空它。
 	// 不能用 UpdatedAt 代替：导入/编辑资料会刷新它，排队顺序会被打乱。
 	CheckedInAt *time.Time `json:"checked_in_at"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	// InterviewRoomID / InterviewRoomName：**这场面试是在哪间房间做的**，在候选人推进到
+	// 「面试已结束」的那一刻记录——完成即解绑房间（rooms.candidate_id 置空），不留档就再也查不到。
+	// 名字另存快照，房间之后改名或删除仍能回答「当时在哪间」；重复面试（重置后再走一遍）覆盖为最近一场。
+	// 房间被删除时 ID 置空（见 DeleteRoom），名字快照保留。
+	InterviewRoomID   *uint64   `json:"interview_room_id"`
+	InterviewRoomName string    `gorm:"size:128" json:"interview_room_name"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // StudentNoMaxLen 学号长度上限（纯数字，1–64 位）。

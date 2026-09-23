@@ -725,3 +725,98 @@ func TestUpdateCandidatePreferences(t *testing.T) {
 		t.Fatalf("未知候选人应 ErrNotFound，实得 %v", err)
 	}
 }
+
+// TestInterviewRoomRecordedOnComplete 面试结束后记录「在哪间房间面的」：
+// 推进到「面试已结束」时把当时绑定的房间记进候选人（id + 名字快照），随后房间解绑；
+// 房间改名后快照保持面试当时的名字，房间被删除后 id 置空、快照仍可读（否则「在哪间面的」就丢了）。
+func TestInterviewRoomRecordedOnComplete(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	candID := mustCreateCandidateWithNo(ctx, st, "0100", "记录甲", "")
+	if c, _ := st.GetCandidate(ctx, candID); c.InterviewRoomID != nil || c.InterviewRoomName != "" {
+		t.Fatalf("还没面试就不该有面试房间: %+v", c)
+	}
+
+	if _, err := st.CheckIn(ctx, candID); err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	roomID := mustCreateRoom(ctx, st)
+	if _, err := st.RenameRoom(ctx, roomID, "文F404"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if _, err := st.PullCandidate(ctx, roomID, candID); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if _, _, err := st.JoinRoom(ctx, roomID, 1); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	// 面试中：面试还没结束，此时不记录
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("move in_progress: %v", err)
+	}
+	if c, _ := st.GetCandidate(ctx, candID); c.InterviewRoomID != nil {
+		t.Fatalf("面试中不该已记录（面试结束才记录）: %+v", c)
+	}
+
+	// 结束 → 记录房间，同时解绑（记录与「当前绑定」是两件事）
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusCompleted); err != nil {
+		t.Fatalf("move completed: %v", err)
+	}
+	c, _ := st.GetCandidate(ctx, candID)
+	if c.InterviewRoomID == nil || *c.InterviewRoomID != roomID || c.InterviewRoomName != "文F404" {
+		t.Fatalf("面试结束应记录面试房间: %+v", c)
+	}
+	if c.RoomID != nil {
+		t.Fatalf("面试结束后房间仍应解绑: %v", c.RoomID)
+	}
+
+	// 房间改名：快照保持面试当时的名字（历史事实不随之后改名而变）
+	if _, err := st.RenameRoom(ctx, roomID, "改名后的房间"); err != nil {
+		t.Fatalf("rename again: %v", err)
+	}
+	if c, _ := st.GetCandidate(ctx, candID); c.InterviewRoomName != "文F404" {
+		t.Fatalf("改名不该改历史快照: %q", c.InterviewRoomName)
+	}
+
+	// 房间删除：引用置空、名字快照保留
+	if _, err := st.LeaveRoom(ctx, roomID, 1); err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	if _, err := st.DeleteRoom(ctx, roomID); err != nil {
+		t.Fatalf("delete room: %v", err)
+	}
+	c, _ = st.GetCandidate(ctx, candID)
+	if c.InterviewRoomID != nil {
+		t.Fatalf("房间删除后应清空引用: %v", *c.InterviewRoomID)
+	}
+	if c.InterviewRoomName != "文F404" {
+		t.Fatalf("房间删除后应保留名字快照: %q", c.InterviewRoomName)
+	}
+}
+
+// TestInterviewRoomRecordedOnResetToCompleted 管理端直接重置到「面试已结束」同样记录面试房间
+// （重置与房间内推进两条路径口径一致）。
+func TestInterviewRoomRecordedOnResetToCompleted(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	candID := mustCreateCandidateWithNo(ctx, st, "0101", "记录乙", "")
+	if _, err := st.CheckIn(ctx, candID); err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	roomID := mustCreateRoom(ctx, st)
+	if _, err := st.RenameRoom(ctx, roomID, "第二面试间"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if _, err := st.PullCandidate(ctx, roomID, candID); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if _, err := st.ResetCandidateStatus(ctx, candID, dsmodel.StatusCompleted); err != nil {
+		t.Fatalf("reset to completed: %v", err)
+	}
+	c, _ := st.GetCandidate(ctx, candID)
+	if c.InterviewRoomID == nil || *c.InterviewRoomID != roomID || c.InterviewRoomName != "第二面试间" {
+		t.Fatalf("重置到已结束也应记录面试房间: %+v", c)
+	}
+}

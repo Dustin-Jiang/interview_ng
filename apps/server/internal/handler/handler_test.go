@@ -1274,6 +1274,7 @@ func TestZeroBidOverHTTP(t *testing.T) {
 		t.Fatalf("改价后应为 [300]（单条记录），实得 %v", got)
 	}
 }
+
 // TestCandidateCheckedInAtJSON 排队时刻的 JSON 契约（房间「拉取候选人」列表按它先来后到排序）：
 // 未签到为空、签到后有 RFC3339 值、被拉入房间（离开待分配）后重新为空。
 func TestCandidateCheckedInAtJSON(t *testing.T) {
@@ -1316,6 +1317,7 @@ func TestCandidateCheckedInAtJSON(t *testing.T) {
 		t.Fatalf("重置回未签到应清空: %v", got["checked_in_at"])
 	}
 }
+
 // TestMessageSenderDepartment 消息头部的部门头衔（房间实时聊天与归档回放共用同一份数据）：
 // 实时 message_appended 事件带 SenderDepartment，历史消息带 sender.department.name。
 func TestMessageSenderDepartment(t *testing.T) {
@@ -1408,5 +1410,44 @@ func TestMessageSenderDepartment(t *testing.T) {
 	dept, _ := sender["department"].(map[string]any)
 	if sender["name"] != "部门面试官" || dept["name"] != "技术部" {
 		t.Fatalf("历史消息应带 sender.department.name: %v", msg)
+	}
+}
+
+// TestInterviewRoomJSONContract 面试房间的 JSON 契约（前端候选人详情据此显示「面试房间」）：
+// 未面试为空；面试结束后带上房间 id 与**当时的名字快照**。
+func TestInterviewRoomJSONContract(t *testing.T) {
+	r := newTestApp(t)
+	token := adminToken(t, r)
+
+	_, out := doJSON(t, r, "POST", "/api/candidates", `{"student_no":"0901","name":"面试房间甲"}`, token)
+	id := int(out["id"].(float64))
+	_, got := doJSON(t, r, "GET", "/api/candidates/"+itoa(id), "", token)
+	if got["interview_room_id"] != nil || got["interview_room_name"] != "" {
+		t.Fatalf("未面试应为空: %v / %v", got["interview_room_id"], got["interview_room_name"])
+	}
+
+	doJSON(t, r, "PUT", "/api/candidates/"+itoa(id)+"/check-in", "", token)
+	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
+	roomID := int(out["id"].(float64))
+	if code, _ := doJSON(t, r, "PATCH", "/api/rooms/"+itoa(roomID), `{"name":"文F404"}`, token); code != http.StatusOK {
+		t.Fatalf("房间命名应 200: %d", code)
+	}
+	if code, _ := doJSON(t, r, "PUT", "/api/rooms/"+itoa(roomID)+"/candidate", `{"candidate_id":`+itoa(id)+`}`, token); code != http.StatusOK {
+		t.Fatalf("拉取应 200: %d", code)
+	}
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(id)+"/status", `{"status":"COMPLETED"}`, token); code != http.StatusOK {
+		t.Fatalf("重置到「面试已结束」应 200: %d", code)
+	}
+
+	_, got = doJSON(t, r, "GET", "/api/candidates/"+itoa(id), "", token)
+	if room, _ := got["interview_room_id"].(float64); int(room) != roomID {
+		t.Fatalf("面试结束应带房间 id: %v", got["interview_room_id"])
+	}
+	if got["interview_room_name"] != "文F404" {
+		t.Fatalf("面试结束应带名字快照: %v", got["interview_room_name"])
+	}
+	// 解绑是另一回事：当前 room_id 已清空，但历史记录仍在
+	if got["room_id"] != nil {
+		t.Fatalf("面试结束后不应仍绑定房间: %v", got["room_id"])
 	}
 }

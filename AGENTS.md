@@ -81,7 +81,7 @@ podman compose up -d --build   # 部署整栈（单镜像 app + postgres），�
 - **后端**
   - 所有写操作走 `MemStateStore`：`s.mu` 临界区内「先落库成功，后 emit 事件」，持久化失败绝不广播。
   - 错误：领域层返回 `&state.Error{Code, Msg}`（机器码如 `not_leftover_phase`/`budget_exceeded`）或哨兵错误；handler 用 `stateErr()` 统一映射 HTTP 状态码。
-  - 状态变更必须经 `guardTransition` / `validStatus` 校验；房间是独立物理记录，绑定的唯一权威在 `rooms.candidate_id`，候选人 `room_id` 是只读投影；候选人完成即自动清房；消息按候选人归属、删除候选人级联删消息。
+  - 状态变更必须经 `guardTransition` / `validStatus` 校验；房间是独立物理记录，绑定的唯一权威在 `rooms.candidate_id`，候选人 `room_id` 是只读投影；候选人完成即自动清房；消息按候选人归属、删除候选人级联删消息。**清房前先给候选人留档「这场面试在哪间房间做的」**（`interview_room_id` + 名字快照 `interview_room_name`，见 `mem_store.go#interviewRoomUpdates`；推进与「重置到已结束」两条 COMPLETED 路径都要写，`DeleteRoom` 把引用置空但保留快照）——房间一旦解绑，这场面试发生在哪就再也查不到。候选人详情页据此显示「面试房间」行（没面完不显示）。
 - **前端**
   - 列表页模式：多个独立 `useAsync` 资源 + `useBoardRefresh([...事件], reloadAll)` + `RefreshButton`；筛选态同步 URL query、选中条目同步路径参数（`router.replace`，均可深链）。
   - **URL 一律 RESTful**：路径段只能是资源名词（集合用复数、条目 `/:id`、单例子资源用单数、多词 kebab-case），**禁止动词/动名词路径段**（`login`、`assign`、`pull_candidate`、`waiting` 这类历史写法一律改为资源操作）；集合项用 POST/GET/DELETE，单例子资源用 PUT，部分更新用 PATCH。

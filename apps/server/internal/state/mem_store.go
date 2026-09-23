@@ -448,6 +448,10 @@ func (s *MemStateStore) MovePhase(ctx context.Context, roomID, operatorID uint64
 	// 房间转空闲可继续拉取下一位；消息仍按候选人归档保留。
 	updates := statusUpdates(to, time.Now())
 	if to == dsmodel.StatusCompleted {
+		// 先把「在哪间房间面的」记到候选人身上（解绑后房间与候选人再无关联，不记就永久丢失）。
+		for k, v := range interviewRoomUpdates(room) {
+			updates[k] = v
+		}
 		if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", roomID).
 			UpdateColumn("candidate_id", nil).Error; err != nil {
 			return nil, err
@@ -1257,8 +1261,12 @@ func (s *MemStateStore) ResetCandidateStatus(ctx context.Context, id uint64, to 
 			return nil, &Error{Code: "no_room", Msg: "向前重置须先绑定房间"}
 		}
 		roomID = room.ID
-		// 重置到 COMPLETED 与推进路径一致：完成即自动解绑房间（消息按候选人保留）。
+		// 重置到 COMPLETED 与推进路径一致：完成即自动解绑房间（消息按候选人保留），
+		// 同时把「在哪间房间面的」记到候选人身上。
 		if to == dsmodel.StatusCompleted {
+			for k, v := range interviewRoomUpdates(room) {
+				updates[k] = v
+			}
 			if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", roomID).
 				UpdateColumn("candidate_id", nil).Error; err != nil {
 				return nil, err
@@ -1722,6 +1730,12 @@ func (s *MemStateStore) DeleteRoom(ctx context.Context, id uint64) (*Event, erro
 	if members > 0 {
 		return nil, &Error{Code: "room_not_empty", Msg: "房间仍有成员"}
 	}
+	// 曾在这间房面试过的候选人：清掉房间引用（名字快照保留，历史仍能读「当时在哪间面试」）。
+	if err := s.db.WithContext(ctx).Model(&dsmodel.Candidate{}).
+		Where("interview_room_id = ?", id).
+		UpdateColumn("interview_room_id", nil).Error; err != nil {
+		return nil, err
+	}
 	if err := s.db.WithContext(ctx).Delete(&dsmodel.Room{}, id).Error; err != nil {
 		return nil, err
 	}
@@ -1840,6 +1854,19 @@ func validStatus(s dsmodel.CandidateStatus) bool {
 		}
 	}
 	return false
+}
+
+// interviewRoomUpdates 面试结束那一刻记下「在哪间房间面的」。
+// 此时房间即将解绑（rooms.candidate_id 置空），不记就再也查不到；名字存快照，
+// 房间之后改名或删除也仍能展示当时的房间。房间名为空（未命名）则快照为空串，由界面回退。
+func interviewRoomUpdates(room *dsmodel.Room) map[string]any {
+	if room == nil {
+		return nil
+	}
+	return map[string]any{
+		"interview_room_id":   room.ID,
+		"interview_room_name": strings.TrimSpace(room.Name),
+	}
 }
 
 // statusUpdates 组装候选人状态迁移的写库列：状态本身 + 面试计时打点。
