@@ -76,22 +76,29 @@ func TestCheckInQueueOrder(t *testing.T) {
 		t.Fatalf("资料编辑/导入不该刷新排队时刻: %v → %v", stamped, after.CheckedInAt)
 	}
 
-	// 被拉进房间（离开待分配）→ 清空；重置回未签到同样清空
+	// 被拉进房间 / 开始面试 / 完成：签到时刻都保留 —— 候场大屏的已签到各档要在档内按到达先后排列
 	roomID := mustCreateRoom(ctx, st)
 	if _, err := st.PullCandidate(ctx, roomID, first); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
-	if c, _ := st.GetCandidate(ctx, first); c.CheckedInAt != nil {
-		t.Fatalf("离开待分配应清空排队时刻: %v", c.CheckedInAt)
+	if c, _ := st.GetCandidate(ctx, first); c.CheckedInAt == nil || !c.CheckedInAt.Equal(stamped) {
+		t.Fatalf("被拉进房间不该清空签到时刻: %v", c.CheckedInAt)
 	}
+	// 误拉后重置回「已签到待分配」：保留原签到时刻，先到的人不该被挪到队尾
+	if _, err := st.ResetCandidateStatus(ctx, first, dsmodel.StatusCheckedInPendingAssign); err != nil {
+		t.Fatalf("reset to pending: %v", err)
+	}
+	if c, _ := st.GetCandidate(ctx, first); c.CheckedInAt == nil || !c.CheckedInAt.Equal(stamped) {
+		t.Fatalf("重置回待分配不该改写签到时刻: %v", c.CheckedInAt)
+	}
+
+	// 只有重置回「未签到」才清空；再签到则重新打点且不早于上一次
 	if _, err := st.ResetCandidateStatus(ctx, first, dsmodel.StatusNotCheckedIn); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
 	if c, _ := st.GetCandidate(ctx, first); c.CheckedInAt != nil {
-		t.Fatalf("重置回未签到应清空排队时刻: %v", c.CheckedInAt)
+		t.Fatalf("重置回未签到应清空签到时刻: %v", c.CheckedInAt)
 	}
-
-	// 重新签到 = 重新排队：重新打点且不早于上一次
 	if _, err := st.CheckIn(ctx, first); err != nil {
 		t.Fatalf("re-checkin: %v", err)
 	}

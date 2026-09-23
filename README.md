@@ -59,7 +59,7 @@ interview_ng/
 - **恢复**：消息 `id` 为主续传游标（**按候选人维度**）；事件带 `Seq` 幂等；「先落库成功 → 后广播」。
 - **消息/日志**：全部落库且**按候选人归属**（候选人换房历史随人走）；候选人删除级联删消息；面试官删除后其消息保留（sender 置空）。
 - **房间**：独立于候选人的物理会议室记录（`candidate_id` 可空，可先建房后绑人、重置解绑后房保留）；**无房间状态机**，房间状态 = 候选人状态的查询投影；仅空房可删；不归档。
-- **分配**：候选人被房间内面试官**拉取**（`PUT /api/rooms/:id/candidate`），取代"页面推分配"；并发拉取由状态机原子拒绝。房间侧栏的「拉取候选人」列表 = 当前处于「已签到待分配」的候选人，**按先来后到（`checked_in_at` 升序）排列**——多人排队时先签到的人排在前面，而不是按导入顺序（`_id`/`created_at`）。
+- **分配**：候选人被房间内面试官**拉取**（`PUT /api/rooms/:id/candidate`），取代"页面推分配"；并发拉取由状态机原子拒绝。房间侧栏的「拉取候选人」列表 = 当前处于「已签到待分配」的候选人，**按先来后到（`checked_in_at` 升序）排列**——多人排队时先签到的人排在前面，而不是按导入顺序（`id`/`created_at`）。**候场大屏 `/board` 同理**：仍按状态分档（正在面试 > 等待开始 > 等待分配 > 其他），但**档内也按签到先后**排列，所以已签到的各档都读作叫号顺序；未签到的没有签到时刻，退回按创建时间（`domain/status.ts#sortWaitingBoard`）。
 - **数据导入**：设置页 `/settings/imports`（需 `candidates.manage`）三步导入候选人——① 选 `.xlsx`（单工作表，≤2000 行 / ≤5MB）② 每行成为 JSON 对象（首行表头为 key、值做类型推断、全空行跳过）并用 JMESPath 逐字段映射（中文列名须写成 `"列名"`，界面提供可复制列名清单）③ 确认提交；**解析与映射全在浏览器**（服务端零依赖、无 multipart），提交只发映射后的行，由 `POST /api/candidates/imports` 单事务全或无落库。学号取单元格**原始值**（格式化文本可能带千分位，会破坏纯数字校验）。映射结果会按 **JSON 字符串转义集**解释字面量转义（`\n`、`\t`、`\uXXXX` 等），因此「单元格内真实换行」与「字面量 `\n`」两种写法都能正确显示；未知转义（如正则里的 `\d`）原样保留，需保留反斜杠请写 `\\`。**「更新时间」列可选**：映射它以后，源表该行时间早于库中记录的行判为旧数据、**跳过不覆盖**（避免重复导入旧表格冲掉系统内的改动）；未映射即不比较，照旧全量覆盖；无法识别的时间按行级错误整批拒绝，不会静默关掉保护。
 - **学号（身份键）**：`student_no` 必填、纯数字（1–64 位，全角数字按半角归一化、首尾空白去除）、唯一（DB 唯一索引兜底），前导零有意义（`00123` ≠ `123`）；新增/编辑/导入三条写入路径同一套校验，单条编辑允许改学号（撞号 → 409「学号已存在」，改号不影响运行态：房间绑定/消息/录取决定/出价均随候选人 id 保留）。**该列为 NOT NULL，故旧库必须重置**（AutoMigrate 无法给已有数据的表加 NOT NULL 列）。
 - **候选人与状态机**：五档状态 `NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED` 为唯一权威；管理端支持"重置到任意档"（向后自动解绑房间、向前须已有房间）。
@@ -92,7 +92,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 | `roles` | id, name(唯一), description | 角色（权限组，RBAC） |
 | `role_permissions` | role_id, permission（联合唯一） | 角色↔权限关联 |
 | `user_roles` | user_id, role_id（联合唯一） | 用户↔角色 M2M |
-| `candidates` | id, **student_no(唯一, NOT NULL)**, name, profile, first_choice, second_choice, accept_adjust, phone, qq, email, status, **interview_started_at(可空)**, **checked_in_at(可空)** | 候选人（非登录用户）；**学号 = 身份键**（纯数字、唯一、前导零有意义），志愿/联系方式为可选资料字段，当前房间归属为查询投影（`rooms.candidate_id` 主导，`room_id` 不落库）；`interview_started_at` = 进入「面试中」时打点、离开该档即清空（NULL = 不在面试中），前端面试计时以此为准（`updated_at` 会被任意资料编辑刷新，不能当计时起点）；`checked_in_at` = 进入「已签到待分配」时打点、离开该档即清空，房间「拉取候选人」列表按它先来后到排序（同理不能用 `updated_at`：导入/编辑资料会刷新它，排队顺序会被打乱） |
+| `candidates` | id, **student_no(唯一, NOT NULL)**, name, profile, first_choice, second_choice, accept_adjust, phone, qq, email, status, **interview_started_at(可空)**, **checked_in_at(可空)** | 候选人（非登录用户）；**学号 = 身份键**（纯数字、唯一、前导零有意义），志愿/联系方式为可选资料字段，当前房间归属为查询投影（`rooms.candidate_id` 主导，`room_id` 不落库）；`interview_started_at` = 进入「面试中」时打点、离开该档即清空（NULL = 不在面试中），前端面试计时以此为准（`updated_at` 会被任意资料编辑刷新，不能当计时起点）；`checked_in_at` = **签到那一刻打点，只有重置回「未签到」才清空**（被拉进房间 / 开始面试 / 完成都不清空——大屏要让已签到的各档按到达先后排列）；房间「拉取候选人」列表与候场大屏据此先来后到（同理不能用 `updated_at`：导入/编辑资料会刷新它，排队顺序会被打乱） |
 | `rooms` | id, **name**, candidate_id(可空) | 房间 = 独立物理会议室记录，`name` 为可选别名（空串=未命名，UI 回退「房间 #id」，不要求唯一），`candidate_id` 可空；无状态机、无主持人，"状态"= 候选人状态的查询投影 |
 | `room_members` | room_id, user_id（`idx_room_user` 唯一） | 房间成员，一次一活跃房间 |
 | `messages` | id, candidate_id, sender_id(可空), content | 群聊记录（长存），**按候选人归属**，`id` 即候选人维度续传游标 |

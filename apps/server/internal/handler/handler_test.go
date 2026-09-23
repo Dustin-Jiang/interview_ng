@@ -1299,12 +1299,20 @@ func TestCandidateCheckedInAtJSON(t *testing.T) {
 		t.Fatalf("排队时刻应为 RFC3339: %q (%v)", stamped, err)
 	}
 
+	// 拉入房间后仍保留签到时刻（大屏把已签到的各档按到达先后排列）；只有重置回未签到才清空
 	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
 	roomID := int(out["id"].(float64))
 	if code, _ := doJSON(t, r, "PUT", "/api/rooms/"+itoa(roomID)+"/candidate", `{"candidate_id":`+itoa(id)+`}`, token); code != http.StatusOK {
 		t.Fatalf("拉取应 200: %d", code)
 	}
+	_, got = doJSON(t, r, "GET", "/api/candidates/"+itoa(id), "", token)
+	if kept, _ := got["checked_in_at"].(string); kept != stamped {
+		t.Fatalf("被拉进房间不该清空签到时刻: %v（原 %v）", got["checked_in_at"], stamped)
+	}
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(id)+"/status", `{"status":"NOT_CHECKED_IN"}`, token); code != http.StatusOK {
+		t.Fatalf("重置状态应 200: %d", code)
+	}
 	if _, got := doJSON(t, r, "GET", "/api/candidates/"+itoa(id), "", token); got["checked_in_at"] != nil {
-		t.Fatalf("离开待分配应清空: %v", got["checked_in_at"])
+		t.Fatalf("重置回未签到应清空: %v", got["checked_in_at"])
 	}
 }

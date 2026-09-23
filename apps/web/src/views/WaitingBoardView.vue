@@ -1,7 +1,8 @@
 <!--
   WaitingBoardView —— 候场大屏（DataTable 版）：未完成名单 + 签到操作。
-  与候选人管理界面共用 DataTable 视觉；差异：名单按状态排序
-  （正在面试 > 等待开始 > 等待分配 > 其他，COMPLETED 不上屏），展示学号、姓名、状态与房间名，
+  与候选人管理界面共用 DataTable 视觉；差异：名单按状态分档
+  （正在面试 > 等待开始 > 等待分配 > 其他，COMPLETED 不上屏），**档内按签到先后排序**（叫号次序），
+  展示学号、姓名、状态与房间名，
   操作列只保留签到。签到仅对持有 candidates.checkin 权限的用户可见，名单对任意登录用户可见。
   候选人被拉取进房间（candidate_assigned）时弹叫号弹窗，大字报出姓名与目标房间名。
 -->
@@ -37,7 +38,7 @@ const { candidates, keyword, loading, load, checkin, setKeyword } = useCandidate
 
 const canCheckin = computed(() => hasPermission(PERMISSIONS.CANDIDATES_CHECKIN))
 
-/** 候场名单：COMPLETED 不上屏，按状态优先级升序，组内按创建时间升序。 */
+/** 候场名单：COMPLETED 不上屏，按状态优先级分档，档内按签到先后（叫号次序）。 */
 const boardCandidates = computed<readonly Candidate[]>(() => sortWaitingBoard(candidates.value))
 
 const emptyText = computed(() => (keyword.value ? '没有匹配的候选人' : '暂无候选人'))

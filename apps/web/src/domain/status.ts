@@ -56,35 +56,41 @@ const WAITING_STATUS_RANK: Record<CandidateStatus, number> = {
 }
 
 /**
- * 候场名单排序：过滤「已结束」不上屏，按状态优先级升序，同组内按创建时间升序（叫号次序）。
- * 纯函数：输入不被修改。
+ * 到达时刻（毫秒）。判据是后端在「签到」那一刻打的 `checked_in_at`：
+ * 不能用 created_at（那是导入顺序，与谁先到无关）或 updated_at（任何资料编辑/导入都会刷新，
+ * 一边排队一边导入就会打乱顺序）。缺失或非法 → Infinity（未知到达排最后）。
  */
-export function sortWaitingBoard<T extends { status: CandidateStatus; created_at: string }>(
-  items: readonly T[],
-): T[] {
+function arrivalAt(item: { checked_in_at?: string | null }): number {
+  const t = item.checked_in_at ? new Date(item.checked_in_at).getTime() : NaN
+  return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY
+}
+
+/**
+ * 候场名单排序：过滤「已结束」不上屏，按状态优先级升序（**分档不跨**：正在面试仍在最上），
+ * **档内按到达先后**（签到时刻升序）——已签到的各档因此都是「先来的在前」，就是叫号顺序；
+ * 未签到的没有签到时刻，退回创建时间升序（原口径）。纯函数：输入不被修改。
+ */
+export function sortWaitingBoard<
+  T extends { status: CandidateStatus; created_at: string; checked_in_at?: string | null },
+>(items: readonly T[]): T[] {
   return items
     .filter((c) => c.status !== 'COMPLETED' && c.status !== 'ADMISSION_PENDING' && c.status !== 'ADMITTED')
     .slice()
     .sort(
       (a, b) =>
         WAITING_STATUS_RANK[a.status] - WAITING_STATUS_RANK[b.status] ||
+        arrivalAt(a) - arrivalAt(b) ||
         a.created_at.localeCompare(b.created_at),
     )
 }
 
 /**
  * 拉取候选人列表的排序：先来后到（签到时刻升序）。
- * 依据是后端在「进入已签到待分配」时打的 `checked_in_at`——不能用 created_at（那是导入顺序，
- * 与谁先到无关）或 updated_at（任何资料编辑都会刷新，导入一边排队一边跑就会打乱顺序）。
- * 缺签到时刻的行（历史数据）排在有值的之后，并统一按 id 升序兜底，保证顺序稳定且无重复。
- * 纯函数：输入不被修改。
+ * 与候场大屏共用同一条到达时刻口径；缺签到时刻的行（历史数据）排在有值的之后，
+ * 并统一按 id 升序兜底，保证顺序稳定且无重复。纯函数：输入不被修改。
  */
 export function sortByArrival<T extends { id: number; checked_in_at?: string | null }>(
   items: readonly T[],
 ): T[] {
-  const at = (c: T): number => {
-    const t = c.checked_in_at ? new Date(c.checked_in_at).getTime() : NaN
-    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY
-  }
-  return items.slice().sort((a, b) => at(a) - at(b) || a.id - b.id)
+  return items.slice().sort((a, b) => arrivalAt(a) - arrivalAt(b) || a.id - b.id)
 }

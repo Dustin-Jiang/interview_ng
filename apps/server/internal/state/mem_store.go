@@ -220,8 +220,12 @@ func (s *MemStateStore) CheckIn(ctx context.Context, candidateID uint64) (*Event
 	if err := guardTransition(c.Status, dsmodel.StatusCheckedInPendingAssign); err != nil {
 		return nil, err
 	}
-	if err := s.db.WithContext(ctx).Model(c).
-		Updates(statusUpdates(dsmodel.StatusCheckedInPendingAssign, time.Now())).Error; err != nil {
+	now := time.Now()
+	updates := statusUpdates(dsmodel.StatusCheckedInPendingAssign, now)
+	// 签到时刻 = 本次签到的时刻（房间拉取列表与候场大屏按它先来后到）。
+	// 不能改用 UpdatedAt：资料编辑/导入都会刷新它，一边排队一边导入就会打乱顺序。
+	updates["checked_in_at"] = now
+	if err := s.db.WithContext(ctx).Model(c).Updates(updates).Error; err != nil {
 		return nil, err
 	}
 	ev := &Event{Type: EventCandidateSignedIn, Data: struct{ CandidateID uint64 }{candidateID}}
@@ -1844,11 +1848,11 @@ func statusUpdates(to dsmodel.CandidateStatus, now time.Time) map[string]any {
 	} else {
 		updates["interview_started_at"] = nil
 	}
-	// 排队时刻同理：只在「已签到待分配」期间保留，离开即清空（重新签到会重新打点）。
-	// 房间拉取列表按它「先来后到」，故必须是状态机驱动的打点，而不是任何写入都会刷新的 UpdatedAt。
-	if to == dsmodel.StatusCheckedInPendingAssign {
-		updates["checked_in_at"] = now
-	} else {
+	// 签到时刻：只有重置回「未签到」才清空，其余流转（被拉入房间 / 开始面试 / 完成 / 录取）
+	// **不改它** —— 「几点到的」在这些档位里仍是事实，候场大屏要把已签到的各档按到达先后排列。
+	// 打点在 CheckIn 那一步显式完成（不在这里兜底）：重新进入「已签到待分配」（如误拉后重置）
+	// 不该把先到的人挪到队尾，重新排队应由「重新签到」这个动作本身表达。
+	if to == dsmodel.StatusNotCheckedIn {
 		updates["checked_in_at"] = nil
 	}
 	return updates

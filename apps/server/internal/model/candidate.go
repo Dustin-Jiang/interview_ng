@@ -79,9 +79,10 @@ type Candidate struct {
 	// InterviewStartedAt 当前这次面试的开始时刻：进入「面试中」时打点，离开该状态即置空。
 	// 前端计时以此为准——UpdatedAt 会被任何资料编辑刷新，不能当计时起点。
 	InterviewStartedAt *time.Time `json:"interview_started_at"`
-	// CheckedInAt 排队顺序的权威依据：进入「已签到待分配」时打点，离开该状态即置空
-	// （与 InterviewStartedAt 同一范式；重新签到会重新打点）。房间的「拉取候选人」列表据此
-	// 按先来后到排序——不能用 UpdatedAt 代替：导入/编辑资料会刷新它，排队顺序会被打乱。
+	// CheckedInAt 本次签到的时刻：签到那一刻打点，只有重置回「未签到」才清空（重新签到重新打点）。
+	// 房间「拉取候选人」列表据此先来后到；候场大屏的已签到各档（面试中 / 等待开始 / 等待分配）
+	// 也在档内按它排列——所以被拉进房间、开始面试等流转都不清空它。
+	// 不能用 UpdatedAt 代替：导入/编辑资料会刷新它，排队顺序会被打乱。
 	CheckedInAt *time.Time `json:"checked_in_at"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
