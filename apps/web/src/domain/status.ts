@@ -71,3 +71,20 @@ export function sortWaitingBoard<T extends { status: CandidateStatus; created_at
         a.created_at.localeCompare(b.created_at),
     )
 }
+
+/**
+ * 拉取候选人列表的排序：先来后到（签到时刻升序）。
+ * 依据是后端在「进入已签到待分配」时打的 `checked_in_at`——不能用 created_at（那是导入顺序，
+ * 与谁先到无关）或 updated_at（任何资料编辑都会刷新，导入一边排队一边跑就会打乱顺序）。
+ * 缺签到时刻的行（历史数据）排在有值的之后，并统一按 id 升序兜底，保证顺序稳定且无重复。
+ * 纯函数：输入不被修改。
+ */
+export function sortByArrival<T extends { id: number; checked_in_at?: string | null }>(
+  items: readonly T[],
+): T[] {
+  const at = (c: T): number => {
+    const t = c.checked_in_at ? new Date(c.checked_in_at).getTime() : NaN
+    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY
+  }
+  return items.slice().sort((a, b) => at(a) - at(b) || a.id - b.id)
+}

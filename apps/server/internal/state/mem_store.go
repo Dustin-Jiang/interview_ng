@@ -1844,5 +1844,12 @@ func statusUpdates(to dsmodel.CandidateStatus, now time.Time) map[string]any {
 	} else {
 		updates["interview_started_at"] = nil
 	}
+	// 排队时刻同理：只在「已签到待分配」期间保留，离开即清空（重新签到会重新打点）。
+	// 房间拉取列表按它「先来后到」，故必须是状态机驱动的打点，而不是任何写入都会刷新的 UpdatedAt。
+	if to == dsmodel.StatusCheckedInPendingAssign {
+		updates["checked_in_at"] = now
+	} else {
+		updates["checked_in_at"] = nil
+	}
 	return updates
 }

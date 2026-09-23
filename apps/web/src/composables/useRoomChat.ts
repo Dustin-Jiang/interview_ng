@@ -14,7 +14,7 @@ import { WsChannel } from '@/api/ws'
 import type { ChanEvent, ReplyPayload } from '@/api/ws-model'
 import { useAuth } from '@/composables/useAuth'
 import type { CandidateStatus, Message, Room } from '@/models'
-import { phaseRoom, clearRoomCandidate } from '@/domain/status'
+import { phaseRoom, clearRoomCandidate, sortByArrival } from '@/domain/status'
 import {
   appendMessage,
   lastMessageId,
@@ -253,10 +253,11 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     await refreshPullPool()
   }
 
-  /** 拉取"已签到待分配"候选人池（房间侧栏"拉取候选人"列表）。 */
+  /** 拉取"已签到待分配"候选人池（房间侧栏"拉取候选人"列表），按先来后到（签到时刻）排序：
+   *  多人排队时先到的人排在前面，避免房间照着导入顺序随机拉人。 */
   async function refreshPullPool(): Promise<void> {
     const res = await candidateApi.listAll({ status: 'CHECKED_IN_PENDING_ASSIGN' })
-    pullPool.value = res.items
+    pullPool.value = sortByArrival(res.items)
   }
 
   // 初始加载待分配池

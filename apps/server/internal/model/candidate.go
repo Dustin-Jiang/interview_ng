@@ -79,8 +79,12 @@ type Candidate struct {
 	// InterviewStartedAt 当前这次面试的开始时刻：进入「面试中」时打点，离开该状态即置空。
 	// 前端计时以此为准——UpdatedAt 会被任何资料编辑刷新，不能当计时起点。
 	InterviewStartedAt *time.Time `json:"interview_started_at"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	// CheckedInAt 排队顺序的权威依据：进入「已签到待分配」时打点，离开该状态即置空
+	// （与 InterviewStartedAt 同一范式；重新签到会重新打点）。房间的「拉取候选人」列表据此
+	// 按先来后到排序——不能用 UpdatedAt 代替：导入/编辑资料会刷新它，排队顺序会被打乱。
+	CheckedInAt *time.Time `json:"checked_in_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // StudentNoMaxLen 学号长度上限（纯数字，1–64 位）。

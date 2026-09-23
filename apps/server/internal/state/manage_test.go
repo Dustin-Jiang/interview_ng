@@ -33,6 +33,73 @@ func TestPullCandidateAssigns(t *testing.T) {
 	}
 }
 
+// TestCheckInQueueOrder 排队顺序的权威依据 = checked_in_at：进入「已签到待分配」时打点、
+// 离开即清空、重新签到重新打点；且资料编辑 / 导入**不**刷新它 —— 房间的「拉取候选人」列表
+// 据此先来后到排序，若改用 UpdatedAt，一边排队一边导入就会把顺序打乱。
+func TestCheckInQueueOrder(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	first := mustCreateCandidateWithNo(ctx, st, "0090", "先到", "")
+	later := mustCreateCandidateWithNo(ctx, st, "0091", "后到", "")
+	if c, _ := st.GetCandidate(ctx, first); c.CheckedInAt != nil {
+		t.Fatalf("新建（未签到）不该有排队时刻: %v", c.CheckedInAt)
+	}
+
+	// 依次签到：先签到者的排队时刻不晚于后签到者
+	if _, err := st.CheckIn(ctx, first); err != nil {
+		t.Fatalf("checkin first: %v", err)
+	}
+	if _, err := st.CheckIn(ctx, later); err != nil {
+		t.Fatalf("checkin later: %v", err)
+	}
+	a, _ := st.GetCandidate(ctx, first)
+	b, _ := st.GetCandidate(ctx, later)
+	if a.CheckedInAt == nil || b.CheckedInAt == nil {
+		t.Fatalf("签到应打点: first=%v later=%v", a.CheckedInAt, b.CheckedInAt)
+	}
+	if b.CheckedInAt.Before(*a.CheckedInAt) {
+		t.Fatalf("先签到者不该晚于后签到者: first=%v later=%v", a.CheckedInAt, b.CheckedInAt)
+	}
+
+	// 资料编辑与批量导入都不经过状态机打点 → 排队时刻原封不动
+	stamped := *a.CheckedInAt
+	if _, err := st.UpdateCandidate(ctx, first, info3("0090", "改名", "改简介")); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if _, err := st.ImportCandidates(ctx, []state.CandidateImportRow{
+		{CandidateInfo: info3("0090", "导入名", "")},
+	}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if after, _ := st.GetCandidate(ctx, first); after.CheckedInAt == nil || !after.CheckedInAt.Equal(stamped) {
+		t.Fatalf("资料编辑/导入不该刷新排队时刻: %v → %v", stamped, after.CheckedInAt)
+	}
+
+	// 被拉进房间（离开待分配）→ 清空；重置回未签到同样清空
+	roomID := mustCreateRoom(ctx, st)
+	if _, err := st.PullCandidate(ctx, roomID, first); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if c, _ := st.GetCandidate(ctx, first); c.CheckedInAt != nil {
+		t.Fatalf("离开待分配应清空排队时刻: %v", c.CheckedInAt)
+	}
+	if _, err := st.ResetCandidateStatus(ctx, first, dsmodel.StatusNotCheckedIn); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if c, _ := st.GetCandidate(ctx, first); c.CheckedInAt != nil {
+		t.Fatalf("重置回未签到应清空排队时刻: %v", c.CheckedInAt)
+	}
+
+	// 重新签到 = 重新排队：重新打点且不早于上一次
+	if _, err := st.CheckIn(ctx, first); err != nil {
+		t.Fatalf("re-checkin: %v", err)
+	}
+	if c, _ := st.GetCandidate(ctx, first); c.CheckedInAt == nil || c.CheckedInAt.Before(stamped) {
+		t.Fatalf("重新签到应重新打点: %v（旧值 %v）", c.CheckedInAt, stamped)
+	}
+}
+
 // TestPullCandidateConcurrency 并发拉取同一候选人仅一个成功（状态唯一）。
 func TestPullCandidateConcurrency(t *testing.T) {
 	ctx := context.Background()

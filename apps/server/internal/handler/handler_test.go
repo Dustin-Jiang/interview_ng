@@ -1274,3 +1274,37 @@ func TestZeroBidOverHTTP(t *testing.T) {
 		t.Fatalf("改价后应为 [300]（单条记录），实得 %v", got)
 	}
 }
+// TestCandidateCheckedInAtJSON 排队时刻的 JSON 契约（房间「拉取候选人」列表按它先来后到排序）：
+// 未签到为空、签到后有 RFC3339 值、被拉入房间（离开待分配）后重新为空。
+func TestCandidateCheckedInAtJSON(t *testing.T) {
+	r := newTestApp(t)
+	token := adminToken(t, r)
+
+	_, out := doJSON(t, r, "POST", "/api/candidates", `{"student_no":"0900","name":"排队甲"}`, token)
+	id := int(out["id"].(float64))
+	_, got := doJSON(t, r, "GET", "/api/candidates/"+itoa(id), "", token)
+	if got["checked_in_at"] != nil {
+		t.Fatalf("未签到应为 null: %v", got["checked_in_at"])
+	}
+
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(id)+"/check-in", "", token); code != http.StatusOK {
+		t.Fatalf("签到应 200: %d", code)
+	}
+	_, got = doJSON(t, r, "GET", "/api/candidates/"+itoa(id), "", token)
+	stamped, ok := got["checked_in_at"].(string)
+	if !ok || stamped == "" {
+		t.Fatalf("签到后应有排队时刻: %v", got["checked_in_at"])
+	}
+	if _, err := time.Parse(time.RFC3339, stamped); err != nil {
+		t.Fatalf("排队时刻应为 RFC3339: %q (%v)", stamped, err)
+	}
+
+	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
+	roomID := int(out["id"].(float64))
+	if code, _ := doJSON(t, r, "PUT", "/api/rooms/"+itoa(roomID)+"/candidate", `{"candidate_id":`+itoa(id)+`}`, token); code != http.StatusOK {
+		t.Fatalf("拉取应 200: %d", code)
+	}
+	if _, got := doJSON(t, r, "GET", "/api/candidates/"+itoa(id), "", token); got["checked_in_at"] != nil {
+		t.Fatalf("离开待分配应清空: %v", got["checked_in_at"])
+	}
+}
