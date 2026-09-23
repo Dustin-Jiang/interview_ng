@@ -11,6 +11,8 @@ export interface AppendedEventData {
   CandidateID?: number
   SenderID?: number
   SenderName?: string
+  /** 发送者部门名（无部门为空串）：实时消息头部的「头衔」用它，不必二次查询。 */
+  SenderDepartment?: string
   Content?: string
 }
 
@@ -21,8 +23,15 @@ export function messageFromEvent(ev: ChanEvent): Message | null {
   const d = (ev.data as AppendedEventData) ?? {}
   let sender: Message['sender'] = undefined
   if (d.SenderID != null && d.SenderName) {
-    // 实时事件携带发送者展示名，构造最小 sender 对象供展示姓名。
-    sender = { id: d.SenderID, username: d.SenderName, name: d.SenderName, created_at: '', updated_at: '' }
+    // 实时事件携带发送者展示名与部门名，构造最小 sender 对象供展示「姓名 + 部门头衔」。
+    sender = {
+      id: d.SenderID,
+      username: d.SenderName,
+      name: d.SenderName,
+      department: d.SenderDepartment ? { name: d.SenderDepartment } : undefined,
+      created_at: '',
+      updated_at: '',
+    }
   }
   return {
     id: ev.msg_id ?? 0,
@@ -80,4 +89,14 @@ export function senderLabel(
   if (currentUserId != null && senderId === currentUserId) return '我'
   if (senderName) return senderName
   return `面试官 ${senderId}`
+}
+
+/**
+ * 发送者的部门头衔（消息头部的「谁 · 哪个部门」）。
+ * 无部门（admin 等全局账号）或发送者已删除 → 空串，调用方据此不渲染头衔。
+ * 数据来源两处一致：历史消息走 `sender.department`（后端预加载），实时事件走 `SenderDepartment`，
+ * 都在 `messageFromEvent` 里归一到 `sender.department.name`。
+ */
+export function senderDepartmentLabel(m: Message): string {
+  return m.sender?.department?.name ?? ''
 }

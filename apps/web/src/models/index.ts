@@ -95,12 +95,21 @@ export interface CandidatePreferencesPayload {
   accept_adjust: boolean
 }
 
+/**
+ * 部门的最小投影：只需要展示名的地方（消息发送者的头衔）用它。
+ * 完整部门对象见 Department；实时事件里只有名字，历史消息里带完整对象，两者都满足此形状。
+ */
+export interface DepartmentRef {
+  id?: number
+  name: string
+}
+
 export interface User {
   id: number
   username: string
   name: string
   department_id?: number
-  department?: Department
+  department?: DepartmentRef
   created_at: string
   updated_at: string
   roles?: Role[]

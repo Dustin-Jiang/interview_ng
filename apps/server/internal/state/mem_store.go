@@ -199,9 +199,10 @@ func (s *MemStateStore) ListCandidates(ctx context.Context, status dsmodel.Candi
 
 func (s *MemStateStore) ListMessagesAfter(ctx context.Context, candidateID uint64, afterID uint64) ([]*dsmodel.Message, error) {
 	var out []*dsmodel.Message
-	// 预加载 Sender：归档查看需展示面试官姓名；sender 已删时为 nil（前端显示「已删除用户」）。
+	// 预加载 Sender.Department：归档查看与房间聊天需在消息头部标出「面试官 · 部门」；
+	// sender 已删时为 nil（前端显示「已删除用户」），部门为空时前端不显示头衔。
 	err := s.db.WithContext(ctx).
-		Preload("Sender").
+		Preload("Sender.Department").
 		Where("candidate_id = ? AND id > ?", candidateID, afterID).
 		Order("id asc").
 		Find(&out).Error
@@ -482,23 +483,27 @@ func (s *MemStateStore) AppendMessage(ctx context.Context, roomID, senderID uint
 	if err := s.db.WithContext(ctx).Create(msg).Error; err != nil {
 		return nil, err
 	}
-	// 实时事件携带发送者展示名，前端不必依赖二次查询即可显示面试官姓名。
-	senderName := ""
+	// 实时事件携带发送者展示名与部门头衔，前端不必依赖二次查询即可在消息头部标出「谁 · 哪个部门」。
+	senderName, senderDepartment := "", ""
 	var u dsmodel.User
-	if err := s.db.WithContext(ctx).First(&u, senderID).Error; err == nil {
+	if err := s.db.WithContext(ctx).Preload("Department").First(&u, senderID).Error; err == nil {
 		senderName = u.Name
 		if senderName == "" {
 			senderName = u.Username
 		}
+		if u.Department != nil {
+			senderDepartment = u.Department.Name
+		}
 	}
 	ev := &Event{Type: EventMessageAppended, RoomID: roomID, MsgID: msg.ID,
 		Data: struct {
-			RoomID      uint64
-			CandidateID uint64
-			SenderID    uint64
-			SenderName  string
-			Content     string
-		}{roomID, *room.CandidateID, senderID, senderName, content}}
+			RoomID           uint64
+			CandidateID      uint64
+			SenderID         uint64
+			SenderName       string
+			SenderDepartment string
+			Content          string
+		}{roomID, *room.CandidateID, senderID, senderName, senderDepartment, content}}
 	s.emit(roomID, ev)
 	return ev, nil
 }

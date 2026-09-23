@@ -6,11 +6,12 @@ import { toast } from 'vue-sonner'
 import { useRoomChat } from '@/composables/useRoomChat'
 import { nextPhaseOf } from '@/domain/status'
 import { roomLabel } from '@/domain/room'
-import { senderLabel } from '@/domain/messages'
+import { senderLabel, senderDepartmentLabel } from '@/domain/messages'
 import type { CandidateStatus } from '@/models'
 import { formatDateTime } from '@/lib/format'
 import { toastError } from '@/lib/toast'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
@@ -248,8 +249,16 @@ watch(connecting, (v, prev) => {
             class="flex min-w-0 max-w-full flex-col gap-1"
             :class="m.sender_id === currentUserId ? 'items-end' : 'items-start'"
           >
-            <div class="flex items-baseline gap-2 px-1 text-xs text-muted-foreground">
+            <!-- 消息头：姓名 + 部门头衔 + 时间（窄屏允许换行，长部门名不挤走时间） -->
+            <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 px-1 text-xs text-muted-foreground">
               <span class="font-medium">{{ senderLabel(m.sender_id, currentUserId, m.sender?.name || m.sender?.username) }}</span>
+              <Badge
+                v-if="senderDepartmentLabel(m)"
+                variant="outline"
+                class="px-1.5 py-0 font-normal"
+              >
+                {{ senderDepartmentLabel(m) }}
+              </Badge>
               <time>{{ formatDateTime(m.created_at) }}</time>
             </div>
             <div :class="cn(chatBubbleVariants({ side: m.sender_id === currentUserId ? 'own' : 'other' }))">

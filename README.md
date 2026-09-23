@@ -137,12 +137,13 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 服务端推送（事件 / 回复）：
 ```json
-{"type":"message_appended","room_id":3,"seq":12,"msg_id":101,"data":{"RoomID":3,"CandidateID":5,"SenderID":1,"Content":"hello"}}
+{"type":"message_appended","room_id":3,"seq":12,"msg_id":101,"data":{"RoomID":3,"CandidateID":5,"SenderID":1,"SenderName":"张三","SenderDepartment":"技术部","Content":"hello"}}
 {"type":"candidate_signed_in","room_id":0,"seq":11,"data":{"CandidateID":5}}
 {"type":"reply","req_id":"r2","data":{"ok":true,...}}
 ```
 
 > `seq` 全局单调事件序；`msg_id` 为**候选人维度**续传游标——消息按候选人归属，候选人换房后历史随人走。空房间（无候选人）可入房但 `send_msg` 会被拒。
+> `message_appended` 同时带发送者展示名与**部门名**（`SenderName` / `SenderDepartment`，无部门为空串）：消息头部要显示「姓名 + 部门头衔 + 时间」，实时事件自带这两项，前端不必二次查询；历史消息（`GET /api/candidates/:id/messages` 与 `sync` 回执）同样预加载了 `sender.department`，故归档回放与实时聊天显示一致（`domain/messages.ts#senderDepartmentLabel`）。
 > 捡漏类事件：`leftover_bid`（出价变更，载荷 `{CandidateID, DepartmentID}`，**不含金额**）、`leftover_resolved`（结算，载荷 `{CandidateID, DepartmentID, Amount}`）——均全局扇出。
 >
 > 事件类型：`candidate_signed_in`（全局）、`candidate_assigned`、`room_phase_changed`、`message_appended`、`member_joined/left`（以上带 room_id）、`candidate_created/updated/deleted` 与 `room_created/deleted/renamed`（全局，载荷 `{CandidateID}` / `{RoomID}`）。

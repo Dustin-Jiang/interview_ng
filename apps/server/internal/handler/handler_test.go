@@ -1316,3 +1316,97 @@ func TestCandidateCheckedInAtJSON(t *testing.T) {
 		t.Fatalf("重置回未签到应清空: %v", got["checked_in_at"])
 	}
 }
+// TestMessageSenderDepartment 消息头部的部门头衔（房间实时聊天与归档回放共用同一份数据）：
+// 实时 message_appended 事件带 SenderDepartment，历史消息带 sender.department.name。
+func TestMessageSenderDepartment(t *testing.T) {
+	r := newTestApp(t)
+	token := adminToken(t, r)
+
+	// 部门 + 归属该部门的面试官（rooms.view / rooms.chat）
+	_, out := doJSON(t, r, "POST", "/api/departments", `{"name":"技术部","description":""}`, token)
+	deptID := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"chat-only","description":"","permissions":["rooms.view","rooms.chat"]}`, token)
+	roleID := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/users",
+		`{"username":"dept-chat","name":"部门面试官","password":"pass","role_ids":[`+itoa(roleID)+`],"department_id":`+itoa(deptID)+`}`,
+		token)
+	userID := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"dept-chat","password":"pass"}`, "")
+	userToken := out["token"].(string)
+
+	// 候选人签到 → 建房 → 拉取 → 该面试官加入房间
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024099","name":"部门测试候选人"}`, token)
+	candID := int(out["id"].(float64))
+	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/check-in", "", token)
+	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
+	roomID := int(out["id"].(float64))
+	doJSON(t, r, "PUT", "/api/rooms/"+itoa(roomID)+"/candidate", `{"candidate_id":`+itoa(candID)+`}`, token)
+	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/members", `{"user_id":`+itoa(userID)+`}`, token)
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/rooms/" + itoa(roomID)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.WriteJSON(map[string]any{"op": "auth", "req_id": "a1", "data": map[string]string{"token": userToken}}); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+	authed := false
+	for i := 0; i < 10 && !authed; i++ {
+		var env map[string]any
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("read auth env: %v", err)
+		}
+		if env["type"] == "reply" && env["req_id"] == "a1" {
+			authed = true
+		}
+	}
+	if !authed {
+		t.Fatalf("auth reply not received")
+	}
+
+	// 发一条消息：实时事件必须带发送者姓名与部门头衔（前端消息头直接显示，不必二次查询）
+	if err := conn.WriteJSON(map[string]any{"op": "send_msg", "req_id": "m1", "data": map[string]any{"content": "部门头衔测试"}}); err != nil {
+		t.Fatalf("write send_msg: %v", err)
+	}
+	gotEvent := false
+	for i := 0; i < 10 && !gotEvent; i++ {
+		var env map[string]any
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("read message env: %v", err)
+		}
+		if env["type"] != "message_appended" {
+			continue
+		}
+		// 帧结构：{type, data: chanEvent{type, room_id, seq, msg_id, data: 载荷}}（客户端即按 env.data 取 chanEvent）
+		ev, _ := env["data"].(map[string]any)
+		d, _ := ev["data"].(map[string]any)
+		if d["SenderName"] != "部门面试官" || d["SenderDepartment"] != "技术部" {
+			t.Fatalf("实时事件应带姓名与部门头衔: %v", ev)
+		}
+		gotEvent = true
+	}
+	if !gotEvent {
+		t.Fatalf("message_appended 事件未收到")
+	}
+
+	// 历史消息（归档回放）应带 sender.department.name
+	code, hist := doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("messages: %d", code)
+	}
+	items, _ := hist["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("历史消息数量: %v", hist)
+	}
+	msg, _ := items[0].(map[string]any)
+	sender, _ := msg["sender"].(map[string]any)
+	dept, _ := sender["department"].(map[string]any)
+	if sender["name"] != "部门面试官" || dept["name"] != "技术部" {
+		t.Fatalf("历史消息应带 sender.department.name: %v", msg)
+	}
+}
