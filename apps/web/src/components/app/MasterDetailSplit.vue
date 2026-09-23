@@ -6,7 +6,7 @@
   auto 宽度会被名册里的超宽内容（长房间名等）撑到整页横向滚动。
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ArrowLeft } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
@@ -23,6 +23,11 @@ const props = withDefaults(
     backAriaLabel: string
     /** 名册栏宽度档（lg 断点以上）。 */
     asideWidth?: string
+    /**
+     * 详情内容标识：变化时详情列回到顶部。
+     * 名册页切换条目（↑/↓ / 点击）时防止右侧停留在上一条的滚动位置。
+     */
+    detailKey?: string | number | null
   }>(),
   { asideWidth: 'lg:w-80' },
 )
@@ -31,6 +36,14 @@ defineEmits<{ back: [] }>()
 
 const asideClass = computed(() => (props.showDetail ? 'hidden lg:flex' : 'flex'))
 const detailClass = computed(() => (props.showDetail ? 'flex' : 'hidden lg:flex'))
+
+/** 详情滚动容器（唯一纵向滚动区，见模板）。 */
+const detailScroll = ref<HTMLElement | null>(null)
+
+watch(
+  () => props.detailKey,
+  () => detailScroll.value?.scrollTo({ top: 0 }),
+)
 </script>
 
 <template>
@@ -55,7 +68,7 @@ const detailClass = computed(() => (props.showDetail ? 'flex' : 'hidden lg:flex'
         </Button>
       </div>
 
-      <div class="min-h-0 flex-1 overflow-y-auto">
+      <div ref="detailScroll" class="min-h-0 flex-1 overflow-y-auto">
         <div class="mx-auto max-w-3xl space-y-6 px-4 py-6">
           <slot name="detail" />
         </div>

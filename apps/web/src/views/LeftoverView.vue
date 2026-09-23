@@ -172,6 +172,7 @@ function searchQuery(): Record<string, string> {
 <template>
   <MasterDetailSplit
     :show-detail="showDetail"
+    :detail-key="selectedId"
     aside-label="捡漏候选人名册"
     detail-label="捡漏详情"
     back-aria-label="返回候选人列表"
