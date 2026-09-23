@@ -3,7 +3,7 @@
   收编「候选人查看」与「捡漏竞拍」两侧逐字节相同的名册实现：
   整行可点；键盘只有一个 Tab 停靠点（选中项，roving tabindex），列表内切换候选人走全局 ←/→
   （`useRosterSelection`）。**不做 ↑/↓ 列表导航**——方向键留给页面控件（如捡漏页的报价步进）。
-  徽章与元信息差异由 #badges / #meta 插槽交由调用方渲染。
+  徽章差异由 #badges 插槽交由调用方渲染（名册行只显示姓名 / 状态徽章 / 简介，不显示房间名）。
 -->
 <script setup lang="ts" generic="T extends { id: number; name: string; profile?: string | null }">
 import { nextTick, ref, watch, type Component } from 'vue'
@@ -126,11 +126,7 @@ watch(
             <slot name="badges" :item="c" />
           </span>
         </span>
-        <span class="mt-0.5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span class="min-w-0 flex-1 truncate">{{ c.profile || '无简介' }}</span>
-          <!-- 元信息插槽：房间号等 -->
-          <slot name="meta" :item="c" />
-        </span>
+        <span class="mt-0.5 block truncate text-xs text-muted-foreground">{{ c.profile || '无简介' }}</span>
       </span>
     </button>
   </div>

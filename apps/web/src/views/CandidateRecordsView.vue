@@ -302,12 +302,6 @@ function onPreferencesSaved(): void {
             {{ STATUS_PRESENTATION[item.status].label }}
           </Badge>
         </template>
-        <template #meta="{ item }">
-          <!-- 房间名最长 64 字符：限宽 + 截断，避免名册行被撑宽 -->
-          <span v-if="item.room_id" class="min-w-0 max-w-[45%] shrink-0 truncate">
-            {{ roomLabelOf(item.room_id) }}
-          </span>
-        </template>
       </RosterList>
     </template>
 
