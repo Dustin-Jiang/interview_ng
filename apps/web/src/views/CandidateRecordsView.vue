@@ -41,7 +41,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { segmentedItemVariants } from '@/components/ui/tokens'
 import CandidateDetailHeader from '@/components/app/CandidateDetailHeader.vue'
 import CandidatePreferenceDialog from '@/components/app/CandidatePreferenceDialog.vue'
-import CandidateStatusSelect from '@/components/app/CandidateStatusSelect.vue'
+import CandidateStatusRadio from '@/components/app/CandidateStatusRadio.vue'
 import EmptyState from '@/components/app/EmptyState.vue'
 import ErrorAlert from '@/components/app/ErrorAlert.vue'
 import ListSkeleton from '@/components/app/ListSkeleton.vue'
@@ -293,7 +293,7 @@ function onPreferencesSaved(): void {
             <PopoverContent class="w-[calc(100vw-2rem)] sm:w-72">
               <div class="space-y-3">
                 <SearchInput v-model="keyword" full placeholder="搜索学号 / 姓名 / 简介…" />
-                <CandidateStatusSelect v-model="statusFilter" allow-all />
+                <CandidateStatusRadio v-model="statusFilter" allow-all />
                 <Button
                   v-if="hasFilter"
                   variant="ghost"
