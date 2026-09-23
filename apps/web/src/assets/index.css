@@ -86,6 +86,54 @@
   }
 }
 
+/**
+ * 动效令牌（全站唯一动效来源，语义同 transitions.dev 的 Motion tokens）：
+ * 时长 / 缓动 / 位移 / 缩放 / 模糊五档，组件一律引用变量，**不要再写死 ms 或 cubic-bezier**。
+ * 与颜色令牌不同：动效不随深浅色变化，故只在 `:root` 定义一份（不复制进 `.dark`）。
+ * 选档按**用途**而不是就近取数：弹层/弹窗开关、面板、文字换位、悬停各有对应档位；
+ * 开关不对等——开 250ms（--duration-fast）、关 150ms（--duration-quick），关闭要更快地让开视线。
+ * 全局 `prefers-reduced-motion` 收敛（见文件末）会自动覆盖这些变量驱动的动画，无需逐处处理。
+ * 用法（Tailwind）：写法是**任意属性** `[animation-duration:var(--duration-fast)]` /
+ * `[transition-duration:var(--duration-quick)]` / `[animation-timing-function:var(--ease-smooth-out)]`
+ * —— 本项目装了 tailwindcss-animate，它注册的 `duration-*`/`ease-*` 不接受任意值
+ * （`duration-[…]`、`ease-[…]` 实测生成 0 条规则，写了等于没写）；缩放档位仍用插件的
+ * `zoom-in-[0.97]` / `zoom-out-[0.99]`（这个任意值正常生成）。
+ */
+@layer base {
+  :root {
+    /* 时长 */
+    --duration-stagger: 40ms; /* 列表逐项错峰的一段 */
+    --duration-micro: 80ms; /* 提示意图延迟、抖动的一段 */
+    --duration-quick: 150ms; /* 弹层/弹窗关闭、文字换位、提示出现 */
+    --duration-fast: 250ms; /* 图标/文字换位、弹层/弹窗打开、页签滑动、页面转场 */
+    --duration-medium: 350ms; /* 面板关闭、toast 关闭 */
+    --duration-slow: 400ms; /* 面板打开、骨架内容浮现、输入清空 */
+    --duration-very-slow: 500ms; /* 强调时刻、徽标出现、文本揭示 */
+    /* 缓动 */
+    --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1); /* 弹层/弹窗/面板开关、页面转场、位移变化（默认） */
+    --ease-in-out: ease-in-out; /* 图标/文字换位、文本揭示、骨架浮现 */
+    --ease-out: ease-out; /* 提示开关 */
+    --ease-linear: linear; /* 微光、骨架呼吸、旋转指示 */
+    --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1); /* 徽标弹出 */
+    --ease-bounce-strong: cubic-bezier(0.34, 3.85, 0.64, 1); /* 悬停回落的弹性（只用于出场） */
+    /* 位移（动效起始位置，落位为 0；超过 ~40px 只适合整面板/抽屉） */
+    --distance-micro: 4px; /* 文字换位 */
+    --distance-small: 6px; /* 抖动（小段） */
+    --distance-base: 8px; /* 徽标斜向揭示、页面转场、抖动（大段） */
+    --distance-medium: 12px; /* 文本揭示 */
+    --distance-large: 30px; /* 成功对勾出现 */
+    /* 缩放（弹层动效的起始比例，落位为 1；小于 ~0.9 会变成「变焦」） */
+    --scale-large: 0.96; /* 弹窗开/关 */
+    --scale-medium: 0.97; /* 下拉/弹层打开 */
+    --scale-small: 0.98; /* 提示出现 */
+    --scale-tiny: 0.99; /* 下拉/弹层关闭 */
+    /* 模糊（起始模糊，落位为 0） */
+    --blur-small: 2px; /* 面板揭示、图标/文字换位、骨架浮现 */
+    --blur-medium: 3px; /* 页面转场、文本揭示 */
+    --blur-large: 8px; /* 成功对勾打开 */
+  }
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -125,6 +173,13 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  /* 例外：旋转进度指示（Spinner）不是装饰性动效——冻住它会被误读成「卡死」，
+     故保留旋转。它是小面积、无位移的循环动画，不会引发前庭不适。 */
+  .animate-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
   }
 }
 

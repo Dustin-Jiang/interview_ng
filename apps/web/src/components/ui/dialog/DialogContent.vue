@@ -16,6 +16,12 @@ import { cn } from '@/lib/utils'
  * sm=384px（确认/单字段表单）、md=448px（常规表单）、lg=512px（宽表单）。
  * 显式 class 仍可覆盖（twMerge 后写优先）。
  */
+/** 开关动效：走动效令牌（`assets/index.css`）——开 --duration-fast(250ms)、关 --duration-quick(150ms)；
+ * 起始缩放 --scale-large(0.96)；缓动 --ease-smooth-out。原来的 `duration-200` 是**无效的**：核心 `duration-*` 只写
+ * `transition-duration`，而不驱动 `animate-in/out` 的 `animation-duration`（实测动画一直是插件默认 150ms、
+ * 缓动是 CSS 初始 `ease`），故改用任意属性 `[animation-duration:var(--…)]` 明确指定。
+ * 位移保留 shadcn 的 `slide-*-top-[48%]`：它与居中用的 `-translate-y-1/2`(=-50%) 几乎抵消，实测位移只有
+ * 面板高的 ~2%（68px 面板 ≈ 1px），不需要再改小。 */
 const sizeClass = {
   sm: 'sm:max-w-sm',
   md: 'sm:max-w-md',
@@ -40,13 +46,13 @@ const forwarded = useForwardPropsEmits(delegated, emits)
 <template>
   <DialogPortal>
     <DialogOverlay
-      class="fixed inset-0 z-50 bg-overlay data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+      class="fixed inset-0 z-50 bg-overlay [animation-timing-function:var(--ease-smooth-out)] data-[state=closed]:[animation-duration:var(--duration-quick)] data-[state=open]:[animation-duration:var(--duration-fast)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
     />
     <DialogContent
       v-bind="forwarded"
       :class="
         cn(
-          'fixed left-1/2 top-1/2 z-50 grid max-h-[calc(100dvh-1.5rem)] w-[calc(100%-1.5rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto overscroll-contain rounded-lg border bg-background p-6 duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]',
+          'fixed left-1/2 top-1/2 z-50 grid max-h-[calc(100dvh-1.5rem)] w-[calc(100%-1.5rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto overscroll-contain rounded-lg border bg-background p-6 [animation-timing-function:var(--ease-smooth-out)] data-[state=closed]:[animation-duration:var(--duration-quick)] data-[state=open]:[animation-duration:var(--duration-fast)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-[0.96] data-[state=open]:zoom-in-[0.96] data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]',
           sizeClass[props.size ?? 'md'],
           props.class,
         )
