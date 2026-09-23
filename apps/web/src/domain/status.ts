@@ -21,6 +21,15 @@ export function roomPhaseOf(room: Room): CandidateStatus | null {
 }
 
 /**
+ * 是否处于「面试进行中」（已分配 / 面试中）——房间绑定与消息通道只在此期间有意义。
+ * 面试结档（已完成及其后的待录取 / 已录取）时后端解绑房间：房间快照应清空候选人，
+ * 面试记录转为只读归档（与后端 `model.CandidateStatus.Interviewing` 同一判据）。
+ */
+export function isInterviewing(status: CandidateStatus | null): boolean {
+  return status === 'ASSIGNED' || status === 'IN_PROGRESS'
+}
+
+/**
  * 不可变地更新房间快照中的候选人状态，返回新 Room（JSON 克隆，不修改入参）。
  */
 export function phaseRoom(room: Room, status: CandidateStatus): Room {
@@ -33,7 +42,7 @@ export function phaseRoom(room: Room, status: CandidateStatus): Room {
 
 /**
  * 不可变地清空房间候选人（房间转空闲），返回新 Room（不修改入参）。
- * 用于候选人完成（COMPLETED）后的房间清空事件：后端已解绑候选人与 room_id，
+ * 用于面试结档（已完成 / 待录取 / 已录取）后的房间清空事件：后端已解绑候选人与 room_id，
  * 本地快照同步移除 candidate/candidate_id。
  */
 export function clearRoomCandidate(room: Room): Room {

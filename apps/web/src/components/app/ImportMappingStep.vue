@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Spinner } from '@/components/ui/spinner'
 import { CANDIDATE_IMPORT_FIELDS, type CandidateImportFieldKey, type CandidateImportMapping, type ImportOutcome, type ImportSheet } from '@/domain/import'
+import { copyText } from '@/lib/clipboard'
 import { toastError } from '@/lib/toast'
 
 const props = defineProps<{
@@ -33,12 +34,10 @@ const emit = defineEmits<{
 /** 复制列名的表达式写法（非 ASCII 起首的标识符必须加引号）。 */
 async function copyColumn(header: string): Promise<void> {
   const quoted = `"${header}"`
-  try {
-    await navigator.clipboard.writeText(quoted)
-    toast.success(`已复制 ${quoted}`)
-  } catch (e) {
-    toastError(e, '复制失败，请手动输入')
-  }
+  // 走 lib/clipboard：http 部署下 navigator.clipboard 不可用，需要 execCommand 兜底
+  const ok = await copyText(quoted)
+  if (ok) toast.success(`已复制 ${quoted}`)
+  else toastError(null, '复制失败，请手动输入')
 }
 </script>
 

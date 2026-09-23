@@ -180,6 +180,14 @@ export interface RoomMember {
   user?: User
 }
 
+/** 一条记录上的一个表情回复：谁回的（含展示名/部门）+ 哪个表情。 */
+export interface MessageReaction {
+  user_id: number
+  emoji: string
+  /** 回复人资料（后端预加载；用户已删时缺省）。计数与「我回没回」仍由前端聚合。 */
+  user?: User
+}
+
 export interface Message {
   id: number
   candidate_id: number
@@ -187,6 +195,8 @@ export interface Message {
   sender?: User
   content: string
   created_at: string
+  /** 表情回复（后端预加载；旧客户端可忽略）。 */
+  reactions?: MessageReaction[]
 }
 
 export interface Room {

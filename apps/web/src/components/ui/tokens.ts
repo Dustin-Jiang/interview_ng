@@ -96,9 +96,22 @@ export const chatBubbleVariants = cva(
         own: 'rounded-br-md bg-primary text-primary-foreground',
         other: 'rounded-bl-md bg-muted',
       },
+      /**
+       * 同一位发送者的连续消息（气泡组）：上方还有同组气泡时收紧「自己这一侧」的上圆角，
+       * 让堆叠的气泡连成一片（与 shadcn `BubbleGroup` 同一手法）。
+       */
+      grouped: {
+        true: '',
+        false: '',
+      },
     },
+    compoundVariants: [
+      { grouped: true, side: 'own', class: 'rounded-tr-md' },
+      { grouped: true, side: 'other', class: 'rounded-tl-md' },
+    ],
     defaultVariants: {
       side: 'other',
+      grouped: false,
     },
   },
 )

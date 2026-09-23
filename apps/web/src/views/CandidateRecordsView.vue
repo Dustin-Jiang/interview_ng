@@ -3,7 +3,8 @@
   左侧：候选人名册（搜索 + 状态筛选 + 键盘可达的 listbox）；右侧：选中候选人的详细资料与面试过程记录。
   移动端为「列表 ↔ 详情」两段式导航（选中候选人后进入详情，可返回列表）；桌面端左右分栏。
   筛选条件与选中条目分别同步到 URL query（`?q=`/`?status=`）与路径参数（`/candidates/:candidateId`，可深链 / 分享）；
-  记录经 REST GET /api/candidates/:id/messages 拉取。
+  记录经 REST GET /api/candidates/:id/messages 拉取，并可在本页补充（POST 同一路径，需 rooms.chat）——
+  归档写入不依赖房间与在场成员，面试结档后照样能补记录。
 
   组装层：布局与名册交给 MasterDetailSplit / RosterToolbar / RosterList / RosterPager，
   数据与交互交给 useCandidatePool / useRosterSelection / useRosterHotkeys / useCandidateMessages / useAdmissions。
@@ -31,6 +32,7 @@ import {
   type CandidateStatus,
 } from '@/models'
 import { formatDateTime } from '@/lib/format'
+import { toastError } from '@/lib/toast'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -44,6 +46,7 @@ import EmptyState from '@/components/app/EmptyState.vue'
 import ErrorAlert from '@/components/app/ErrorAlert.vue'
 import ListSkeleton from '@/components/app/ListSkeleton.vue'
 import MasterDetailSplit from '@/components/app/MasterDetailSplit.vue'
+import MessageComposer from '@/components/app/MessageComposer.vue'
 import MessageTranscript from '@/components/app/MessageTranscript.vue'
 import RefreshButton from '@/components/app/RefreshButton.vue'
 import RosterList from '@/components/app/RosterList.vue'
@@ -160,9 +163,30 @@ useRosterHotkeys({
 })
 
 // ---- 面试过程记录 ----
-const { messages, loading: msgsLoading, error: msgsError, load: loadMessages, prefetch: prefetchMessages } = useCandidateMessages()
+const { messages, loading: msgsLoading, error: msgsError, sending: msgsSending, load: loadMessages, prefetch: prefetchMessages, send: sendMessage } = useCandidateMessages()
+
+/**
+ * 补充记录（归档写入）：面试结档、房间解绑之后，记录仍可在本页补齐，故入口只按权限收口
+ * （与房间聊天同一枚 `rooms.chat`），不看候选人档位。
+ */
+const canCompose = computed(() => hasPermission(PERMISSIONS.ROOMS_CHAT))
+const draft = ref('')
+
+async function submitMessage(): Promise<void> {
+  const id = selectedId.value
+  const text = draft.value.trim()
+  if (!id || !text || msgsSending.value) return
+  try {
+    await sendMessage(id, text)
+    draft.value = ''
+  } catch (e) {
+    toastError(e)
+  }
+}
 
 watch(selectedId, (id) => {
+  // 切人即清空草稿：补充的记录只属于当前选中的候选人，避免误写到下一位身上。
+  draft.value = ''
   if (!id) return
   void loadMessages(id)
   // 预取相邻候选人记录：↑/↓ 连续浏览几乎全程命中缓存，切换零等待。
@@ -187,7 +211,15 @@ const BOARD_ROSTER_EVENTS = [
 ]
 useBoardRefresh(BOARD_ROSTER_EVENTS, () => void load())
 useBoardChannel().subscribe((ev) => {
-  if (ev.type !== 'message_appended') return
+  // 归档的任何变动（新增 / 编辑 / 撤回 / 表情回复）都以重拉收口：服务端是唯一权威。
+  if (
+    ev.type !== 'message_appended' &&
+    ev.type !== 'message_updated' &&
+    ev.type !== 'message_deleted' &&
+    ev.type !== 'message_reactions_changed'
+  ) {
+    return
+  }
   const cid = (ev.data as { CandidateID?: number } | undefined)?.CandidateID
   if (cid != null && cid === selectedId.value) void loadMessages(cid)
 })
@@ -450,7 +482,18 @@ function onPreferencesSaved(): void {
             <p v-else-if="messages.length === 0" class="text-sm text-muted-foreground">
               暂无面试记录
             </p>
-            <MessageTranscript v-else :messages="messages" />
+            <MessageTranscript v-else :messages="messages" @changed="reloadMessages" />
+
+            <!-- 补充记录：归档写入（面试结档、房间解绑后仍可补），权限与房间聊天一致 -->
+            <div v-if="canCompose" class="mt-4 border-t pt-3">
+              <MessageComposer
+                v-model="draft"
+                :sending="msgsSending"
+                placeholder="补充一条面试记录，Enter 发送…"
+                label="补充面试记录"
+                @send="submitMessage"
+              />
+            </div>
           </CardContent>
         </Card>
 

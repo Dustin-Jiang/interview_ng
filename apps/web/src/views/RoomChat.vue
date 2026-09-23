@@ -1,24 +1,21 @@
 <script setup lang="ts">
 import { computed, nextTick, onScopeDispose, ref, watch } from 'vue'
-import { ArrowLeft, MessageSquare, Send, Timer, UserRound } from 'lucide-vue-next'
+import { ArrowDown, ArrowLeft, MessageSquare, Timer, UserRound } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 
 import { useRoomChat } from '@/composables/useRoomChat'
-import { nextPhaseOf } from '@/domain/status'
+import { nextPhaseOf, isInterviewing } from '@/domain/status'
 import { roomLabel } from '@/domain/room'
-import { senderLabel, senderDepartmentLabel } from '@/domain/messages'
 import type { CandidateStatus } from '@/models'
 import { formatDateTime } from '@/lib/format'
 import { toastError } from '@/lib/toast'
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
-import { chatBubbleVariants } from '@/components/ui/tokens'
 import EmptyState from '@/components/app/EmptyState.vue'
+import MessageComposer from '@/components/app/MessageComposer.vue'
+import MessageTranscript from '@/components/app/MessageTranscript.vue'
 import RoomSidebar from '@/components/app/RoomSidebar.vue'
-import { cn } from '@/lib/utils'
 
 const props = defineProps<{ roomId: number }>()
 const emit = defineEmits<{ back: [] }>()
@@ -32,7 +29,6 @@ const {
   error,
   phase,
   pullPool,
-  currentUserId,
   sendMessage,
   movePhase,
   pullCandidate,
@@ -45,6 +41,19 @@ const draft = ref('')
 const nextPhase = computed<CandidateStatus | null>(() => nextPhaseOf(phase.value))
 
 const hasCandidate = computed(() => !!room.value?.candidate)
+
+/**
+ * 消息通道是否开放：只有「面试进行中」（已分配 / 面试中）的候选人可写记录。
+ * 面试结档（已完成及其后的录取档）时后端解绑房间，这段记录转为只读归档，
+ * 输入区随之禁用（与后端 AppendMessage 同一判据）。
+ */
+const canSend = computed(() => isInterviewing(phase.value))
+
+/** 输入框占位文案：区分「房间空闲」与「面试已结束」两种不可发送的原因。 */
+const inputPlaceholder = computed(() => {
+  if (canSend.value) return '输入面试记录，Enter 发送…'
+  return hasCandidate.value ? '面试已结束，面试记录只读' : '等待候选人进房后可发送消息'
+})
 
 // ---- 阶段计时器：仅在「面试中」计时，起点 = 切到面试中的那一刻 ----
 const showTimer = computed(() => phase.value === 'IN_PROGRESS')
@@ -113,6 +122,8 @@ function send() {
   if (!text) return
   sendMessage(text)
   draft.value = ''
+  // 自己发完就跳到最新：上翻读历史时发送，不该停在原处看不见自己刚写的那条。
+  void scrollToBottom()
 }
 
 async function advance() {
@@ -227,59 +238,50 @@ watch(connecting, (v, prev) => {
            min-h-0 必须保留：软键盘弹出时 dvh 收缩，优先压缩消息区，输入区不挤出视口。 -->
       <div class="flex min-h-0 min-w-0 flex-1 flex-col p-2 md:p-4">
         <div class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-background">
-        <!-- 消息滚动区：role=log + aria-live 便于读屏播报新消息 -->
-        <div
-          ref="scrollBox"
-          class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
-          role="log"
-          aria-live="polite"
-          @scroll.passive="onScroll"
-        >
-          <!-- 空房/无消息空态（bare：直接置于聊天滚动区，无卡片包裹） -->
-          <EmptyState v-if="!hasCandidate && !connecting" bare :icon="UserRound" class="py-12">
-            房间空闲，拉取候选人后开始面试
-          </EmptyState>
-          <EmptyState v-else-if="!messages.length && !connecting" bare :icon="MessageSquare" class="py-12">
-            暂无消息，发送第一条面试记录吧
-          </EmptyState>
-
+        <!-- 消息区：滚动容器（role=log + aria-live 便于读屏播报新消息）+ 浮在其上的「回到最新」。
+             浮标刻意放在 live region 之外：读屏不该把「回到最新」当新消息播报。 -->
+        <div class="relative flex min-h-0 flex-1 flex-col">
           <div
-            v-for="m in messages"
-            :key="m.id"
-            class="flex min-w-0 max-w-full flex-col gap-1"
-            :class="m.sender_id === currentUserId ? 'items-end' : 'items-start'"
+            ref="scrollBox"
+            class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
+            role="log"
+            aria-live="polite"
+            @scroll.passive="onScroll"
           >
-            <!-- 消息头：姓名 + 部门头衔 + 时间（窄屏允许换行，长部门名不挤走时间） -->
-            <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 px-1 text-xs text-muted-foreground">
-              <span class="font-medium">{{ senderLabel(m.sender_id, currentUserId, m.sender?.name || m.sender?.username) }}</span>
-              <Badge
-                v-if="senderDepartmentLabel(m)"
-                variant="outline"
-                class="px-1.5 py-0 font-normal"
-              >
-                {{ senderDepartmentLabel(m) }}
-              </Badge>
-              <time>{{ formatDateTime(m.created_at) }}</time>
-            </div>
-            <div :class="cn(chatBubbleVariants({ side: m.sender_id === currentUserId ? 'own' : 'other' }))">
-              {{ m.content }}
-            </div>
+            <!-- 空房/无消息空态（bare：直接置于聊天滚动区，无卡片包裹） -->
+            <EmptyState v-if="!hasCandidate && !connecting" bare :icon="UserRound" class="py-12">
+              房间空闲，拉取候选人后开始面试
+            </EmptyState>
+            <EmptyState v-else-if="!messages.length && !connecting" bare :icon="MessageSquare" class="py-12">
+              {{ canSend ? '暂无消息，发送第一条面试记录吧' : '面试已结束，这场面试没有留下记录' }}
+            </EmptyState>
+
+            <!-- 消息列表：与归档页共用 MessageTranscript（同一视觉语言 + 同一套编辑/撤回交互） -->
+            <MessageTranscript v-else :messages="messages" @changed="reloadRoom" />
+
+          </div>
+
+          <!-- 上翻读历史时给一个回到最新的浮标（MessageScroller 的 jump-to-latest）：浮在消息区底部，不常驻 -->
+          <div
+            v-if="!atBottom && !connecting && messages.length"
+            class="pointer-events-none absolute inset-x-0 bottom-2 z-10 flex justify-center"
+          >
+            <Button size="sm" variant="secondary" class="pointer-events-auto gap-1 shadow-sm" @click="scrollToBottom">
+              <ArrowDown aria-hidden="true" />
+              回到最新
+            </Button>
           </div>
         </div>
 
-        <!-- 输入区：shrink-0 保证软键盘弹出时输入框与发送键始终可见；输入框 min-w-0 允许被压缩不留溢出 -->
-        <div class="flex shrink-0 items-center gap-2 border-t p-3">
-          <Input
+        <!-- 输入区：shrink-0 保证软键盘弹出时输入框与发送键始终可见；输入框 min-w-0 允许被压缩不留溢出。
+             输入区与归档页的「补充记录」共用 `MessageComposer`。 -->
+        <div class="shrink-0 border-t p-3">
+          <MessageComposer
             v-model="draft"
-            class="min-w-0"
-            :disabled="!hasCandidate"
-            :placeholder="hasCandidate ? '输入面试记录，Enter 发送…' : '等待候选人进房后可发送消息'"
-            aria-label="消息内容"
-            @keydown.enter.prevent="send"
+            :disabled="!canSend"
+            :placeholder="inputPlaceholder"
+            @send="send"
           />
-          <Button class="shrink-0" size="icon" aria-label="发送消息" :disabled="!draft.trim() || !hasCandidate" @click="send">
-            <Send aria-hidden="true" />
-          </Button>
         </div>
         </div>
       </div>

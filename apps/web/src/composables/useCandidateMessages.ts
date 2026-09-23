@@ -17,16 +17,25 @@ export interface UseCandidateMessages {
   readonly messages: Ref<Message[]>
   readonly loading: Ref<boolean>
   readonly error: Ref<string>
+  /** 归档写入中（发送按钮据此防重复提交）。 */
+  readonly sending: Ref<boolean>
   /** 载入某候选人记录（命中缓存即显，未命中走骨架；后台静默复检）。 */
   load: (candidateId: number) => Promise<void>
   /** 静默预取若干候选人的记录（不触碰展示态；命中/在途自动去重）。 */
   prefetch: (candidateIds: number[]) => void
+  /**
+   * 向归档补充一条消息（候选人任意档位均可，含面试结档后）。
+   * 写入成功后强制重拉该候选人记录：先回放旧内容（不闪骨架）再静默替换为最新。
+   * 失败（无权限 / 内容为空 / 网络）原样抛出，由调用方提示。
+   */
+  send: (candidateId: number, content: string) => Promise<void>
 }
 
 export function useCandidateMessages(): UseCandidateMessages {
   const messages = ref<Message[]>([])
   const loading = ref(false)
   const error = ref('')
+  const sending = ref(false)
   /** 当前展示对应的候选人 id（过期响应只写缓存，不写展示）。 */
   let currentId: number | null = null
 
@@ -87,5 +96,18 @@ export function useCandidateMessages(): UseCandidateMessages {
     }
   }
 
-  return { messages, loading, error, load, prefetch }
+  async function send(candidateId: number, content: string): Promise<void> {
+    sending.value = true
+    try {
+      await candidateApi.appendMessage(candidateId, content)
+      // 归档已写入：丢掉在途请求（它可能是写入前发出的旧快照），再走 load ——
+      // 命中缓存先回放旧内容（不闪骨架），随后静默复检替换为最新。
+      inflight.delete(candidateId)
+      await load(candidateId)
+    } finally {
+      sending.value = false
+    }
+  }
+
+  return { messages, loading, error, sending, load, prefetch, send }
 }

@@ -12,14 +12,18 @@ import { computed, onScopeDispose, ref, toValue, watch, type ComputedRef, type M
 import { candidateApi, getAuthToken, roomApi } from '@/api/http'
 import { WsChannel } from '@/api/ws'
 import type { ChanEvent, ReplyPayload } from '@/api/ws-model'
-import { useAuth } from '@/composables/useAuth'
 import type { CandidateStatus, Message, Room } from '@/models'
-import { phaseRoom, clearRoomCandidate, sortByArrival } from '@/domain/status'
+import { phaseRoom, clearRoomCandidate, isInterviewing, sortByArrival } from '@/domain/status'
 import {
+  addReaction,
   appendMessage,
   lastMessageId,
   mergeMessages,
   messageFromEvent,
+  removeMessage,
+  removeReaction,
+  replaceMessages,
+  updateMessage,
 } from '@/domain/messages'
 
 export interface UseRoomChat {
@@ -32,7 +36,6 @@ export interface UseRoomChat {
   readonly phase: ComputedRef<CandidateStatus | null>
   /** 可拉取候选人池（已签到待分配）。 */
   readonly pullPool: Ref<import('@/models').Candidate[]>
-  readonly currentUserId: ComputedRef<number | null>
   /** 发送一条消息。 */
   sendMessage: (content: string) => void
   /** 推进到某阶段。 */
@@ -43,7 +46,6 @@ export interface UseRoomChat {
 }
 
 export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomChat {
-  const { currentUserId } = useAuth()
   const room = ref<Room | null>(null)
   const messages = ref<Message[]>([])
   const connected = ref(false)
@@ -101,15 +103,63 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     // message_appended → 追加消息（幂等去重）
     const msg = room.value ? messageFromEvent(ev) : null
     if (msg) {
+      // 消息按候选人归属：只有本房候选人的消息并入本会话。
+      // 归档补充（候选人查看页写入、候选人无房间时全局扇出）会送到所有看板连接，
+      // 这里按候选人过滤，避免别人的记录串进本房会话。
+      if (msg.candidate_id !== room.value?.candidate?.id) return
       messages.value = appendMessage(messages.value, msg)
+      return
+    }
+    // message_updated / message_deleted → 就地改/撤（同样的候选人过滤）：
+    // 编辑与撤回在归档与实时两路共用同一批记录，本房会话必须同步。
+    if (ev.type === 'message_updated' || ev.type === 'message_deleted') {
+      const ref = ev.data as { CandidateID?: number; MessageID?: number; Content?: string } | undefined
+      if (ref?.CandidateID != null && ref.CandidateID === room.value?.candidate?.id && ref.MessageID) {
+        messages.value =
+          ev.type === 'message_updated'
+            ? updateMessage(messages.value, ref.MessageID, ref.Content ?? '')
+            : removeMessage(messages.value, ref.MessageID)
+      }
+      return
+    }
+    // message_reactions_changed → 就地加减一条表情回复（载荷与观察者无关，各端自算计数与「我回没回」）
+    if (ev.type === 'message_reactions_changed') {
+      const ref = ev.data as
+        | {
+            CandidateID?: number
+            MessageID?: number
+            Emoji?: string
+            UserID?: number
+            Added?: boolean
+            UserName?: string
+            UserDepartment?: string
+          }
+        | undefined
+      if (
+        ref?.CandidateID != null &&
+        ref.CandidateID === room.value?.candidate?.id &&
+        ref.MessageID &&
+        ref.UserID != null &&
+        ref.Emoji
+      ) {
+        messages.value = ref.Added
+          ? addReaction(messages.value, ref.MessageID, ref.UserID, ref.Emoji, {
+              name: ref.UserName,
+              department: ref.UserDepartment,
+            })
+          : removeReaction(messages.value, ref.MessageID, ref.UserID, ref.Emoji)
+        // 事件没带回复人展示名（旧服务端 / 该行查不到用户）时，正文与表情都还缺一块：
+        // 按 REST 归档快照对齐一次，让「谁回了什么」拿回姓名（否则只剩「面试官 {id}」）。
+        if (ref.Added && !ref.UserName) void resyncTranscript()
+      }
       return
     }
     // room_phase_changed → 不可变更新房间阶段
     if (ev.type === 'room_phase_changed' && room.value) {
       const to = (ev.data as { To?: CandidateStatus | null })?.To
-      if (to === 'COMPLETED') {
-        // 候选人完成：后端已自动清空房间（解绑候选人与 room_id）；
-        // 消息按候选人归档保留，本地清空会话等待下一位候选人。
+      if (to && !isInterviewing(to)) {
+        // 面试结档（已完成 / 待录取 / 已录取）：后端已解绑房间（解绑后为空房，消息只读归档）；
+        // 本地清空候选人，消息随候选人归档、新候选人会话从零开始。
         room.value = clearRoomCandidate(room.value)
         messages.value = []
       } else if (to) {
@@ -162,6 +212,10 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
             messages.value = mergeMessages(messages.value, p.messages)
           }
         })
+        // 增量 sync 只补「新消息」：已存在消息上的改动（编辑后的正文、别人的表情回复）补不回来，
+        // 故重连后再按 REST 归档快照对齐一次——否则断线期间别人回的表情/改的字永远看不到，
+        // 右键菜单里的「谁回了什么」也就少了一块。
+        void resyncTranscript()
       },
       onClose: () => {
         connected.value = false
@@ -216,6 +270,8 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
   // ---- 命令 ----
   function sendMessage(content: string): void {
     if (!room.value || !channel) return
+    // 面试已结档（或房间空闲）：消息通道关闭，本地直接不发（后端同样拒绝，见 AppendMessage）。
+    if (!isInterviewing(phase.value)) return
     const reqId = channel.sendMessage(content)
     expectReply(reqId, (p) => {
       if (!p.ok) error.value = p.error ?? '发送失败'
@@ -237,6 +293,23 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     await roomApi.pullCandidate(r.id, candidateId)
     pullPool.value = pullPool.value.filter((c) => c.id !== candidateId)
     await reloadRoom()
+  }
+
+  /**
+   * 以 REST 归档快照对齐本地消息（重连后调用）：同 id 取权威内容（编辑后的正文、最新表情回复），
+   * 快照拉取期间新到、快照里还没有的消息保留不丢。
+   */
+  async function resyncTranscript(): Promise<void> {
+    const cid = room.value?.candidate?.id
+    if (!cid) return
+    try {
+      const res = await candidateApi.messages(cid)
+      // 期间换了候选人（房间重绑/清空）则丢弃过期快照。
+      if (room.value?.candidate?.id !== cid) return
+      messages.value = replaceMessages(messages.value, res.items)
+    } catch {
+      // 对齐失败不打扰：本地内容仍在展示，下次事件/重连再对齐。
+    }
   }
 
   /** 刷新房间快照（WS sync 拉最新），并同步待分配池。 */
@@ -271,7 +344,6 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     error,
     phase,
     pullPool,
-    currentUserId,
     sendMessage,
     movePhase,
     pullCandidate,

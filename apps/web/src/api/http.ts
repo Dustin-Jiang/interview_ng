@@ -196,9 +196,36 @@ export const candidateApi = {
     return put(`/candidates/${id}/status`, { status })
   },
 
-  /** 候选人面试记录归档（按候选人维度，完成后仍可查；需 rooms.view）。 */
+  /** 候选人面试记录归档（按候选人维度，完成后仍可查；浏览任意登录）。 */
   messages(id: number): Promise<{ items: Message[] }> {
     return request(`/candidates/${id}/messages`)
+  },
+
+  /**
+   * 向候选人面试记录归档补充一条消息（需 rooms.chat，与房间聊天同一权限）。
+   * 不依赖房间与在场成员，故面试结档后仍可补充；返回新记录的 id。
+   */
+  appendMessage(id: number, content: string): Promise<{ id: number }> {
+    return post(`/candidates/${id}/messages`, { content })
+  },
+
+  /** 编辑自己刚发出的记录（2 分钟内、仅发送者本人；服务端复核窗口与归属）。 */
+  updateMessage(id: number, messageId: number, content: string): Promise<{ ok: boolean }> {
+    return patch(`/candidates/${id}/messages/${messageId}`, { content })
+  },
+
+  /** 撤回自己刚发出的记录（2 分钟内、仅发送者本人）。 */
+  removeMessage(id: number, messageId: number): Promise<{ ok: boolean }> {
+    return del(`/candidates/${id}/messages/${messageId}`)
+  },
+
+  /**
+   * 开关一条记录的表情回复（需 rooms.chat；PUT = 加上、DELETE = 撤回，均幂等）。
+   * 表情按允许集提交（后端复核），路径段做 URL 编码。
+   */
+  setReaction(id: number, messageId: number, emoji: string, on: boolean): Promise<{ ok: boolean }> {
+    const path = `/candidates/${id}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`
+    return on ? put(path) : del(path)
   },
 }
 
