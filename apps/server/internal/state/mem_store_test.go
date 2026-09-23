@@ -834,6 +834,91 @@ func TestInterviewStartedAt(t *testing.T) {
 	mustNil("面试已结束")
 }
 
+// TestInterviewCompletedAt 面试结束时刻（interview_completed_at）的落库规则：
+// 进入「已完成」打点；结档后**保留**（重置到录取档、回退到待分配、被重新拉进房间都不清）；
+// 只有**开始下一次面试**（重新进入「面试中」）才作废。名册按面试时间排序依赖它——
+// interview_started_at 离开「面试中」即清空（只表示「此刻是否在面试」），
+// 所以「已结束的候选人什么时候面的」只能由它回答。
+func TestInterviewCompletedAt(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	id := mustCreateCandidate(ctx, st, "结档时刻", "简介")
+
+	completedAt := func() *time.Time {
+		t.Helper()
+		c, err := st.GetCandidate(ctx, id)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		return c.InterviewCompletedAt
+	}
+
+	if got := completedAt(); got != nil {
+		t.Fatalf("新建候选人不应有面试结束时刻: %v", got)
+	}
+
+	// 走一遍完整面试：签到 → 拉房 → 面试中 → 已完成
+	if _, err := st.CheckIn(ctx, id); err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	roomID := mustCreateRoom(ctx, st)
+	if _, _, err := st.JoinRoom(ctx, roomID, 1); err != nil { // 推进阶段要求是房间成员
+		t.Fatalf("join: %v", err)
+	}
+	if _, err := st.PullCandidate(ctx, roomID, id); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("in_progress: %v", err)
+	}
+	if got := completedAt(); got != nil {
+		t.Fatalf("面试中还没有结束时刻: %v", got)
+	}
+	lo := time.Now().Add(-time.Second)
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusCompleted); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	first := completedAt()
+	if first == nil || first.Before(lo) || first.After(time.Now().Add(time.Second)) {
+		t.Fatalf("完成时应打点结束时刻: %v", first)
+	}
+	if c, _ := st.GetCandidate(ctx, id); c.InterviewStartedAt != nil {
+		t.Fatalf("离开面试中应清空开始时刻: %v", c.InterviewStartedAt)
+	}
+
+	// 结档后是事实：重置到录取档 / 回退到待分配 / 被重新拉进房间都不清
+	if _, err := st.ResetCandidateStatus(ctx, id, dsmodel.StatusAdmissionPending); err != nil {
+		t.Fatalf("admission pending: %v", err)
+	}
+	if got := completedAt(); got == nil || !got.Equal(*first) {
+		t.Fatalf("重置到录取档不该清结束时刻: %v", got)
+	}
+	if _, err := st.ResetCandidateStatus(ctx, id, dsmodel.StatusCheckedInPendingAssign); err != nil {
+		t.Fatalf("backward reset: %v", err)
+	}
+	if got := completedAt(); got == nil || !got.Equal(*first) {
+		t.Fatalf("回退到待分配不该清结束时刻: %v", got)
+	}
+	second := mustCreateRoom(ctx, st)
+	if _, _, err := st.JoinRoom(ctx, second, 2); err != nil { // 一用户至多一个活跃房间，故换一位成员
+		t.Fatalf("join 2: %v", err)
+	}
+	if _, err := st.PullCandidate(ctx, second, id); err != nil {
+		t.Fatalf("pull 2: %v", err)
+	}
+	if got := completedAt(); got == nil || !got.Equal(*first) {
+		t.Fatalf("被重新拉进房间（还没开始面试）不该清结束时刻: %v", got)
+	}
+
+	// 开始下一次面试：上一次的结束时刻作废
+	if _, err := st.MovePhase(ctx, second, 2, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("in_progress 2: %v", err)
+	}
+	if got := completedAt(); got != nil {
+		t.Fatalf("开始新一次面试应作废上一次的结束时刻: %v", got)
+	}
+}
+
 // 出价允许 0：0 是合法出价（落库可见）；重复提交 0 走更新而不是重复插入（唯一索引不炸）；
 // 0 ↔ 正数 之间来回改价都只有一条记录；负数仍被拒绝。
 func TestZeroBidAllowed(t *testing.T) {

@@ -75,6 +75,44 @@ function arrivalAt(item: { checked_in_at?: string | null }): number {
 }
 
 /**
+ * 时刻（毫秒）；缺失或非法 → Infinity（未知排最后）。与 `arrivalAt` 同一手法。
+ */
+function momentAt(value: string | null | undefined): number {
+  const t = value ? new Date(value).getTime() : NaN
+  return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY
+}
+
+/**
+ * 名册排序（候选人查看 / 捡漏页左栏共用，由 `RosterList` 统一应用）：
+ *  1. **面试过的在前，按面试时间升序**——「面试时间」取这场面试的时刻：在面试中用开始时刻
+ *     （`interview_started_at`），已结束用结束时刻（`interview_completed_at`，后端结档时打点）；
+ *  2. **没面试过的在后，按添加顺序**（`created_at` 升序，导入/新建即添加顺序）。
+ * 并列时退回 `created_at`、再退回 `id`，保证顺序稳定且不重复。
+ * 为什么不能用 updated_at：任何资料编辑 / 导入都会刷新它（见 `arrivalAt` 的同款理由）。
+ */
+export function sortRoster<
+  T extends {
+    id: number
+    created_at: string
+    interview_started_at?: string | null
+    interview_completed_at?: string | null
+  },
+>(items: readonly T[]): T[] {
+  /** 这场面试的时刻：在面试中 → 开始时刻；已结束 → 结束时刻；都没有 → Infinity（未面试组）。 */
+  const interviewAt = (c: T): number =>
+    Math.min(momentAt(c.interview_started_at), momentAt(c.interview_completed_at))
+  const addedAt = (c: T): number => momentAt(c.created_at)
+  return items
+    .slice()
+    .sort(
+      (a, b) =>
+        interviewAt(a) - interviewAt(b) ||
+        addedAt(a) - addedAt(b) ||
+        a.id - b.id,
+    )
+}
+
+/**
  * 候场名单排序：过滤「已结束」不上屏，按状态优先级升序（**分档不跨**：正在面试仍在最上），
  * **档内按到达先后**（签到时刻升序）——已签到的各档因此都是「先来的在前」，就是叫号顺序；
  * 未签到的没有签到时刻，退回创建时间升序（原口径）。纯函数：输入不被修改。

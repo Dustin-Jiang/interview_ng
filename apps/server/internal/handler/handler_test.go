@@ -1541,8 +1541,8 @@ func TestMessageSenderDepartment(t *testing.T) {
 	}
 }
 
-// TestInterviewRoomJSONContract 面试房间的 JSON 契约（前端候选人详情据此显示「面试房间」）：
-// 未面试为空；面试结束后带上房间 id 与**当时的名字快照**。
+// TestInterviewRoomJSONContract 面试房间与面试时刻的 JSON 契约（前端候选人详情显示「面试房间」、
+// 名册按面试时间排序都据此）：未面试为空；面试结束后带上房间 id、**当时的名字快照**与结束时刻。
 func TestInterviewRoomJSONContract(t *testing.T) {
 	r := newTestApp(t)
 	token := adminToken(t, r)
@@ -1552,6 +1552,9 @@ func TestInterviewRoomJSONContract(t *testing.T) {
 	_, got := doJSON(t, r, "GET", "/api/candidates/"+itoa(id), "", token)
 	if got["interview_room_id"] != nil || got["interview_room_name"] != "" {
 		t.Fatalf("未面试应为空: %v / %v", got["interview_room_id"], got["interview_room_name"])
+	}
+	if got["interview_completed_at"] != nil {
+		t.Fatalf("未面试不应有结束时刻: %v", got["interview_completed_at"])
 	}
 
 	doJSON(t, r, "PUT", "/api/candidates/"+itoa(id)+"/check-in", "", token)
@@ -1573,6 +1576,10 @@ func TestInterviewRoomJSONContract(t *testing.T) {
 	}
 	if got["interview_room_name"] != "文F404" {
 		t.Fatalf("面试结束应带名字快照: %v", got["interview_room_name"])
+	}
+	// 结束时刻：面试结束时打点（名册「先按面试时间排序」以它为准）
+	if _, ok := got["interview_completed_at"].(string); !ok {
+		t.Fatalf("面试结束应带结束时刻: %v", got["interview_completed_at"])
 	}
 	// 解绑是另一回事：当前 room_id 已清空，但历史记录仍在
 	if got["room_id"] != nil {

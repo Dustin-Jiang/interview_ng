@@ -2082,9 +2082,16 @@ func interviewRoomUpdates(room *dsmodel.Room) map[string]any {
 // 走批量 SQL 的状态更新（syncAdmissionStatuses、捡漏结算）不在「面试中」路径上，无需打点。
 func statusUpdates(to dsmodel.CandidateStatus, now time.Time) map[string]any {
 	updates := map[string]any{"status": to}
-	if to == dsmodel.StatusInProgress {
+	switch to {
+	case dsmodel.StatusInProgress:
+		// 开始（新的一次）面试：打开始时刻，并作废上一次的结束时刻（那场已经翻篇）。
 		updates["interview_started_at"] = now
-	} else {
+		updates["interview_completed_at"] = nil
+	case dsmodel.StatusCompleted:
+		// 面试结束的那一刻：留档结束时刻（与 interview_room_* 同族，结档后仍是事实）。
+		updates["interview_started_at"] = nil
+		updates["interview_completed_at"] = now
+	default:
 		updates["interview_started_at"] = nil
 	}
 	// 签到时刻：只有重置回「未签到」才清空，其余流转（被拉入房间 / 开始面试 / 完成 / 录取）

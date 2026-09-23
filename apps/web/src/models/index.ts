@@ -63,6 +63,8 @@ export interface Candidate {
   status: CandidateStatus
   /** 进入「面试中」的时刻（null = 当前不在面试中）；面试计时以此为准。 */
   interview_started_at: string | null
+  /** 这场面试的结束时刻（null = 还没面完）；开始下一次面试时清空。 */
+  interview_completed_at: string | null
   /** 进入「已签到待分配」的时刻（null = 不在排队中）；房间拉取列表据此先来后到排序。 */
   checked_in_at: string | null
   /** 本次面试所在房间（面试结束时记录；房间被删除后为 null），名字快照见 interview_room_name。 */

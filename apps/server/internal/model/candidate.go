@@ -91,6 +91,12 @@ type Candidate struct {
 	// 也在档内按它排列——所以被拉进房间、开始面试等流转都不清空它。
 	// 不能用 UpdatedAt 代替：导入/编辑资料会刷新它，排队顺序会被打乱。
 	CheckedInAt *time.Time `json:"checked_in_at"`
+	// InterviewCompletedAt 这场面试的结束时刻：进入「面试已结束」时打点，**开始下一次面试**
+	// （重新进入「面试中」）才清空——与 interview_room_* 快照同族，结档后仍保留这次面试的时刻事实。
+	// 与 InterviewStartedAt 的分工：后者只表示「此刻是否在面试中」（离开即清空，前端计时用），
+	// 故「已结束的候选人是什么时候面的」只有这里能回答（名册按面试时间排序即依赖二者：见
+	// 前端 `domain/status.ts#sortRoster`：在面试的用开始时刻、已结束的用结束时刻）。
+	InterviewCompletedAt *time.Time `json:"interview_completed_at"`
 	// InterviewRoomID / InterviewRoomName：**这场面试是在哪间房间做的**，在候选人推进到
 	// 「面试已结束」的那一刻记录——完成即解绑房间（rooms.candidate_id 置空），不留档就再也查不到。
 	// 名字另存快照，房间之后改名或删除仍能回答「当时在哪间」；重复面试（重置后再走一遍）覆盖为最近一场。

@@ -4,15 +4,28 @@
   整行可点；键盘只有一个 Tab 停靠点（选中项，roving tabindex），列表内切换候选人走全局 ←/→
   （`useRosterSelection`）。**不做 ↑/↓ 列表导航**——方向键留给页面控件（如捡漏页的报价步进）。
   徽章差异由 #badges 插槽交由调用方渲染（名册行只显示姓名 / 状态徽章 / 简介，不显示房间名）。
+  **排序由本组件统一应用**（`domain/status.ts#sortRoster`）：面试过的在前按面试时间升序，
+  未面试的在后按添加顺序——调用方只负责筛选，传进来的顺序不再决定展示顺序。
 -->
-<script setup lang="ts" generic="T extends { id: number; name: string; profile?: string | null }">
-import { nextTick, ref, watch, type Component } from 'vue'
+<script setup
+  lang="ts"
+  generic="T extends {
+    id: number
+    name: string
+    profile?: string | null
+    created_at: string
+    interview_started_at?: string | null
+    interview_completed_at?: string | null
+  }"
+>
+import { computed, nextTick, ref, watch, type Component } from 'vue'
 
 import { Avatar, AvatarFallback, avatarVariants } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/app/EmptyState.vue'
 import ErrorAlert from '@/components/app/ErrorAlert.vue'
 import ListSkeleton from '@/components/app/ListSkeleton.vue'
+import { sortRoster } from '@/domain/status'
 import { initialsOf } from '@/lib/format'
 
 const props = withDefaults(
@@ -51,6 +64,12 @@ const emit = defineEmits<{
 const rosterEl = ref<HTMLElement | null>(null)
 
 /**
+ * 展示顺序：面试过的在前（按面试时间升序），未面试的在后（按添加顺序）。
+ * 渲染与「滚入视野」都走这一份，避免两处下标不一致。
+ */
+const ordered = computed(() => sortRoster(props.items))
+
+/**
  * 选中变更（←/→ 切换、深链恢复、外部程序化选中）时把选中项滚入名册视野。
  * block: nearest——仅当项越出可视区才移动（已在视野内不跳动）；只滚动不移动焦点。
  */
@@ -59,7 +78,7 @@ watch(
   (id) => {
     if (id == null) return
     void nextTick(() => {
-      const idx = props.items.findIndex((c) => c.id === id)
+      const idx = ordered.value.findIndex((c) => c.id === id)
       if (idx === -1) return
       const options = rosterEl.value?.querySelectorAll<HTMLElement>('[role="option"]')
       options?.[idx]?.scrollIntoView({ block: 'nearest' })
@@ -93,7 +112,7 @@ watch(
     />
 
     <!-- 空态 -->
-    <EmptyState v-else-if="props.items.length === 0" bare :icon="props.emptyIcon" class="py-10">
+    <EmptyState v-else-if="ordered.length === 0" bare :icon="props.emptyIcon" class="py-10">
       {{ props.emptyText }}
       <template v-if="props.emptyActionLabel" #action>
         <Button variant="outline" size="sm" @click="emit('empty-action')">
@@ -104,7 +123,7 @@ watch(
 
     <!-- 列表项：整行可点；Tab 停靠选中项（roving tabindex），切换走 ←/→ 全局键 -->
     <button
-      v-for="c in props.items"
+      v-for="c in ordered"
       :key="c.id"
       type="button"
       role="option"
