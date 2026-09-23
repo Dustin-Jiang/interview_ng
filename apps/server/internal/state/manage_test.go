@@ -5,6 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"gorm.io/gorm"
 
 	dsmodel "interview_ng/internal/model"
 	"interview_ng/internal/state"
@@ -351,6 +354,383 @@ func TestEmptyRoomRejectsMessage(t *testing.T) {
 	if _, err := st.AppendMessage(ctx, roomID, 1, "hi"); err == nil {
 		t.Fatalf("expected error for empty room message")
 	}
+}
+
+// TestInterviewFinishedClosesRoomChat 面试结档后房间消息通道关闭（回归）：
+// 结档（已完成 / 待录取 / 已录取）的房间一律解绑并留档「在哪间房间面的」，这段记录转为只读归档——
+// 「面试完成后候选人界面仍能继续发消息」即回归。另兜底历史遗留的「已结档却仍绑着房间」的行。
+func TestInterviewFinishedClosesRoomChat(t *testing.T) {
+	ctx := context.Background()
+	st, db := newTestStoreWithDB(t)
+
+	// ---- 1) 房间内推进到 COMPLETED：腾房 + 留档，之后写入被拒 ----
+	first := mustCreateCandidate(ctx, st, "结档甲", "")
+	if _, err := st.CheckIn(ctx, first); err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	roomID := mustCreateRoom(ctx, st)
+	if _, _, err := st.JoinRoom(ctx, roomID, 1); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	if _, err := st.PullCandidate(ctx, roomID, first); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("start interview: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, roomID, 1, "面试中的记录"); err != nil {
+		t.Fatalf("面试中应可写记录: %v", err)
+	}
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusCompleted); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if room, _ := st.GetRoom(ctx, roomID); room.Candidate != nil {
+		t.Fatalf("面试完成后房间应解绑: %+v", room.Candidate)
+	}
+	if _, err := st.AppendMessage(ctx, roomID, 1, "结束后还想发"); err == nil {
+		t.Fatalf("面试完成后不该还能发消息")
+	}
+	if got, _ := st.GetCandidate(ctx, first); got.InterviewRoomID == nil || *got.InterviewRoomID != roomID {
+		t.Fatalf("完成后应留档在哪间房间面的: %+v", got.InterviewRoomID)
+	}
+
+	// ---- 2) 已绑定房间却被重置到录取档：同样解绑并留档（不能停在「录取档却仍占着房间」）----
+	var admittedCand, admittedRoom, admittedUID uint64
+	for i, to := range []dsmodel.CandidateStatus{dsmodel.StatusAdmissionPending, dsmodel.StatusAdmitted} {
+		uid := uint64(i + 2) // 一用户至多一个活跃房间，故每个房间换一位成员
+		cand := mustCreateCandidate(ctx, st, string(to), "")
+		if _, err := st.CheckIn(ctx, cand); err != nil {
+			t.Fatalf("checkin: %v", err)
+		}
+		room := mustCreateRoom(ctx, st)
+		if _, _, err := st.JoinRoom(ctx, room, uid); err != nil {
+			t.Fatalf("join: %v", err)
+		}
+		if _, err := st.PullCandidate(ctx, room, cand); err != nil {
+			t.Fatalf("pull: %v", err)
+		}
+		if _, err := st.ResetCandidateStatus(ctx, cand, to); err != nil {
+			t.Fatalf("reset to %s: %v", to, err)
+		}
+		if r, _ := st.GetRoom(ctx, room); r.Candidate != nil {
+			t.Fatalf("重置到 %s 应解绑房间", to)
+		}
+		if got, _ := st.GetCandidate(ctx, cand); got.InterviewRoomID == nil || *got.InterviewRoomID != room {
+			t.Fatalf("重置到 %s 应留档在哪间房间面的: %+v", to, got.InterviewRoomID)
+		}
+		if to == dsmodel.StatusAdmitted {
+			admittedCand, admittedRoom, admittedUID = cand, room, uid
+		}
+	}
+
+	// ---- 3) 历史遗留（旧版本漏解绑留下的行）：已结档却仍绑着房间，写入按状态兜底拒绝 ----
+	if err := db.Exec("UPDATE rooms SET candidate_id = ? WHERE id = ?", admittedCand, admittedRoom).Error; err != nil {
+		t.Fatalf("rebind legacy row: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, admittedRoom, admittedUID, "遗留行也想发"); !errors.Is(err, state.ErrInterviewFinished) {
+		t.Fatalf("已结档的遗留房间应拒写，want ErrInterviewFinished, got %v", err)
+	}
+}
+
+// TestAppendCandidateMessageArchive 归档补充（候选人查看页的补充入口）：
+// 不要求房间与在场成员——结档后房间已解绑，记录仍可补充；内容去首尾空白后落库。
+// 事件路由：候选人仍在房间内时按该房间扇出（房间页实时可见），否则全局扇出。
+func TestAppendCandidateMessageArchive(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	// 已结档的候选人（房间已解绑）：仍可补充，事件全局扇出
+	done := mustCreateCandidate(ctx, st, "已结档", "")
+	mustCompleteCandidate(ctx, st, done)
+	ev, err := st.AppendCandidateMessage(ctx, done, 7, "  面试结论：通过  ")
+	if err != nil {
+		t.Fatalf("append to finished candidate: %v", err)
+	}
+	if ev.RoomID != 0 {
+		t.Fatalf("结档后无房间，事件应全局扇出: room_id=%d", ev.RoomID)
+	}
+	msgs, err := st.ListMessagesAfter(ctx, done, 0)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("归档应有 1 条补充记录: %v err=%v", msgs, err)
+	}
+	if msgs[0].Content != "面试结论：通过" {
+		t.Fatalf("内容应去首尾空白: %q", msgs[0].Content)
+	}
+
+	// 仍在房间内的候选人：补充同样落归档，事件按该房间扇出（房间页可见）
+	inRoom := mustCreateCandidate(ctx, st, "在房间", "")
+	if _, err := st.CheckIn(ctx, inRoom); err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	roomID := mustCreateRoom(ctx, st)
+	if _, err := st.PullCandidate(ctx, roomID, inRoom); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	ev, err = st.AppendCandidateMessage(ctx, inRoom, 7, "补充一条")
+	if err != nil {
+		t.Fatalf("append for bound candidate: %v", err)
+	}
+	if ev.RoomID != roomID {
+		t.Fatalf("候选人在房间内时事件应按该房间扇出: got %d want %d", ev.RoomID, roomID)
+	}
+
+	// 空白内容 / 不存在的候选人
+	if _, err := st.AppendCandidateMessage(ctx, done, 7, "   "); !errors.Is(err, state.ErrInvalidContent) {
+		t.Fatalf("空白内容应拒写: %v", err)
+	}
+	if _, err := st.AppendCandidateMessage(ctx, 9999, 7, "x"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("不存在的候选人应 404: %v", err)
+	}
+}
+
+// TestEditAndDeleteMessageWindow 编辑/撤回自己的记录：窗口内可改可撤、窗口外拒绝、
+// 他人发送的拒绝；编辑就地覆盖正文，撤回物理删除，事件按候选人所属房间路由。
+func TestEditAndDeleteMessageWindow(t *testing.T) {
+	ctx := context.Background()
+	st, db := newTestStoreWithDB(t)
+
+	cand := mustCreateCandidate(ctx, st, "改记录", "")
+	if _, err := st.CheckIn(ctx, cand); err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	roomID := mustCreateRoom(ctx, st)
+	if _, _, err := st.JoinRoom(ctx, roomID, 1); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	if _, err := st.PullCandidate(ctx, roomID, cand); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	ev, err := st.AppendMessage(ctx, roomID, 1, "原始记录")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	msgID := ev.MsgID
+	before, _ := st.ListMessagesAfter(ctx, cand, 0)
+	if len(before) != 1 {
+		t.Fatalf("发送后归档应有 1 条: %+v", before)
+	}
+	sentAt := before[0].CreatedAt
+
+	// 窗口内编辑：正文被覆盖（去首尾空白），事件回到该消息所属房间
+	uev, err := st.EditMessage(ctx, cand, msgID, 1, "  改过的记录  ")
+	if err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if uev.Type != state.EventMessageUpdated || uev.RoomID != roomID {
+		t.Fatalf("编辑事件类型/路由不符: type=%s room=%d", uev.Type, uev.RoomID)
+	}
+	if ref, ok := uev.Data.(state.MessageRef); !ok || ref.Content != "改过的记录" || ref.MessageID != msgID {
+		t.Fatalf("编辑事件载荷不符: %+v", uev.Data)
+	}
+	msgs, _ := st.ListMessagesAfter(ctx, cand, 0)
+	if len(msgs) != 1 || msgs[0].Content != "改过的记录" {
+		t.Fatalf("编辑应就地覆盖正文: %+v", msgs)
+	}
+	// 编辑不得动创建时刻（窗口口径稳定）与 id
+	if msgs[0].ID != msgID || !msgs[0].CreatedAt.Equal(sentAt) {
+		t.Fatalf("编辑不得改 id/创建时刻: %+v (sentAt=%v)", msgs[0], sentAt)
+	}
+
+	// 别人发送的不能改（发送者 ≠ 操作者）
+	if _, err := st.EditMessage(ctx, cand, msgID, 2, "越权修改"); !errors.Is(err, state.ErrMessageNotOwner) {
+		t.Fatalf("非本人编辑应被拒: %v", err)
+	}
+	// 另一候选人名下的 id 不匹配 → 视为不存在
+	other := mustCreateCandidate(ctx, st, "别人", "")
+	if _, err := st.EditMessage(ctx, other, msgID, 1, "错挂候选人"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("候选人名下的记录才对得上: %v", err)
+	}
+
+	// 窗口外（把创建时刻改到 3 分钟前）：编辑与撤回都拒绝
+	if err := db.Exec("UPDATE messages SET created_at = ? WHERE id = ?", time.Now().Add(-3*time.Minute), msgID).Error; err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	if _, err := st.EditMessage(ctx, cand, msgID, 1, "超时编辑"); !errors.Is(err, state.ErrMessageWindowExpired) {
+		t.Fatalf("超窗口编辑应被拒: %v", err)
+	}
+	if _, err := st.DeleteMessage(ctx, cand, msgID, 1); !errors.Is(err, state.ErrMessageWindowExpired) {
+		t.Fatalf("超窗口撤回应被拒: %v", err)
+	}
+
+	// 窗口内撤回：物理删除，归档不再返回，事件仍在房间维度
+	ev2, err := st.AppendMessage(ctx, roomID, 1, "待撤回")
+	if err != nil {
+		t.Fatalf("send 2: %v", err)
+	}
+	dev, err := st.DeleteMessage(ctx, cand, ev2.MsgID, 1)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if dev.Type != state.EventMessageDeleted || dev.RoomID != roomID {
+		t.Fatalf("撤回事件类型/路由不符: type=%s room=%d", dev.Type, dev.RoomID)
+	}
+	msgs, _ = st.ListMessagesAfter(ctx, cand, 0)
+	for _, m := range msgs {
+		if m.ID == ev2.MsgID {
+			t.Fatalf("撤回应物理删除: %+v", msgs)
+		}
+	}
+	if _, err := st.DeleteMessage(ctx, cand, ev2.MsgID, 1); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("重复撤回应 404: %v", err)
+	}
+
+	// 空白内容不可写入（用窗口内的新消息；上面那条已被改成超时）
+	fresh, err := st.AppendMessage(ctx, roomID, 1, "再写一条")
+	if err != nil {
+		t.Fatalf("send 3: %v", err)
+	}
+	if _, err := st.EditMessage(ctx, cand, fresh.MsgID, 1, "   "); !errors.Is(err, state.ErrInvalidContent) {
+		t.Fatalf("空白内容应被拒: %v", err)
+	}
+}
+
+// TestMessageReactions 表情回复：一人一条记录同一表情唯一（幂等开关）、无变化不广播、
+// 读取时随消息带出「谁 + 哪个表情」、允许集外的表情拒绝、撤回与删除候选人时连带清理。
+func TestMessageReactions(t *testing.T) {
+	ctx := context.Background()
+	st, db := newTestStoreWithDB(t)
+
+	// 三个真实用户：表情要带出回复人的展示名与部门，id 必须是真存在的行。
+	dept, err := st.CreateDepartment(ctx, "研发部", "", 10)
+	if err != nil {
+		t.Fatalf("dept: %v", err)
+	}
+	reactor, err := st.CreateUser(ctx, &dsmodel.User{Username: "reactor", Name: "回表情的人", DepartmentID: &dept, PasswordHash: "x"}, nil)
+	if err != nil {
+		t.Fatalf("user reactor: %v", err)
+	}
+	peer, err := st.CreateUser(ctx, &dsmodel.User{Username: "peer", Name: "同事", PasswordHash: "x"}, nil)
+	if err != nil {
+		t.Fatalf("user peer: %v", err)
+	}
+	owner, err := st.CreateUser(ctx, &dsmodel.User{Username: "owner", Name: "记录人", PasswordHash: "x"}, nil)
+	if err != nil {
+		t.Fatalf("user owner: %v", err)
+	}
+
+	cand := mustCreateCandidate(ctx, st, "表情", "")
+	if _, err := st.CheckIn(ctx, cand); err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	roomID := mustCreateRoom(ctx, st)
+	if _, _, err := st.JoinRoom(ctx, roomID, 1); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	if _, err := st.PullCandidate(ctx, roomID, cand); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	ev, err := st.AppendMessage(ctx, roomID, 1, "待评价的记录")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	msgID := ev.MsgID
+
+	// 加上表情：事件带「谁 + 哪个表情 + 加」，路由到候选人所在房间
+	rev, err := st.SetMessageReaction(ctx, cand, msgID, reactor, "👍", true)
+	if err != nil {
+		t.Fatalf("react: %v", err)
+	}
+	if rev.Type != state.EventMessageReactionsChanged || rev.RoomID != roomID {
+		t.Fatalf("表情事件类型/路由不符: type=%s room=%d", rev.Type, rev.RoomID)
+	}
+	ref, ok := rev.Data.(state.ReactionRef)
+	if !ok || ref.Emoji != "👍" || ref.UserID != reactor || !ref.Added || ref.MessageID != msgID {
+		t.Fatalf("表情事件载荷不符: %+v", rev.Data)
+	}
+	// 事件自带回复人展示名与部门：只靠事件得知的表情，右键菜单也能显示「谁回的」
+	if ref.UserName != "回表情的人" || ref.UserDepartment != "研发部" {
+		t.Fatalf("表情事件应带出回复人标签: %+v", ref)
+	}
+
+	// 幂等：重复加同一表情不再广播（返回 nil 事件）
+	if again, err := st.SetMessageReaction(ctx, cand, msgID, reactor, "👍", true); err != nil || again != nil {
+		t.Fatalf("重复加同一表情应无变化: ev=%v err=%v", again, err)
+	}
+	// 另一人、另一表情
+	// 用「新增进允许集」的表情（💯）：扩展后的集合要真的可写可读
+	if _, err := st.SetMessageReaction(ctx, cand, msgID, peer, "💯", true); err != nil {
+		t.Fatalf("react 2: %v", err)
+	}
+
+	// 读取：消息带出全部表情（谁 + 哪个表情），与观察者无关
+	msgs, err := st.ListMessagesAfter(ctx, cand, 0)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("list: %v err=%v", msgs, err)
+	}
+	got := map[uint64]string{}
+	for _, r := range msgs[0].Reactions {
+		got[r.UserID] = r.Emoji
+	}
+	if len(msgs[0].Reactions) != 2 || got[reactor] != "👍" || got[peer] != "💯" {
+		t.Fatalf("表情应随消息带出: %+v", msgs[0].Reactions)
+	}
+	// 回复人一并带出（右键菜单要显示「谁回的」）：展示名 + 部门，前端不必再查用户表
+	byID := map[uint64]dsmodel.MessageReaction{}
+	for _, r := range msgs[0].Reactions {
+		byID[r.UserID] = r
+	}
+	if a, ok := byID[reactor]; !ok || a.User == nil || a.User.Name != "回表情的人" {
+		t.Fatalf("表情应带出回复人展示名: %+v", a)
+	} else if a.User.Department == nil || a.User.Department.Name != "研发部" {
+		t.Fatalf("回复人应带出部门: %+v", a.User.Department)
+	}
+	if a, ok := byID[peer]; !ok || a.User == nil || a.User.Name != "同事" {
+		t.Fatalf("另一回复人也应带出: %+v", a)
+	}
+
+	// 撤销：幂等，且不误删别人的同一表情
+	if _, err := st.SetMessageReaction(ctx, cand, msgID, reactor, "👍", false); err != nil {
+		t.Fatalf("unreact: %v", err)
+	}
+	if again, err := st.SetMessageReaction(ctx, cand, msgID, reactor, "👍", false); err != nil || again != nil {
+		t.Fatalf("重复撤销应无变化: ev=%v err=%v", again, err)
+	}
+
+	// 允许集之外 / 消息不属于该候选人
+	if _, err := st.SetMessageReaction(ctx, cand, msgID, peer, "🦄", true); !errors.Is(err, state.ErrInvalidReaction) {
+		t.Fatalf("允许集外的表情应被拒: %v", err)
+	}
+	other := mustCreateCandidate(ctx, st, "别人", "")
+	if _, err := st.SetMessageReaction(ctx, other, msgID, peer, "👍", true); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("候选人名下的记录才对得上: %v", err)
+	}
+
+	// 撤回消息：连带删它的表情（不留孤儿行）
+	if _, err := st.SetMessageReaction(ctx, cand, msgID, owner, "✅", true); err != nil {
+		t.Fatalf("react 3: %v", err)
+	}
+	if _, err := st.DeleteMessage(ctx, cand, msgID, 1); err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	if left := reactionRows(db, t, msgID); left != 0 {
+		t.Fatalf("撤回后不该留表情行: %d", left)
+	}
+
+	// 删除候选人：连带删其消息的表情回复
+	cand2 := mustCreateCandidate(ctx, st, "带表情的候选人", "")
+	ev2, err := st.AppendCandidateMessage(ctx, cand2, 1, "另一条记录")
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if _, err := st.SetMessageReaction(ctx, cand2, ev2.MsgID, 1, "👀", true); err != nil {
+		t.Fatalf("react cand2: %v", err)
+	}
+	if _, err := st.DeleteCandidate(ctx, cand2); err != nil {
+		t.Fatalf("delete candidate: %v", err)
+	}
+	if left := reactionRows(db, t, ev2.MsgID); left != 0 {
+		t.Fatalf("删候选人后不该留表情行: %d", left)
+	}
+}
+
+// reactionRows 统计某消息现存的表情行数（测试辅助）。
+func reactionRows(db *gorm.DB, t *testing.T, messageID uint64) int64 {
+	t.Helper()
+	var n int64
+	if err := db.Model(&dsmodel.MessageReaction{}).Where("message_id = ?", messageID).Count(&n).Error; err != nil {
+		t.Fatalf("count reactions: %v", err)
+	}
+	return n
 }
 
 // TestUserRoleLifecycle 用户创建/角色分配/改密版本号递增。

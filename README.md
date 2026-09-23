@@ -56,7 +56,7 @@ interview_ng/
 - **状态来源**：单 director 进程内存为权威，Gorm/Postgres 持久化；`StateStore` 接口化预埋未来切 Redis。
 - **StateStore 语义**：只暴露业务级原子操作，返回不可变变更事件（不暴露内部结构）。
 - **广播解耦**：`StateStore` 只产出事件；`BroadcastManager` 订阅事件按房间扇出；读给瞬时一致快照。
-- **恢复**：消息 `id` 为主续传游标（**按候选人维度**）；事件带 `Seq` 幂等；「先落库成功 → 后广播」。
+- **恢复**：消息 `id` 为主续传游标（**按候选人维度**）；事件带 `Seq` 幂等；「先落库成功 → 后广播」。增量 sync 只能补「新消息」——**已存在消息上的改动（编辑后的正文、别人的表情回复）补不回来**，故房间页重连后还会按 REST 归档快照再对齐一次（同 id 以权威为准，本地新到的保留），否则断线期间别人回的表情/改的字永远看不到。
 - **消息/日志**：全部落库且**按候选人归属**（候选人换房历史随人走）；候选人删除级联删消息；面试官删除后其消息保留（sender 置空）。
 - **房间**：独立于候选人的物理会议室记录（`candidate_id` 可空，可先建房后绑人、重置解绑后房保留）；**无房间状态机**，房间状态 = 候选人状态的查询投影；仅空房可删；不归档。**面试结束即留档房间**：推进到「面试已结束」时把当时绑定的房间写到候选人身上（`interview_room_id` + 名字快照 `interview_room_name`），随后才解绑——房间之后改名或删除也仍能回答「这场面试在哪间做的」，候选人详情页的「**面试房间**」行即此（没面完的候选人不显示该行）。
 - **分配**：候选人被房间内面试官**拉取**（`PUT /api/rooms/:id/candidate`），取代"页面推分配"；并发拉取由状态机原子拒绝。房间侧栏的「拉取候选人」列表 = 当前处于「已签到待分配」的候选人，**按先来后到（`checked_in_at` 升序）排列**——多人排队时先签到的人排在前面，而不是按导入顺序（`id`/`created_at`）。**候场大屏 `/board` 同理**：仍按状态分档（正在面试 > 等待开始 > 等待分配 > 其他），但**档内也按签到先后**排列，所以已签到的各档都读作叫号顺序；未签到的没有签到时刻，退回按创建时间（`domain/status.ts#sortWaitingBoard`）。
@@ -64,6 +64,7 @@ interview_ng/
 - **学号（身份键）**：`student_no` 必填、纯数字（1–64 位，全角数字按半角归一化、首尾空白去除）、唯一（DB 唯一索引兜底），前导零有意义（`00123` ≠ `123`）；新增/编辑/导入三条写入路径同一套校验，单条编辑允许改学号（撞号 → 409「学号已存在」，改号不影响运行态：房间绑定/消息/录取决定/出价均随候选人 id 保留）。**该列为 NOT NULL，故旧库必须重置**（AutoMigrate 无法给已有数据的表加 NOT NULL 列）。
 - **候选人与状态机**：五档状态 `NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED` 为唯一权威；管理端支持"重置到任意档"（向后自动解绑房间、向前须已有房间）。
 - **完成后自动清房**：候选人完成（无论房间内推进到 `COMPLETED`，还是管理端重置到 `COMPLETED`）自动清空房间绑定（`rooms.candidate_id` 置空，绑定唯一权威在房间侧），房间转空闲、成员留守，可立即拉取下一位候选人；消息仍**按候选人归档保留**，新候选人会话从零开始。
+- **面试结档即关闭消息通道**：结档档位不止 `COMPLETED`——`ADMISSION_PENDING`（待录取）/`ADMITTED`（已录取）位于面试完成之后，把**已绑定房间**的候选人重置到这两档同样自动解绑房间（并留档「在哪间房间面的」）。房间消息只写给「面试进行中」（`ASSIGNED`/`IN_PROGRESS`）的候选人：结档后这段记录**只读归档**（空房间与已结档候选人的房间发消息均被拒，`model.CandidateStatus.Interviewing` 为唯一判据），界面上房间输入区同步禁用。**归档本身仍可写**：候选人查看页的「面试记录」卡带补充入口（`POST /api/candidates/:id/messages`，需 `rooms.chat`），结档后照样能补记录——房间通道服务进行中的面试，归档补充不依赖房间与在场成员。
 - **鉴权**：登录 + JWT（7 天，`ver` 吊销计数）；RBAC 角色↔权限（9 枚权限目录），权限判断走内存缓存即时生效；`users.manage` 下可管理用户与角色。
 
 ---
@@ -96,6 +97,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 | `rooms` | id, **name**, candidate_id(可空) | 房间 = 独立物理会议室记录，`name` 为可选别名（空串=未命名，UI 回退「房间 #id」，不要求唯一），`candidate_id` 可空；无状态机、无主持人，"状态"= 候选人状态的查询投影 |
 | `room_members` | room_id, user_id（`idx_room_user` 唯一） | 房间成员，一次一活跃房间 |
 | `messages` | id, candidate_id, sender_id(可空), content | 群聊记录（长存），**按候选人归属**，`id` 即候选人维度续传游标 |
+| `message_reactions` | message_id, user_id, emoji（三者联合唯一）, created_at | 记录上的表情回复：**一人对一条记录的同一表情只能一份**（重复提交幂等）；表情限 `model.ReactionEmojis` 允许集（24 枚，按「态度/评价/关注/其他」分组，前端同序镜像）；撤回消息 / 删除候选人 / 删除用户时显式连带清理 |
 | `system_status` | id=1(单行), phase(interview/admission/leftover/settlement) | 系统状态：当前面试 / 录取 / 捡漏 / 结算阶段，管理端可切换 |
 | `candidate_admissions` | candidate_id + department_id（联合唯一）, status(pending/admitted/withdrawn) | 各部门对候选人的录取决定（候选人无固定部门，按部门分别记） |
 | `bids` | candidate_id + department_id（联合唯一）, amount | 捡漏阶段部门出价（candidate+department 唯一；金额对其他部门保密、事件不带金额，持 `candidates.browse_all` 的管理端跨部门可见） |
@@ -142,11 +144,13 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 {"type":"reply","req_id":"r2","data":{"ok":true,...}}
 ```
 
-> `seq` 全局单调事件序；`msg_id` 为**候选人维度**续传游标——消息按候选人归属，候选人换房后历史随人走。空房间（无候选人）可入房但 `send_msg` 会被拒。
+> `seq` 全局单调事件序；`msg_id` 为**候选人维度**续传游标——消息按候选人归属，候选人换房后历史随人走。空房间（无候选人）可入房但 `send_msg` 会被拒（`not_found`）；面试已结档（`COMPLETED` 及其后的录取档）同样被拒（`interview_finished`，记录只读）。结档后仍要补记录走归档入口 `POST /api/candidates/:id/messages`（不需房间与在场成员；候选人无房间时该事件全局扇出，房间页按候选人过滤，不串档）。
 > `message_appended` 同时带发送者展示名与**部门名**（`SenderName` / `SenderDepartment`，无部门为空串）：消息头部要显示「姓名 + 部门头衔 + 时间」，实时事件自带这两项，前端不必二次查询；历史消息（`GET /api/candidates/:id/messages` 与 `sync` 回执）同样预加载了 `sender.department`，故归档回放与实时聊天显示一致（`domain/messages.ts#senderDepartmentLabel`）。
 > 捡漏类事件：`leftover_bid`（出价变更，载荷 `{CandidateID, DepartmentID}`，**不含金额**）、`leftover_resolved`（结算，载荷 `{CandidateID, DepartmentID, Amount}`）——均全局扇出。
 >
-> 事件类型：`candidate_signed_in`（全局）、`candidate_assigned`、`room_phase_changed`、`message_appended`、`member_joined/left`（以上带 room_id）、`candidate_created/updated/deleted` 与 `room_created/deleted/renamed`（全局，载荷 `{CandidateID}` / `{RoomID}`）。
+> 事件类型：`candidate_signed_in`（全局）、`candidate_assigned`、`room_phase_changed`、`message_appended`、`message_updated`、`message_deleted`、`message_reactions_changed`、`member_joined/left`（以上带 room_id）、`candidate_created/updated/deleted` 与 `room_created/deleted/renamed`（全局，载荷 `{CandidateID}` / `{RoomID}`）。
+> 消息编辑 / 撤回（`message_updated` 载荷 `{CandidateID, MessageID, Content}`、`message_deleted` 载荷 `{CandidateID, MessageID}`）同样按「候选人所属房间」路由——归档页与房间页都能就地改/撤；**窗口 2 分钟且仅发送者本人**（`state.MessageModifyWindow`，`EditMessage`/`DeleteMessage` 复核，编辑不延长窗口）。
+> 表情回复（`message_reactions_changed` 载荷 `{CandidateID, MessageID, Emoji, UserID, Added, UserName, UserDepartment}`）是**与观察者无关的一条增量**：各端据 `UserID`/`Added` 加减，计数、是否「我回的」与**回复人明细**（右键菜单「谁回了什么」）自行聚合——因此同一事件可直接广播给所有人。**事件自带回复人展示名与部门**（与 `message_appended` 带 `SenderName`/`SenderDepartment` 同理），只靠事件得知的回复也能显示姓名，前端不必查用户表。状态未变化的重复提交不广播（幂等）。
 
 ## 认证与鉴权
 
@@ -213,6 +217,9 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 - `PATCH /api/candidates/:id/preferences` `{first_choice, second_choice, accept_adjust}`（**志愿与调剂**：独立权限 `candidates.preferences`（面试官默认持有），只覆盖这三列，其他资料与运行态不动；三项须完整给出，bool 无缺省语义）
 - `PUT  /api/candidates/:id/status` `{status}`（重置到任意档：向后自动解绑、向前须已有房间）
 - `GET  /api/candidates/:id/messages`（候选人历史面试记录归档，完成 / 换房后仍可查）
+- `POST /api/candidates/:id/messages`（向归档补充一条记录，需 `rooms.chat`；**不依赖房间与在场成员**，面试结档后仍可写——这是「面试完成后仍要补记录」的唯一入口，房间通道只服务进行中的面试）
+- `PATCH /api/candidates/:id/messages/:messageId` `{content}` / `DELETE /api/candidates/:id/messages/:messageId`（**编辑 / 撤回自己的记录**，需 `rooms.chat` + 发送者本人 + 距发送 ≤ 2 分钟：他人记录 → `403`，超窗口 → `409`，消息不在该候选人名下或不存在 → `404`；撤回为物理删除）
+- `PUT|DELETE /api/candidates/:id/messages/:messageId/reactions/:emoji`（**表情回复**，需 `rooms.chat`；PUT 加上、DELETE 撤回，均幂等且**不设时间窗口**——任何档位、任何时间都能回；表情限允许集，之外 → `400`。消息的 `reactions` 字段随归档读取带出：`[{user_id, emoji, user}]`（`user` 为回复人展示名与部门，供右键菜单显示「谁回了什么」；不含凭据字段），计数与「我回没回」由前端按当前用户聚合）
 - `POST /api/candidates/imports` `{rows:[{student_no, name, profile, first_choice, second_choice, accept_adjust, phone, qq, email, updated_at?}]}`（**批量导入**，需 `candidates.manage`）：单事务**全或无**，按学号 upsert（命中即覆盖全部资料列，值相同也写；批内同学号后者覆盖前者），只写资料列，运行态一律不动；`updated_at`（可选，RFC3339）早于库中该行 `updated_at` 的行判为**过期 → 跳过不覆盖**（不写库不广播，报告 `status:"skipped"` 并带 `stored_updated_at`；比较基准是导入开始时的库中快照，故批内后行不会因前行写回而被误判）；成功 `200 {created, updated, skipped, rows:[{index, status, candidate_id, stored_updated_at?}]}`，任一行的硬错误 → `400 {error, rows:[{index, error}]}`（整批未落库）。单次上限 2000 行
 - `GET  /api/admissions`、`PUT /api/admissions/:candidateId` `{status}`（录取决定：默认本部门可见，记录需 `admissions.record`）
 - `GET  /api/rooms`、`GET /api/rooms/:id`

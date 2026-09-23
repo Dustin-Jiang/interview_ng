@@ -56,6 +56,13 @@ func CanTransition(from, to CandidateStatus) bool {
 	return false
 }
 
+// Interviewing 判断该档位是否处于「面试进行中」（已分配 / 正在进行中）。
+// 房间内的消息通道只在此期间开放：面试结档（已完成及其后的待录取 / 已录取）时房间即解绑，
+// 面试记录转为只读归档——空房间与已结档的房间都不再接收新消息。
+func (s CandidateStatus) Interviewing() bool {
+	return s == StatusAssigned || s == StatusInProgress
+}
+
 // Candidate 面试者（非登录用户，是被面试/被记录的客体）。
 type Candidate struct {
 	ID uint64 `gorm:"primaryKey" json:"id"`

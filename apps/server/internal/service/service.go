@@ -84,6 +84,50 @@ func (s *InterviewService) SendMessage(ctx context.Context, roomID, senderID uin
 	return nil
 }
 
+// AppendCandidateMessage 向候选人面试记录归档补充一条消息（不需要房间与在场成员，
+// 面试结档后仍可补充）。先落库后广播；返回事件供 handler 取新记录 id。
+func (s *InterviewService) AppendCandidateMessage(ctx context.Context, candidateID, senderID uint64, content string) (*state.Event, error) {
+	ev, err := s.store.AppendCandidateMessage(ctx, candidateID, senderID, content)
+	if err != nil {
+		return nil, err
+	}
+	s.broad.Publish(ev)
+	return ev, nil
+}
+
+// EditMessage 编辑自己的面试记录（窗口内）。先落库后广播，变更实时送达房间页与归档页。
+func (s *InterviewService) EditMessage(ctx context.Context, candidateID, messageID, editorID uint64, content string) error {
+	ev, err := s.store.EditMessage(ctx, candidateID, messageID, editorID, content)
+	if err != nil {
+		return err
+	}
+	s.broad.Publish(ev)
+	return nil
+}
+
+// DeleteMessage 撤回自己的面试记录（窗口内）。先落库后广播。
+func (s *InterviewService) DeleteMessage(ctx context.Context, candidateID, messageID, operatorID uint64) error {
+	ev, err := s.store.DeleteMessage(ctx, candidateID, messageID, operatorID)
+	if err != nil {
+		return err
+	}
+	s.broad.Publish(ev)
+	return nil
+}
+
+// SetMessageReaction 开关表情回复（幂等）。先落库后广播；状态未变化时 store 返回 nil（无事件）。
+func (s *InterviewService) SetMessageReaction(ctx context.Context, candidateID, messageID, userID uint64, emoji string, on bool) error {
+	ev, err := s.store.SetMessageReaction(ctx, candidateID, messageID, userID, emoji, on)
+	if err != nil {
+		return err
+	}
+	if ev == nil {
+		return nil
+	}
+	s.broad.Publish(ev)
+	return nil
+}
+
 // ---- 用户与角色管理（管理接口不涉及房间事件，直接透传 store） ----
 
 func (s *InterviewService) CreateUser(ctx context.Context, u *dsmodel.User, roleIDs []uint64) (uint64, error) {

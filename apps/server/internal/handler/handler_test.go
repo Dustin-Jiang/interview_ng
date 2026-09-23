@@ -37,7 +37,7 @@ func newTestApp(t *testing.T) *gin.Engine {
 	}
 	if err := db.AutoMigrate(
 		&dsmodel.User{}, &dsmodel.Candidate{}, &dsmodel.Room{},
-		&dsmodel.RoomMember{}, &dsmodel.Message{},
+		&dsmodel.RoomMember{}, &dsmodel.Message{}, &dsmodel.MessageReaction{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
 		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
 		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{}, &dsmodel.OidcDeptRule{},
@@ -533,6 +533,124 @@ func TestCandidateTranscriptArchivedAfterComplete(t *testing.T) {
 		t.Fatalf("sender should be preloaded: %v", first)
 	}
 
+	// 完成后仍可向归档补充记录（面试结档、房间已解绑：补充不依赖房间与在场成员）
+	code, out = doJSON(t, r, "POST", "/api/candidates/"+itoa(candID)+"/messages", `{"content":"  面试结论：通过  "}`, token)
+	if code != http.StatusCreated {
+		t.Fatalf("append after complete: got %d %v", code, out)
+	}
+	if newID, _ := out["id"].(float64); newID <= 0 {
+		t.Fatalf("append should return the new message id: %v", out)
+	}
+	_, out = doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", token)
+	items, _ = out["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("transcript should have 3 messages after append: %v", out)
+	}
+	last, _ := items[2].(map[string]any)
+	if last["content"] != "面试结论：通过" {
+		t.Fatalf("appended content should be trimmed and stored last: %v", items)
+	}
+
+	// 空白内容 → 400；不存在的候选人 → 404
+	if code, _ := doJSON(t, r, "POST", "/api/candidates/"+itoa(candID)+"/messages", `{"content":"   "}`, token); code != http.StatusBadRequest {
+		t.Fatalf("blank content: got %d, want 400", code)
+	}
+	if code, _ := doJSON(t, r, "POST", "/api/candidates/9999/messages", `{"content":"x"}`, token); code != http.StatusNotFound {
+		t.Fatalf("missing candidate append: got %d, want 404", code)
+	}
+
+	// 编辑自己刚发出的记录：就地覆盖正文（2 分钟内、仅本人）
+	firstID := int(items[0].(map[string]any)["id"].(float64))
+	if code, out := doJSON(t, r, "PATCH", "/api/candidates/"+itoa(candID)+"/messages/"+itoa(firstID), `{"content":"  自我介绍（已订正） "}`, token); code != http.StatusOK {
+		t.Fatalf("edit own message: got %d %v", code, out)
+	}
+	_, out = doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", token)
+	items, _ = out["items"].([]any)
+	if got, _ := items[0].(map[string]any)["content"].(string); got != "自我介绍（已订正）" {
+		t.Fatalf("edit should overwrite content: %v", items[0])
+	}
+
+	// 撤回自己刚发出的记录：物理消失
+	appendedID := int(items[2].(map[string]any)["id"].(float64))
+	if code, _ := doJSON(t, r, "DELETE", "/api/candidates/"+itoa(candID)+"/messages/"+itoa(appendedID), "", token); code != http.StatusOK {
+		t.Fatalf("recall own message: got %d", code)
+	}
+	_, out = doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", token)
+	if items, _ = out["items"].([]any); len(items) != 2 {
+		t.Fatalf("recalled message should be gone: %v", out)
+	}
+
+	// 只有本人能改/撤：另一位持 rooms.chat 的面试官改不动别人的记录
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"chatty","description":"","permissions":["rooms.chat"]}`, token)
+	chattyRole := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"chatty1","name":"","password":"pass","role_ids":[`+itoa(chattyRole)+`]}`, token)
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"chatty1","password":"pass"}`, "")
+	cToken := out["token"].(string)
+	if code, out := doJSON(t, r, "PATCH", "/api/candidates/"+itoa(candID)+"/messages/"+itoa(firstID), `{"content":"越权修改"}`, cToken); code != http.StatusForbidden {
+		t.Fatalf("editing someone else's message: got %d %v", code, out)
+	}
+	if code, _ := doJSON(t, r, "DELETE", "/api/candidates/"+itoa(candID)+"/messages/"+itoa(firstID), "", cToken); code != http.StatusForbidden {
+		t.Fatalf("recalling someone else's message: got %d, want 403", code)
+	}
+
+	// 消息不在该候选人名下 / 消息不存在 → 404
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024099","name":"乙"}`, token)
+	otherID := int(out["id"].(float64))
+	if code, _ := doJSON(t, r, "PATCH", "/api/candidates/"+itoa(otherID)+"/messages/"+itoa(firstID), `{"content":"错挂候选人"}`, token); code != http.StatusNotFound {
+		t.Fatalf("message under another candidate: got %d, want 404", code)
+	}
+	if code, _ := doJSON(t, r, "PATCH", "/api/candidates/"+itoa(candID)+"/messages/999999", `{"content":"x"}`, token); code != http.StatusNotFound {
+		t.Fatalf("missing message: got %d, want 404", code)
+	}
+
+	// 表情回复：加上 / 撤回（幂等），随归档读取带出「谁 + 哪个表情」
+	if code, out := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/messages/"+itoa(firstID)+"/reactions/👍", "", token); code != http.StatusOK {
+		t.Fatalf("add reaction: got %d %v", code, out)
+	}
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/messages/"+itoa(firstID)+"/reactions/👍", "", token); code != http.StatusOK {
+		t.Fatalf("idempotent add: got %d", code)
+	}
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/messages/"+itoa(firstID)+"/reactions/%F0%9F%8E%89", "", token); code != http.StatusOK {
+		t.Fatalf("percent-encoded emoji: got %d", code)
+	}
+	_, out = doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", token)
+	items, _ = out["items"].([]any)
+	first, _ = items[0].(map[string]any)
+	reactions, _ := first["reactions"].([]any)
+	if len(reactions) != 2 {
+		t.Fatalf("reactions should be attached: %v", first["reactions"])
+	}
+	seen := map[string]bool{}
+	for _, raw := range reactions {
+		rr, _ := raw.(map[string]any)
+		emoji, _ := rr["emoji"].(string)
+		seen[emoji] = true
+		if _, ok := rr["user_id"]; !ok {
+			t.Fatalf("reaction should carry the actor: %v", rr)
+		}
+		// 回复人明细（右键菜单显示「谁回了这个表情」）：带展示名与部门，前端不必再查用户表
+		actor, _ := rr["user"].(map[string]any)
+		if actor == nil || actor["username"] != "admin" {
+			t.Fatalf("reaction should carry the actor profile: %v", rr)
+		}
+	}
+	if !seen["👍"] || !seen["🎉"] {
+		t.Fatalf("reactions mismatch: %v", seen)
+	}
+	if code, _ := doJSON(t, r, "DELETE", "/api/candidates/"+itoa(candID)+"/messages/"+itoa(firstID)+"/reactions/👍", "", token); code != http.StatusOK {
+		t.Fatalf("remove reaction: got %d", code)
+	}
+	_, out = doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", token)
+	items, _ = out["items"].([]any)
+	first, _ = items[0].(map[string]any)
+	if reactions, _ = first["reactions"].([]any); len(reactions) != 1 {
+		t.Fatalf("reaction should be removed: %v", first["reactions"])
+	}
+	// 允许集之外的表情 → 400；无 rooms.chat 的用户 → 403
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/messages/"+itoa(firstID)+"/reactions/🦄", "", token); code != http.StatusBadRequest {
+		t.Fatalf("unsupported emoji: got %d, want 400", code)
+	}
+
 	// 只读角色（rooms.view）可查看归档
 	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"viewer","description":"","permissions":["rooms.view"]}`, token)
 	viewerRole := int(out["id"].(float64))
@@ -542,6 +660,13 @@ func TestCandidateTranscriptArchivedAfterComplete(t *testing.T) {
 	if code, _ := doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", vToken); code != http.StatusOK {
 		t.Fatalf("viewer transcript: got %d", code)
 	}
+	// 但补充记录需 rooms.chat（与房间聊天同一权限）
+	if code, _ := doJSON(t, r, "POST", "/api/candidates/"+itoa(candID)+"/messages", `{"content":"viewer 补充"}`, vToken); code != http.StatusForbidden {
+		t.Fatalf("viewer append: got %d, want 403", code)
+	}
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/messages/"+itoa(firstID)+"/reactions/👍", "", vToken); code != http.StatusForbidden {
+		t.Fatalf("viewer reaction: got %d, want 403", code)
+	}
 
 	// 无任何权限的普通用户也可查看归档（查看与管理分离）
 	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"nobody","name":"","password":"pass","role_ids":[]}`, token)
@@ -549,6 +674,9 @@ func TestCandidateTranscriptArchivedAfterComplete(t *testing.T) {
 	nToken := out["token"].(string)
 	if code, _ := doJSON(t, r, "GET", "/api/candidates/"+itoa(candID)+"/messages", "", nToken); code != http.StatusOK {
 		t.Fatalf("no-perm transcript: got %d", code)
+	}
+	if code, _ := doJSON(t, r, "POST", "/api/candidates/"+itoa(candID)+"/messages", `{"content":"nobody 补充"}`, nToken); code != http.StatusForbidden {
+		t.Fatalf("no-perm append: got %d, want 403", code)
 	}
 
 	// 不存在的候选人 → 404

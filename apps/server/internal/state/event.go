@@ -8,6 +8,11 @@ const (
 	EventCandidateAssigned EventType = "candidate_assigned"  // 分配候选人到房间
 	EventRoomPhaseChanged  EventType = "room_phase_changed"  // 房间/候选人阶段变化
 	EventMessageAppended   EventType = "message_appended"    // 新聊天消息
+	EventMessageUpdated    EventType = "message_updated"     // 消息被编辑（2 分钟内、仅本人）
+	EventMessageDeleted    EventType = "message_deleted"     // 消息被撤回（2 分钟内、仅本人）
+	// EventMessageReactionsChanged 表情回复增减（载荷为「谁 + 哪个表情 + 加还是撤」的增量，
+	// 与观察者无关：计数与「我回没回」由各前端按当前用户自行聚合）。
+	EventMessageReactionsChanged EventType = "message_reactions_changed"
 	EventMemberJoined      EventType = "member_joined"       // 面试官加入房间
 	EventMemberLeft        EventType = "member_left"         // 面试官离开房间
 
@@ -35,6 +40,33 @@ type Event struct {
 // CandidateRef 候选人类事件（created/updated/deleted）的载荷。
 type CandidateRef struct {
 	CandidateID uint64 `json:"candidate_id"`
+}
+
+// MessageRef 消息编辑/撤回事件（message_updated / message_deleted）的载荷。
+// 字段刻意不带 json tag：与同族的 message_appended 载荷一样按 Go 字段名序列化，
+// 前端两处（房间页 / 候选人查看页）都以同名键读取。
+type MessageRef struct {
+	CandidateID uint64
+	MessageID   uint64
+	// Content 仅 message_updated 携带（编辑后的正文，已去首尾空白）。
+	Content string
+}
+
+// ReactionRef 表情回复增减（message_reactions_changed）的载荷：一条增量，与观察者无关。
+// 同样按 Go 字段名序列化（与消息族其余事件一致）。
+// 带上回复人的展示名与部门（与 message_appended 带 SenderName/SenderDepartment 同理）：
+// 「谁回了什么」的明细靠事件就能显示，前端不必为一次点击去查用户表（面试官也没有列用户的权限）。
+type ReactionRef struct {
+	CandidateID uint64
+	MessageID   uint64
+	Emoji       string
+	// UserID 动作者：前端据此判断「是不是我回的表情」（撤销自己的回复时据此移除）。
+	UserID uint64
+	// Added true = 加上该表情，false = 撤回该表情。
+	Added bool
+	// UserName / UserDepartment 回复人的展示名与部门名（无部门为空串；用户已删为空串）。
+	UserName       string
+	UserDepartment string
 }
 
 // RoomRef 房间类事件（created/deleted/renamed）的载荷。

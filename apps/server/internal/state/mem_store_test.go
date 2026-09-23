@@ -17,6 +17,14 @@ import (
 
 func newTestStore(t *testing.T) state.StateStore {
 	t.Helper()
+	st, _ := newTestStoreWithDB(t)
+	return st
+}
+
+// newTestStoreWithDB 与 newTestStore 同源，额外交出底层 *gorm.DB：
+// 用于直接伪造「历史遗留」的库内状态（绕开业务入口），验证读取路径的兜底判据。
+func newTestStoreWithDB(t *testing.T) (state.StateStore, *gorm.DB) {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -25,14 +33,14 @@ func newTestStore(t *testing.T) state.StateStore {
 	}
 	if err := db.AutoMigrate(
 		&dsmodel.User{}, &dsmodel.Candidate{}, &dsmodel.Room{},
-		&dsmodel.RoomMember{}, &dsmodel.Message{},
+		&dsmodel.RoomMember{}, &dsmodel.Message{}, &dsmodel.MessageReaction{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
 		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
 		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{}, &dsmodel.OidcDeptRule{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	return state.NewMemStateStore(db)
+	return state.NewMemStateStore(db), db
 }
 
 // mustCreateCandidate 创建候选人并返回其 id（从创建事件载荷提取，测试辅助）。

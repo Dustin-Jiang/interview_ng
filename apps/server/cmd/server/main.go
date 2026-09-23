@@ -33,7 +33,7 @@ func main() {
 	// 自动建表（演示用；生产建议用迁移工具）。
 	if err := db.AutoMigrate(
 		&dsmodel.User{}, &dsmodel.Candidate{}, &dsmodel.Room{},
-		&dsmodel.RoomMember{}, &dsmodel.Message{},
+		&dsmodel.RoomMember{}, &dsmodel.Message{}, &dsmodel.MessageReaction{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
 		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
 		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{}, &dsmodel.OidcDeptRule{},

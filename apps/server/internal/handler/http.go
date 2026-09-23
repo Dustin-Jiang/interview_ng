@@ -51,6 +51,15 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	authed.GET("/candidates/:id", h.getCandidate)
 	// 候选人面试记录归档（按候选人维度，完成后仍可查；任意登录用户可读 —— 查看与管理分离）
 	authed.GET("/candidates/:id/messages", h.listCandidateMessages)
+	// 归档补充一条记录（面试结档后仍可写；权限与房间聊天一致）：
+	// 房间通道只服务进行中的面试，归档补充不依赖房间与在场成员。
+	authed.POST("/candidates/:id/messages", h.require(dsmodel.PermRoomsChat), h.appendCandidateMessage)
+	// 编辑 / 撤回自己的记录（2 分钟内，仅发送者本人 —— 服务端按消息发送者与创建时刻复核）
+	authed.PATCH("/candidates/:id/messages/:messageId", h.require(dsmodel.PermRoomsChat), h.editCandidateMessage)
+	authed.DELETE("/candidates/:id/messages/:messageId", h.require(dsmodel.PermRoomsChat), h.deleteCandidateMessage)
+	// 表情回复：一条记录上的一个表情（PUT 加上 / DELETE 撤回，均幂等；表情限允许集）
+	authed.PUT("/candidates/:id/messages/:messageId/reactions/:emoji", h.require(dsmodel.PermRoomsChat), h.setMessageReaction(true))
+	authed.DELETE("/candidates/:id/messages/:messageId/reactions/:emoji", h.require(dsmodel.PermRoomsChat), h.setMessageReaction(false))
 	authed.POST("/candidates", h.require(dsmodel.PermCandidatesCreate), h.createCandidate)
 	// 批量导入（管理员数据导入）：请求体为浏览器侧解析+映射后的行数组，服务端单事务全或无落库。
 	authed.POST("/candidates/imports", h.require(dsmodel.PermCandidatesManage), h.importCandidates)
@@ -208,6 +217,76 @@ func (h *HTTPServer) listCandidateMessages(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"items": out})
+}
+
+// appendCandidateMessageReq 归档补充的请求体。
+type appendCandidateMessageReq struct {
+	Content string `json:"content"`
+}
+
+// appendCandidateMessage 向候选人面试记录归档补充一条消息（候选人查看页的补充入口）：
+// 不需要房间与在场成员，故面试结档（房间已解绑）后仍可补充；权限与房间聊天一致（rooms.chat）。
+// 响应只回新记录 id，内容由前端按归档重拉（与 GET /candidates/:id/messages 同一权威口径）。
+func (h *HTTPServer) appendCandidateMessage(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	var req appendCandidateMessageReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	ev, err := h.svc.AppendCandidateMessage(c.Request.Context(), id, auth.UserID(c), req.Content)
+	if err != nil {
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"id": ev.MsgID})
+}
+
+// editCandidateMessage 编辑自己刚发出的记录（2 分钟内，仅发送者本人；服务端复核窗口与归属）。
+func (h *HTTPServer) editCandidateMessage(c *gin.Context) {
+	candID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	msgID, _ := strconv.ParseUint(c.Param("messageId"), 10, 64)
+	var req appendCandidateMessageReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	if err := h.svc.EditMessage(c.Request.Context(), candID, msgID, auth.UserID(c), req.Content); err != nil {
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// deleteCandidateMessage 撤回自己刚发出的记录（物理删除；窗口与归属同上）。
+func (h *HTTPServer) deleteCandidateMessage(c *gin.Context) {
+	candID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	msgID, _ := strconv.ParseUint(c.Param("messageId"), 10, 64)
+	if err := h.svc.DeleteMessage(c.Request.Context(), candID, msgID, auth.UserID(c)); err != nil {
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// setMessageReaction 返回表情回复的开关处理（PUT = 加上、DELETE = 撤回）：幂等。
+// 表情取自路径段（前端按 URL 编码提交），服务端按 model.ReactionEmojis 复核。
+func (h *HTTPServer) setMessageReaction(on bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		candID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+		msgID, _ := strconv.ParseUint(c.Param("messageId"), 10, 64)
+		emoji := c.Param("emoji")
+		err := h.svc.SetMessageReaction(c.Request.Context(), candID, msgID, auth.UserID(c), emoji, on)
+		if err != nil {
+			status, msg := stateErr(err)
+			c.JSON(status, gin.H{"error": msg})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	}
 }
 
 // createCandidateReq 新建候选人：请求体即扁平的资料字段全集（state.CandidateInfo）。
@@ -850,6 +929,11 @@ func stateErr(err error) (int, string) {
 		case "not_found":
 			return http.StatusNotFound, se.Msg
 		case "student_no_exists":
+			return http.StatusConflict, se.Msg
+		case "message_not_owner":
+			return http.StatusForbidden, se.Msg
+		case "message_window_expired":
+			// 409：请求与当前状态冲突（窗口已关闭，记录已定格）。
 			return http.StatusConflict, se.Msg
 		}
 		return http.StatusBadRequest, se.Msg

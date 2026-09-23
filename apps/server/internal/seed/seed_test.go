@@ -22,7 +22,7 @@ func memDB(t *testing.T) *gorm.DB {
 	}
 	if err := db.AutoMigrate(
 		&dsmodel.User{}, &dsmodel.Candidate{}, &dsmodel.Room{},
-		&dsmodel.RoomMember{}, &dsmodel.Message{},
+		&dsmodel.RoomMember{}, &dsmodel.Message{}, &dsmodel.MessageReaction{},
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
 		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{},
 		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{}, &dsmodel.OidcDeptRule{},

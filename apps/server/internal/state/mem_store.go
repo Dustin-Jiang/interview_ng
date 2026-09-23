@@ -201,8 +201,12 @@ func (s *MemStateStore) ListMessagesAfter(ctx context.Context, candidateID uint6
 	var out []*dsmodel.Message
 	// 预加载 Sender.Department：归档查看与房间聊天需在消息头部标出「面试官 · 部门」；
 	// sender 已删时为 nil（前端显示「已删除用户」），部门为空时前端不显示头衔。
+	// 同时带上 Reactions（按 id 升序 = 回复先后）与回复人（含部门）：
+	// 前端据此聚合计数与「我回没回」，并在右键菜单里显示「谁回了这个表情」。
 	err := s.db.WithContext(ctx).
 		Preload("Sender.Department").
+		Preload("Reactions", func(db *gorm.DB) *gorm.DB { return db.Order("id ASC") }).
+		Preload("Reactions.User.Department").
 		Where("candidate_id = ? AND id > ?", candidateID, afterID).
 		Order("id asc").
 		Find(&out).Error
@@ -444,16 +448,12 @@ func (s *MemStateStore) MovePhase(ctx context.Context, roomID, operatorID uint64
 	if err := guardTransition(c.Status, to); err != nil {
 		return nil, err
 	}
-	// 推进到 COMPLETED（完成）即自动清房：房间解绑候选人（rooms.candidate_id 置空），
-	// 房间转空闲可继续拉取下一位；消息仍按候选人归档保留。
+	// 推进到面试结档档位（COMPLETED 及其后的录取档）即自动清房：留档「在哪间房间面的」并解绑
+	// 候选人（rooms.candidate_id 置空），房间转空闲可继续拉取下一位；消息仍按候选人归档保留
+	// （解绑后不再接收新写入，见 AppendMessage）。
 	updates := statusUpdates(to, time.Now())
-	if to == dsmodel.StatusCompleted {
-		// 先把「在哪间房间面的」记到候选人身上（解绑后房间与候选人再无关联，不记就永久丢失）。
-		for k, v := range interviewRoomUpdates(room) {
-			updates[k] = v
-		}
-		if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", roomID).
-			UpdateColumn("candidate_id", nil).Error; err != nil {
+	if !to.Interviewing() {
+		if err := s.finishInterviewLocked(ctx, room, updates); err != nil {
 			return nil, err
 		}
 	}
@@ -483,22 +483,191 @@ func (s *MemStateStore) AppendMessage(ctx context.Context, roomID, senderID uint
 	if !s.isMemberLocked(ctx, roomID, senderID) {
 		return nil, ErrNotMember
 	}
-	msg := &dsmodel.Message{CandidateID: *room.CandidateID, SenderID: &senderID, Content: content}
+	// 消息只属于「正在面试」（已分配 / 面试中）的候选人：面试结档后这段记录只读归档。
+	// 正常路径下结档时房间已解绑（空房间上文已拒），此处按候选人状态再兜一道——
+	// 历史遗留的「已结档却仍绑着房间」的行同样不得再写入。
+	c, err := s.ensureCandidate(ctx, *room.CandidateID)
+	if err != nil {
+		return nil, err
+	}
+	if !c.Status.Interviewing() {
+		return nil, ErrInterviewFinished
+	}
+	return s.appendMessageLocked(ctx, roomID, *room.CandidateID, senderID, content)
+}
+
+// AppendCandidateMessage 归档补充：不要求房间与在场成员（结档后房间已解绑，记录仍可补充）。
+// 权限（rooms.chat）由 handler 校验；此处只保证候选人存在、内容非空。
+func (s *MemStateStore) AppendCandidateMessage(ctx context.Context, candidateID, senderID uint64, content string) (*Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := s.ensureCandidate(ctx, candidateID)
+	if err != nil {
+		return nil, err
+	}
+	return s.appendMessageLocked(ctx, s.messageScopeRoomLocked(ctx, candidateID), c.ID, senderID, content)
+}
+
+// EditMessage 编辑自己刚发出的面试记录（窗口内、本人；窗口自创建时刻起算，编辑不延长）。
+func (s *MemStateStore) EditMessage(ctx context.Context, candidateID, messageID, editorID uint64, content string) (*Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, err := s.modifiableMessageLocked(ctx, candidateID, messageID, editorID)
+	if err != nil {
+		return nil, err
+	}
+	text := strings.TrimSpace(content)
+	if text == "" {
+		return nil, ErrInvalidContent
+	}
+	if err := s.db.WithContext(ctx).Model(&dsmodel.Message{}).Where("id = ?", m.ID).
+		UpdateColumn("content", text).Error; err != nil {
+		return nil, err
+	}
+	roomID := s.messageScopeRoomLocked(ctx, m.CandidateID)
+	ev := &Event{Type: EventMessageUpdated, RoomID: roomID, MsgID: m.ID,
+		Data: MessageRef{CandidateID: m.CandidateID, MessageID: m.ID, Content: text}}
+	s.emit(roomID, ev)
+	return ev, nil
+}
+
+// DeleteMessage 撤回自己刚发出的面试记录（物理删除）。
+func (s *MemStateStore) DeleteMessage(ctx context.Context, candidateID, messageID, operatorID uint64) (*Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, err := s.modifiableMessageLocked(ctx, candidateID, messageID, operatorID)
+	if err != nil {
+		return nil, err
+	}
+	// 连带删它的表情回复（显式删除，不依赖 FK 级联在各库上的具体行为）
+	if err := s.db.WithContext(ctx).Where("message_id = ?", m.ID).Delete(&dsmodel.MessageReaction{}).Error; err != nil {
+		return nil, err
+	}
+	if err := s.db.WithContext(ctx).Delete(&dsmodel.Message{}, m.ID).Error; err != nil {
+		return nil, err
+	}
+	roomID := s.messageScopeRoomLocked(ctx, m.CandidateID)
+	ev := &Event{Type: EventMessageDeleted, RoomID: roomID, MsgID: m.ID,
+		Data: MessageRef{CandidateID: m.CandidateID, MessageID: m.ID}}
+	s.emit(roomID, ev)
+	return ev, nil
+}
+
+// SetMessageReaction 开关表情回复（幂等；状态未变化时不广播——没有变化就没有事件）。
+// 单写者（s.mu）下「先查后写」即权威，DB 唯一索引只作兜底。
+func (s *MemStateStore) SetMessageReaction(ctx context.Context, candidateID, messageID, userID uint64, emoji string, on bool) (*Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !dsmodel.ValidReaction(emoji) {
+		return nil, ErrInvalidReaction
+	}
+	m, err := s.candidateMessageLocked(ctx, candidateID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	db := s.db.WithContext(ctx)
+	if on {
+		var existing dsmodel.MessageReaction
+		err := db.Where("message_id = ? AND user_id = ? AND emoji = ?", m.ID, userID, emoji).First(&existing).Error
+		if err == nil {
+			return nil, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		if err := db.Create(&dsmodel.MessageReaction{MessageID: m.ID, UserID: userID, Emoji: emoji}).Error; err != nil {
+			return nil, err
+		}
+	} else {
+		res := db.Where("message_id = ? AND user_id = ? AND emoji = ?", m.ID, userID, emoji).
+			Delete(&dsmodel.MessageReaction{})
+		if err := res.Error; err != nil {
+			return nil, err
+		}
+		if res.RowsAffected == 0 {
+			return nil, nil
+		}
+	}
+	roomID := s.messageScopeRoomLocked(ctx, m.CandidateID)
+	userName, userDepartment := s.userLabelsLocked(ctx, userID)
+	ev := &Event{Type: EventMessageReactionsChanged, RoomID: roomID, MsgID: m.ID,
+		Data: ReactionRef{CandidateID: m.CandidateID, MessageID: m.ID, Emoji: emoji, UserID: userID, Added: on,
+			UserName: userName, UserDepartment: userDepartment}}
+	s.emit(roomID, ev)
+	return ev, nil
+}
+
+// userLabelsLocked 取用户的展示名与部门名（姓名缺省回退用户名；用户已删/无部门则为空串）。
+// 实时事件都用它给「谁」打标签（消息发送者、表情回复人），前端因此不必二次查询用户表。
+// 调用方须持 s.mu。
+func (s *MemStateStore) userLabelsLocked(ctx context.Context, userID uint64) (name, department string) {
+	var u dsmodel.User
+	if err := s.db.WithContext(ctx).Preload("Department").First(&u, userID).Error; err != nil {
+		return "", ""
+	}
+	name = u.Name
+	if name == "" {
+		name = u.Username
+	}
+	if u.Department != nil {
+		department = u.Department.Name
+	}
+	return name, department
+}
+
+// candidateMessageLocked 取一条属于该候选人的记录（不校验发送者与时间窗口），
+// 用于与「谁发的、多久以前」无关的操作（表情回复）。调用方须持 s.mu。
+func (s *MemStateStore) candidateMessageLocked(ctx context.Context, candidateID, messageID uint64) (*dsmodel.Message, error) {
+	var m dsmodel.Message
+	if err := s.db.WithContext(ctx).First(&m, messageID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if m.CandidateID != candidateID {
+		return nil, ErrNotFound
+	}
+	return &m, nil
+}
+
+// modifiableMessageLocked 取一条「可编辑/撤回」的记录：必须属于该候选人、由本人发送、且未超窗口。
+// 调用方须持 s.mu。消息不在该候选人名下时按 404 处理（不泄露他人消息的存在）。
+func (s *MemStateStore) modifiableMessageLocked(ctx context.Context, candidateID, messageID, userID uint64) (*dsmodel.Message, error) {
+	var m dsmodel.Message
+	if err := s.db.WithContext(ctx).First(&m, messageID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if m.CandidateID != candidateID {
+		return nil, ErrNotFound
+	}
+	// 发送者已删除（sender 置空）的记录无从归属，不能编辑/撤回。
+	if m.SenderID == nil || *m.SenderID != userID {
+		return nil, ErrMessageNotOwner
+	}
+	if time.Since(m.CreatedAt) > MessageModifyWindow {
+		return nil, ErrMessageWindowExpired
+	}
+	return &m, nil
+}
+
+// appendMessageLocked 落库并广播一条消息：消息按候选人归属（候选人换房后历史随人走），
+// roomID=0 表示与房间无关的归档补充，事件仍带发送者展示名与部门名。
+// 调用方须持 s.mu，并已完成权限与「候选人是否可写」的判定。
+func (s *MemStateStore) appendMessageLocked(ctx context.Context, roomID, candidateID, senderID uint64, content string) (*Event, error) {
+	text := strings.TrimSpace(content)
+	if text == "" {
+		return nil, ErrInvalidContent
+	}
+	msg := &dsmodel.Message{CandidateID: candidateID, SenderID: &senderID, Content: text}
 	if err := s.db.WithContext(ctx).Create(msg).Error; err != nil {
 		return nil, err
 	}
 	// 实时事件携带发送者展示名与部门头衔，前端不必依赖二次查询即可在消息头部标出「谁 · 哪个部门」。
-	senderName, senderDepartment := "", ""
-	var u dsmodel.User
-	if err := s.db.WithContext(ctx).Preload("Department").First(&u, senderID).Error; err == nil {
-		senderName = u.Name
-		if senderName == "" {
-			senderName = u.Username
-		}
-		if u.Department != nil {
-			senderDepartment = u.Department.Name
-		}
-	}
+	senderName, senderDepartment := s.userLabelsLocked(ctx, senderID)
 	ev := &Event{Type: EventMessageAppended, RoomID: roomID, MsgID: msg.ID,
 		Data: struct {
 			RoomID           uint64
@@ -507,7 +676,7 @@ func (s *MemStateStore) AppendMessage(ctx context.Context, roomID, senderID uint
 			SenderName       string
 			SenderDepartment string
 			Content          string
-		}{roomID, *room.CandidateID, senderID, senderName, senderDepartment, content}}
+		}{roomID, candidateID, senderID, senderName, senderDepartment, text}}
 	s.emit(roomID, ev)
 	return ev, nil
 }
@@ -732,6 +901,10 @@ func (s *MemStateStore) DeleteUser(ctx context.Context, id uint64) error {
 	}
 	// user_roles 显式清理；room_members 由 FK CASCADE；messages.sender 由 FK SET NULL（保留档案）。
 	if err := s.db.WithContext(ctx).Where("user_id = ?", id).Delete(&dsmodel.UserRole{}).Error; err != nil {
+		return err
+	}
+	// 表情回复显式清理：回复离开人不成立（消息档案本身保留）。
+	if err := s.db.WithContext(ctx).Where("user_id = ?", id).Delete(&dsmodel.MessageReaction{}).Error; err != nil {
 		return err
 	}
 	return s.db.WithContext(ctx).Delete(&dsmodel.User{}, id).Error
@@ -1218,7 +1391,12 @@ func (s *MemStateStore) DeleteCandidate(ctx context.Context, id uint64) (*Event,
 		}
 	}
 
-	// 连带删消息档案（级联：删人即删其记录）
+	// 连带删消息档案（级联：删人即删其记录）及其表情回复
+	if err := s.db.WithContext(ctx).
+		Where("message_id IN (?)", s.db.Model(&dsmodel.Message{}).Select("id").Where("candidate_id = ?", id)).
+		Delete(&dsmodel.MessageReaction{}).Error; err != nil {
+		return nil, err
+	}
 	if err := s.db.WithContext(ctx).Where("candidate_id = ?", id).Delete(&dsmodel.Message{}).Error; err != nil {
 		return nil, err
 	}
@@ -1264,16 +1442,20 @@ func (s *MemStateStore) ResetCandidateStatus(ctx context.Context, id uint64, to 
 		// 重置到 COMPLETED 与推进路径一致：完成即自动解绑房间（消息按候选人保留），
 		// 同时把「在哪间房间面的」记到候选人身上。
 		if to == dsmodel.StatusCompleted {
-			for k, v := range interviewRoomUpdates(room) {
-				updates[k] = v
-			}
-			if err := s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", roomID).
-				UpdateColumn("candidate_id", nil).Error; err != nil {
+			if err := s.finishInterviewLocked(ctx, room, updates); err != nil {
 				return nil, err
 			}
 		}
 	case postInterview:
-		// 待录取/已录取：仅改状态，不涉及房间。
+		// 待录取/已录取位于面试完成之后：这段面试同样已结档，故与 COMPLETED 一致「留档 + 清房」。
+		// 否则候选人会停在「录取档却仍占着房间」：房间里的消息通道还开着（面试记录仍在写入），
+		// 房间也腾不出来给下一位候选人。
+		if room, err := s.roomByCandidate(ctx, id); err == nil {
+			roomID = room.ID
+			if err := s.finishInterviewLocked(ctx, room, updates); err != nil {
+				return nil, err
+			}
+		}
 	case backward:
 		// 自动解绑房间（room 保留为空记录）；事件保持全局广播（回到排队池变化）。
 		if room, err := s.roomByCandidate(ctx, id); err == nil {
@@ -1854,6 +2036,31 @@ func validStatus(s dsmodel.CandidateStatus) bool {
 		}
 	}
 	return false
+}
+
+// messageScopeRoomLocked 消息事件的路由房间：候选人当前仍在房间内时按其房间扇出
+// （房间页实时可见这条归档变更），否则 0（全局扇出，看板/归档页据此刷新）。
+// 调用方须持 s.mu。
+func (s *MemStateStore) messageScopeRoomLocked(ctx context.Context, candidateID uint64) uint64 {
+	if room, err := s.roomByCandidate(ctx, candidateID); err == nil {
+		return room.ID
+	}
+	return 0
+}
+
+// finishInterviewLocked 给一场面试结档：先给候选人留档「这场面试在哪间房间做的」，
+// 再解绑房间（rooms.candidate_id 置空，绑定唯一权威在房间侧）。解绑后房间转空闲，
+// 消息按候选人归档保留、不再接收新写入（见 AppendMessage）。
+// updates 为本次状态迁移的写库列，留档列并入其中。调用方须持 s.mu。
+func (s *MemStateStore) finishInterviewLocked(ctx context.Context, room *dsmodel.Room, updates map[string]any) error {
+	if room == nil {
+		return nil
+	}
+	for k, v := range interviewRoomUpdates(room) {
+		updates[k] = v
+	}
+	return s.db.WithContext(ctx).Model(&dsmodel.Room{}).Where("id = ?", room.ID).
+		UpdateColumn("candidate_id", nil).Error
 }
 
 // interviewRoomUpdates 面试结束那一刻记下「在哪间房间面的」。

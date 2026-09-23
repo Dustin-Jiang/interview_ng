@@ -45,11 +45,33 @@ type StateStore interface {
 	ImportCandidates(ctx context.Context, rows []CandidateImportRow) (*ImportReport, error)
 	// MovePhase 推进阶段：ASSIGNED -> IN_PROGRESS -> COMPLETED。
 	// 由当前房间成员调用（无主持人概念，成员即可推进）。
-	// 推进到 COMPLETED 自动解绑房间（rooms.candidate_id 置空，绑定唯一权威），
-	// 房间转空闲可拉取下一候选人；消息仍按候选人归档保留。
+	// 推进到面试结档档位（COMPLETED 及其后的录取档）自动解绑房间（rooms.candidate_id 置空，
+	// 绑定唯一权威）并留档「在哪间房间面的」；房间转空闲可拉取下一候选人，
+	// 消息仍按候选人归档保留、此后只读（见 AppendMessage）。
 	MovePhase(ctx context.Context, roomID, operatorID uint64, to dsmodel.CandidateStatus) (*Event, error)
 	// AppendMessage 在房间内追加一条聊天消息，返回事件(带 MsgID)。
+	// 消息只写给「正在面试」（ASSIGNED / IN_PROGRESS）的候选人：空房间 → ErrNotFound，
+	// 面试已结档（COMPLETED 及其后的录取档）→ ErrInterviewFinished（记录只读归档）。
+	// 内容空白 → ErrInvalidContent。房间内的实时会话走这里；归档补充走 AppendCandidateMessage。
 	AppendMessage(ctx context.Context, roomID, senderID uint64, content string) (*Event, error)
+	// AppendCandidateMessage 直接向候选人的面试记录归档追加一条消息（返回事件，带 MsgID）。
+	// 与 AppendMessage 的区别是**不需要房间与在场成员**：面试结档后房间已解绑，
+	// 但记录仍可在候选人查看页补充（这正是归档存在的意义），故只要求候选人存在。
+	// 候选人不存在 → ErrNotFound；内容空白 → ErrInvalidContent。
+	// 候选人当前若仍在房间内，事件按该房间扇出（房间页同步可见），否则全局扇出。
+	AppendCandidateMessage(ctx context.Context, candidateID, senderID uint64, content string) (*Event, error)
+	// EditMessage 编辑一条面试记录：**仅发送者本人**，且距发送不超过 MessageModifyWindow。
+	// content 为新正文（TrimSpace；空白 → ErrInvalidContent）。窗口自消息创建时刻起算，编辑不延长窗口。
+	// 消息不属于该候选人 / 不存在 → ErrNotFound；非本人 → ErrMessageNotOwner；超窗口 → ErrMessageWindowExpired。
+	EditMessage(ctx context.Context, candidateID, messageID, editorID uint64, content string) (*Event, error)
+	// DeleteMessage 撤回一条面试记录（物理删除，归档与实时两路都会收到 message_deleted）。
+	// 权限与窗口同 EditMessage；编辑/撤回都不改发送者与创建时刻（窗口口径稳定）。
+	DeleteMessage(ctx context.Context, candidateID, messageID, operatorID uint64) (*Event, error)
+	// SetMessageReaction 开关一条记录的表情回复（on=true 加上、false 撤回；两者都幂等，
+	// 重复提交同一状态不产生变化也不广播）。表情须在 model.ReactionEmojis 允许集内
+	// （否则 ErrInvalidReaction）；不设时间窗口——回复是档案之外的旁注，任何档位、任何时候都可加。
+	// 消息不属于该候选人 / 不存在 → ErrNotFound。
+	SetMessageReaction(ctx context.Context, candidateID, messageID, userID uint64, emoji string, on bool) (*Event, error)
 	// JoinRoom 面试官加入房间（返回房间快照用于首次同步 + 成员变更事件）。
 	JoinRoom(ctx context.Context, roomID, userID uint64) (*dsmodel.Room, *Event, error)
 	// LeaveRoom 面试官离开房间（返回最后一个离开者时会额外产出成员变更事件）。
@@ -132,7 +154,8 @@ type StateStore interface {
 	DeleteCandidate(ctx context.Context, id uint64) (*Event, error)
 	// ResetCandidateStatus 重置候选人到状态机任意档：
 	// 向后档（未签到/已签到待分配）自动解绑房间；向前档须已有房间绑定。
-	// 向前档目标为 COMPLETED 时与推进路径一致：自动解绑房间（候选人与房间均解除关联）。
+	// 面试结档档位（COMPLETED 及其后的待录取 / 已录取）一律自动解绑房间（候选人与房间解除关联），
+	// 使得房间腾出来、面试记录转为只读归档；向 COMPLETED 时额外留档「在哪间房间面的」。
 	ResetCandidateStatus(ctx context.Context, id uint64, to dsmodel.CandidateStatus) (*Event, error)
 	// ListCandidateAdmissions 返回部门对候选人的录取决定。
 	// departmentID 为 nil 时返回所有部门的记录（跨部门查看）；否则仅返回指定部门。
@@ -194,9 +217,25 @@ var (
 	ErrNotMember       = &Error{Code: "not_member", Msg: "operator is not a room member"}
 	ErrAlreadyAssigned = &Error{Code: "already_assigned", Msg: "candidate already assigned"}
 	ErrUserInRoom      = &Error{Code: "user_in_room", Msg: "user already in an active room"}
+	// ErrInterviewFinished 这段面试已结档（候选人已完成及其后的录取档），房间消息通道关闭，
+	// 面试记录只读归档（归档补充走 AppendCandidateMessage，不受此限）。
+	ErrInterviewFinished = &Error{Code: "interview_finished", Msg: "面试已结束，不能再发送消息"}
+	// ErrInvalidContent 消息内容为空（去除首尾空白后）。
+	ErrInvalidContent = &Error{Code: "invalid_content", Msg: "消息内容不能为空"}
+	// ErrMessageNotOwner 只能编辑/撤回自己发送的消息（发送者已被删除的消息同属此列，无从归属）。
+	ErrMessageNotOwner = &Error{Code: "message_not_owner", Msg: "只能编辑或撤回自己发送的消息"}
+	// ErrMessageWindowExpired 超过 MessageModifyWindow 后不能再编辑/撤回。
+	ErrMessageWindowExpired = &Error{Code: "message_window_expired", Msg: "超过 2 分钟，不能再编辑或撤回"}
+	// ErrInvalidReaction 表情不在允许集内（model.ReactionEmojis）。
+	ErrInvalidReaction = &Error{Code: "invalid_reaction", Msg: "不支持的表情回复"}
 	// ErrStudentNoExists 学号已被其他候选人占用（候选人身份键唯一，编辑/新增均返回此错）。
 	ErrStudentNoExists = &Error{Code: "student_no_exists", Msg: "学号已存在"}
 )
+
+// MessageModifyWindow 面试记录的编辑/撤回窗口：自发送时刻起 2 分钟，超时后记录定格。
+// 权威判定在 EditMessage / DeleteMessage；前端 `domain/messages.ts#MESSAGE_MODIFY_WINDOW_MS`
+// 是同一口径的镜像，只用于是否显示入口（服务端永远复核）。
+const MessageModifyWindow = 2 * time.Minute
 
 // MaxImportRows 单次导入的行数上限（前端亦按此预检，服务端兜底）。
 const MaxImportRows = 2000
