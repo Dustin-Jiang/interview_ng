@@ -237,6 +237,10 @@ var (
 // 是同一口径的镜像，只用于是否显示入口（服务端永远复核）。
 const MessageModifyWindow = 2 * time.Minute
 
+// MaxMessageContentLen 单条消息（实时与归档共用）正文的字节上限。
+// 与 WS 帧限 maxMsgSize 同档：REST 录入路径没有 WS 帧限兜底，此处统一把关。
+const MaxMessageContentLen = 4096
+
 // MaxImportRows 单次导入的行数上限（前端亦按此预检，服务端兜底）。
 const MaxImportRows = 2000
 

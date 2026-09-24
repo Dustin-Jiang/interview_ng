@@ -165,7 +165,9 @@ func (s *MemStateStore) ListCandidates(ctx context.Context, status dsmodel.Candi
 		qdb = qdb.Where("status = ?", status)
 	}
 	if q != "" {
-		like := "%" + q + "%"
+		// 用户输入里的 %/_ 会改变 LIKE 语义（"%50%" 变通配），按字面量转义。
+		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
+		like := "%" + escaped + "%"
 		qdb = qdb.Where("student_no LIKE ? OR name LIKE ? OR profile LIKE ?", like, like, like)
 	}
 	var out []*dsmodel.Candidate
@@ -517,7 +519,7 @@ func (s *MemStateStore) EditMessage(ctx context.Context, candidateID, messageID,
 		return nil, err
 	}
 	text := strings.TrimSpace(content)
-	if text == "" {
+	if text == "" || len(text) > MaxMessageContentLen {
 		return nil, ErrInvalidContent
 	}
 	if err := s.db.WithContext(ctx).Model(&dsmodel.Message{}).Where("id = ?", m.ID).
@@ -660,6 +662,9 @@ func (s *MemStateStore) modifiableMessageLocked(ctx context.Context, candidateID
 func (s *MemStateStore) appendMessageLocked(ctx context.Context, roomID, candidateID, senderID uint64, content string) (*Event, error) {
 	text := strings.TrimSpace(content)
 	if text == "" {
+		return nil, ErrInvalidContent
+	}
+	if len(text) > MaxMessageContentLen {
 		return nil, ErrInvalidContent
 	}
 	msg := &dsmodel.Message{CandidateID: candidateID, SenderID: &senderID, Content: text}
@@ -829,7 +834,9 @@ func (s *MemStateStore) ListUsers(ctx context.Context, q string, limit, offset i
 	}
 	qdb := s.db.WithContext(ctx).Model(&dsmodel.User{})
 	if q != "" {
-		like := "%" + q + "%"
+		// 与 ListCandidates 同一转义口径。
+		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
+		like := "%" + escaped + "%"
 		qdb = qdb.Where("username LIKE ? OR name LIKE ?", like, like)
 	}
 	var out []*dsmodel.User
@@ -1308,6 +1315,9 @@ func (s *MemStateStore) SetBidStep(ctx context.Context, step int) error {
 	if step < 1 {
 		return &Error{Code: "invalid_bid_step", Msg: "出价步长须为正整数"}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 锁内补建：与持锁的 SetSystemStatus 并发时不再双重插入单行表。
 	if _, err := s.ensureSystemStatus(ctx); err != nil {
 		return err
 	}
