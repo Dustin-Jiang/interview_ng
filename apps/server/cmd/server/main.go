@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
+	"github.com/gin-gonic/gin"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -48,7 +49,13 @@ func main() {
 	}
 
 	store := state.NewMemStateStore(db)
-	am := auth.New(envOr("JWT_SECRET", "dev-secret-change-me"), 7*24*time.Hour, db, cache, store)
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" || secret == "dev-secret-change-me" {
+		// 占位密钥下任何知道仓库的人都能离线伪造合法 JWT：内网开发可接受，生产必须显式配置。
+		log.Println("警告: JWT_SECRET 未设置或等于开发占位值，任何人可伪造 token；仅限内网/开发使用")
+		secret = "dev-secret-change-me"
+	}
+	am := auth.New(secret, 7*24*time.Hour, db, cache, store)
 
 	b := broadcast.New()
 	svc := service.New(store, b)
@@ -67,10 +74,11 @@ func main() {
 		log.Printf("serving web assets from %s", root)
 	}
 
+	log.Println("默认 admin 账号: admin（口令由 ADMIN_INIT_PASSWORD 指定）")
 	addr := envOr("ADDR", ":8080")
 	log.Printf("server listening on %s", addr)
-	log.Printf("默认 admin 账号: admin / %s（可用 ADMIN_INIT_PASSWORD 覆盖）", seed.DefaultAdminPassword())
-	if err := r.Run(addr); err != nil {
+	srv := &http.Server{Addr: addr, Handler: r, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("run: %v", err)
 	}
 }

@@ -193,11 +193,3 @@ func seedAdmin(ctx context.Context, db *gorm.DB) error {
 	}
 	return db.WithContext(ctx).Create(&dsmodel.UserRole{UserID: admin.ID, RoleID: role.ID}).Error
 }
-
-// DefaultAdminPassword 返回默认 admin 密码（供日志提示）。
-func DefaultAdminPassword() string {
-	if p := os.Getenv("ADMIN_INIT_PASSWORD"); p != "" {
-		return p
-	}
-	return "admin"
-}
