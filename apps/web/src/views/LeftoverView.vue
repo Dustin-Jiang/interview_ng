@@ -19,6 +19,7 @@ import { useLeftover } from '@/composables/useLeftover'
 import { useRosterHotkeys } from '@/composables/useRosterHotkeys'
 import { useRosterRouteSync } from '@/composables/useRosterRouteSync'
 import { useRosterSelection } from '@/composables/useRosterSelection'
+import { sortRoster } from '@/domain/status'
 import { isActivatableElement } from '@/lib/dom'
 import type { Candidate } from '@/models'
 
@@ -71,11 +72,14 @@ const settledIds = computed(() => new Set(resultsByCandidate.value.keys()))
 
 const filtered = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  return candidates.value.filter((c) => {
-    if (!showSettled.value && settledIds.value.has(c.id)) return false
-    if (!kw) return true
-    return c.student_no.includes(kw) || c.name.toLowerCase().includes(kw)
-  })
+  // 与 RosterList 内部同一份 sortRoster（对已序输入幂等）：↑/↓ 切换顺序与左侧列表一致。
+  return sortRoster(
+    candidates.value.filter((c) => {
+      if (!showSettled.value && settledIds.value.has(c.id)) return false
+      if (!kw) return true
+      return c.student_no.includes(kw) || c.name.toLowerCase().includes(kw)
+    }),
+  )
 })
 
 const emptyText = computed(() => {

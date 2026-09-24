@@ -33,7 +33,7 @@ import {
 } from '@/models'
 import { formatDateTime } from '@/lib/format'
 import { toastError } from '@/lib/toast'
-import { ROSTER_BOARD_EVENTS } from '@/domain/status'
+import { sortRoster, ROSTER_BOARD_EVENTS } from '@/domain/status'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -72,18 +72,24 @@ const filterOpen = ref(false)
 /** 是否处于任一筛选激活态（用于统计条与空态文案）。 */
 const hasFilter = computed(() => Boolean(keyword.value.trim() || statusFilter.value))
 
-/** 客户端过滤后的名册（关键词 + 状态）。 */
+/**
+ * 客户端-filtered 名册（关键词 + 状态）。
+ * 直接按 `sortRoster` 的展示顺序排好——上/下切换（useRosterSelection）、RosterPager
+ * 与 RosterList 内部的排序是同一份（sortRoster 对已序输入幂等），↑/↓ 切换顺序才和左侧列表一致。
+ */
 const filtered = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  return candidates.value.filter((c) => {
-    if (statusFilter.value && c.status !== statusFilter.value) return false
-    if (!kw) return true
-    return (
-      c.student_no.includes(kw) ||
-      c.name.toLowerCase().includes(kw) ||
-      (c.profile ?? '').toLowerCase().includes(kw)
-    )
-  })
+  return sortRoster(
+    candidates.value.filter((c) => {
+      if (statusFilter.value && c.status !== statusFilter.value) return false
+      if (!kw) return true
+      return (
+        c.student_no.includes(kw) ||
+        c.name.toLowerCase().includes(kw) ||
+        (c.profile ?? '').toLowerCase().includes(kw)
+      )
+    }),
+  )
 })
 
 function clearFilters() {
