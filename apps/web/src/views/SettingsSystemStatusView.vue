@@ -16,6 +16,7 @@ import { admissionApi, candidateApi, departmentApi, leftoverApi, systemStatusApi
 import { useBoardRefresh } from '@/composables/useBoardChannel'
 import { useSystemStatus } from '@/composables/useSystemStatus'
 import { buildAdmissionPreview, type AdmissionPreviewRow } from '@/domain/admission'
+import { groupBidsByCandidate } from '@/domain/leftover'
 import { ADMISSION_PRESENTATION, PHASE_PRESENTATION, admissionOutcomePresentation } from '@/presenters/status'
 import type {
   SystemPhase,
@@ -161,16 +162,7 @@ const inAuctionPhase = computed(
 )
 
 /** 候选人 → 各部门出价（金额降序，管理端可见全部门）。 */
-const bidsByCandidate = computed(() => {
-  const map = new Map<number, Bid[]>()
-  for (const b of previewBids.value) {
-    const list = map.get(b.candidate_id) ?? []
-    list.push(b)
-    map.set(b.candidate_id, list)
-  }
-  for (const list of map.values()) list.sort((x, y) => y.amount - x.amount)
-  return map
-})
+const bidsByCandidate = computed(() => groupBidsByCandidate(previewBids.value))
 
 /** 候选人 → 结算预览（当前最高出价部门；resolved 表示已正式落库）。 */
 const finalsByCandidate = computed(

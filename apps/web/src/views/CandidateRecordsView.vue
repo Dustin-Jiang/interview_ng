@@ -33,6 +33,7 @@ import {
 } from '@/models'
 import { formatDateTime } from '@/lib/format'
 import { toastError } from '@/lib/toast'
+import { ROSTER_BOARD_EVENTS } from '@/domain/status'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -201,15 +202,7 @@ function reloadMessages() {
 }
 
 // ---- 实时刷新（看板通道）：名册状态/CRUD → 防抖重拉；选中候选人有新消息 → 增量补拉 ----
-const BOARD_ROSTER_EVENTS = [
-  'candidate_signed_in',
-  'candidate_assigned',
-  'candidate_created',
-  'candidate_updated',
-  'candidate_deleted',
-  'room_phase_changed',
-]
-useBoardRefresh(BOARD_ROSTER_EVENTS, () => void load())
+useBoardRefresh(ROSTER_BOARD_EVENTS, () => void load())
 useBoardChannel().subscribe((ev) => {
   // 归档的任何变动（新增 / 编辑 / 撤回 / 表情回复）都以重拉收口：服务端是唯一权威。
   if (

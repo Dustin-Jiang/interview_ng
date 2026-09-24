@@ -22,6 +22,7 @@ import {
 } from '@/models'
 import { PHASE_PRESENTATION } from '@/presenters/status'
 import { toastError } from '@/lib/toast'
+import { groupBidsByCandidate } from '@/domain/leftover'
 
 /** 捡漏池阶段：录取阶段的候选人（待录取 / 已录取 / 面试已结束兜底）。 */
 const LEFTOVER_POOL_STAGES: Record<string, true> = {
@@ -107,16 +108,9 @@ export function useLeftover(): UseLeftover {
   })
 
   /** 管理端视图：候选人 → 全部门出价（按金额降序）。 */
-  const allBidsByCandidate = computed(() => {
-    const map = new Map<number, Bid[]>()
-    for (const b of bidsAsync.data.value?.items ?? []) {
-      const list = map.get(b.candidate_id) ?? []
-      list.push(b)
-      map.set(b.candidate_id, list)
-    }
-    for (const list of map.values()) list.sort((x, y) => y.amount - x.amount)
-    return map
-  })
+  const allBidsByCandidate = computed(() =>
+    groupBidsByCandidate(bidsAsync.data.value?.items ?? []),
+  )
 
   /** 已成交结果按候选人索引（唯一录取确定才返回）。 */
   const resultsByCandidate = computed(

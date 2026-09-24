@@ -17,7 +17,7 @@ import { useCandidates } from '@/composables/useCandidates'
 import { useAuth } from '@/composables/useAuth'
 import { useBoardChannel, useBoardRefresh } from '@/composables/useBoardChannel'
 import { useRoomNames } from '@/composables/useRoomNames'
-import { sortWaitingBoard } from '@/domain/status'
+import { ROSTER_BOARD_EVENTS, sortWaitingBoard } from '@/domain/status'
 import { UNNAMED_ROOM_LABEL } from '@/domain/room'
 import { STATUS_PRESENTATION } from '@/presenters/status'
 import { PERMISSIONS, type Candidate } from '@/models'
@@ -139,17 +139,7 @@ const columns: ColumnDef<DataTableFeatures, Candidate>[] = columnHelper.columns(
 ])
 
 // ---- 实时刷新：看板通道事件（签到/拉取/阶段变化/CRUD）→ 防抖重拉名单 ----
-useBoardRefresh(
-  [
-    'candidate_signed_in',
-    'candidate_assigned',
-    'candidate_created',
-    'candidate_updated',
-    'candidate_deleted',
-    'room_phase_changed',
-  ],
-  () => void load(),
-)
+useBoardRefresh(ROSTER_BOARD_EVENTS, () => void load())
 
 // 叫号：拉取事件载荷为 {CandidateID, RoomID}，直接入队（房间名由 useRoomNames 自持刷新）。
 const { subscribe } = useBoardChannel()

@@ -141,3 +141,16 @@ export function sortByArrival<T extends { id: number; checked_in_at?: string | n
 ): T[] {
   return items.slice().sort((a, b) => arrivalAt(a) - arrivalAt(b) || a.id - b.id)
 }
+
+/**
+ * 名册/大屏都需要「看板通道」上这些事件触发防抖重拉——候选人签到、拉取、增删改与房间阶段变化。
+ * 两处共用一份定义，避免事件清单漂移。
+ */
+export const ROSTER_BOARD_EVENTS = [
+  'candidate_signed_in',
+  'candidate_assigned',
+  'candidate_created',
+  'candidate_updated',
+  'candidate_deleted',
+  'room_phase_changed',
+] as const
