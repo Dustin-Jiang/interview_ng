@@ -7,7 +7,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { Building2, FileSpreadsheet, Gauge, KeyRound, ShieldCheck, UserCog, UsersRound } from 'lucide-vue-next'
+import { Activity, Building2, FileSpreadsheet, Gauge, KeyRound, ShieldCheck, UserCog, UsersRound } from 'lucide-vue-next'
 
 import { useAuth } from '@/composables/useAuth'
 import { PERMISSIONS } from '@/models'
@@ -38,6 +38,7 @@ const sections = computed(() => {
     items.push({ name: 'settings-roles', label: '角色', icon: ShieldCheck })
     items.push({ name: 'settings-departments', label: '部门', icon: Building2 })
     items.push({ name: 'settings-system-status', label: '系统状态', icon: Gauge })
+    items.push({ name: 'settings-observability', label: '可观测性', icon: Activity })
   }
   return items
 })

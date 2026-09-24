@@ -4,7 +4,7 @@
  * 鉴权：请求拦截器自动携带 Authorization: Bearer token；401 时回调统一登出（由 useAuth 注册）。
  */
 import axios, { type AxiosRequestConfig } from 'axios'
-import type { AdmissionStatus, AuthenticationOptions, Bid, Candidate, CandidateAdmission, CandidateImportReport, CandidateImportRow, CandidateInfoPayload, CandidatePreferencesPayload, CandidateStatus, Department, LeftoverFinalResult, LeftoverOverview, LeftoverResult, Message, OidcConfig, OidcConfigPayload, OidcProbeResult, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
+import type { AdmissionStatus, AuthenticationOptions, Bid, Candidate, CandidateAdmission, CandidateImportReport, CandidateImportRow, CandidateInfoPayload, CandidatePreferencesPayload, CandidateStatus, Department, LeftoverFinalResult, LeftoverOverview, LeftoverResult, Message, ObservabilityConfig, ObservabilityConfigPayload, ObservabilitySaveResult, OidcConfig, OidcConfigPayload, OidcProbeResult, Permission, Role, Room, SystemPhase, SystemStatus, User, UserProfile } from '@/models'
 
 /** 401 处理器：由 useAuth 注册（登出 + 跳登录页），避免循环依赖。 */
 let onUnauthorized: (() => void) | null = null
@@ -128,6 +128,16 @@ export const oidcApi = {
   /** 用回调带回的一次性登录码换取会话。 */
   createSession(code: string): Promise<UserProfile & { token: string }> {
     return post('/oidc/sessions', { code })
+  },
+}
+
+export const observabilityApi = {
+  config(): Promise<ObservabilityConfig> {
+    return request('/observability/config')
+  },
+  /** 保存即生效（服务端重配 OTLP 推送）；密码语义与 OIDC 密钥一致。 */
+  updateConfig(body: ObservabilityConfigPayload): Promise<ObservabilitySaveResult> {
+    return put('/observability/config', body)
   },
 }
 

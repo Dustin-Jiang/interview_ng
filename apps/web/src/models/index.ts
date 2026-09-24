@@ -284,6 +284,34 @@ export interface AuthenticationOptions {
   oidc: { enabled: boolean }
 }
 
+/** 可观测性配置（GET /observability/config；密码只下发 password_set，不回收明文）。 */
+export interface ObservabilityConfig {
+  enabled: boolean
+  endpoint: string
+  database: string
+  username: string
+  password_set: boolean
+  service_name: string
+  updated_at: string
+}
+
+/** PUT /observability/config 请求体。 */
+export interface ObservabilityConfigPayload {
+  enabled: boolean
+  endpoint: string
+  database: string
+  username: string
+  /** 省略/undefined = 保持不变；"" = 清除；非空 = 覆盖。 */
+  password?: string
+  service_name: string
+}
+
+/** 保存可观测性配置的响应（applied=false = 已保存但观测当前处于关闭/失败态）。 */
+export interface ObservabilitySaveResult {
+  ok: boolean
+  applied: boolean
+}
+
 /** 连通性探测结果（POST /oidc/probes）。 */
 export interface OidcProbeResult {
   issuer: string

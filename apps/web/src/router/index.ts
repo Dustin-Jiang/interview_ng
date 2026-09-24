@@ -101,7 +101,11 @@ export const router = createRouter({
           component: () => import('@/views/SettingsSystemStatusView.vue'),
         },
         {
-          // 登录认证（OIDC 单点登录配置：连接参数 + JMESPath 组→角色规则）。
+          path: 'observability',
+          name: 'settings-observability',
+          component: () => import('@/views/SettingsObservabilityView.vue'),
+        },
+        {
           path: 'authentication',
           name: 'settings-authentication',
           component: () => import('@/views/SettingsAuthenticationView.vue'),
