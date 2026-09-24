@@ -194,7 +194,11 @@ func (h *HTTPServer) listCandidates(c *gin.Context) {
 }
 
 func (h *HTTPServer) getCandidate(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	out, err := h.st.GetCandidate(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
@@ -206,7 +210,11 @@ func (h *HTTPServer) getCandidate(c *gin.Context) {
 // listCandidateMessages 返回候选人的历史面试记录（消息按候选人归档，
 // 与房间解绑无关：候选人完成/换房后仍可回看全过程）。
 func (h *HTTPServer) listCandidateMessages(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if _, err := h.st.GetCandidate(c.Request.Context(), id); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
@@ -228,7 +236,11 @@ type appendCandidateMessageReq struct {
 // 不需要房间与在场成员，故面试结档（房间已解绑）后仍可补充；权限与房间聊天一致（rooms.chat）。
 // 响应只回新记录 id，内容由前端按归档重拉（与 GET /candidates/:id/messages 同一权威口径）。
 func (h *HTTPServer) appendCandidateMessage(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req appendCandidateMessageReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -245,8 +257,16 @@ func (h *HTTPServer) appendCandidateMessage(c *gin.Context) {
 
 // editCandidateMessage 编辑自己刚发出的记录（2 分钟内，仅发送者本人；服务端复核窗口与归属）。
 func (h *HTTPServer) editCandidateMessage(c *gin.Context) {
-	candID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	msgID, _ := strconv.ParseUint(c.Param("messageId"), 10, 64)
+	candID, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	msgID, err := parseIDParam(c, "messageId")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req appendCandidateMessageReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -262,8 +282,16 @@ func (h *HTTPServer) editCandidateMessage(c *gin.Context) {
 
 // deleteCandidateMessage 撤回自己刚发出的记录（物理删除；窗口与归属同上）。
 func (h *HTTPServer) deleteCandidateMessage(c *gin.Context) {
-	candID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	msgID, _ := strconv.ParseUint(c.Param("messageId"), 10, 64)
+	candID, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	msgID, err := parseIDParam(c, "messageId")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := h.svc.DeleteMessage(c.Request.Context(), candID, msgID, auth.UserID(c)); err != nil {
 		status, msg := stateErr(err)
 		c.JSON(status, gin.H{"error": msg})
@@ -276,10 +304,18 @@ func (h *HTTPServer) deleteCandidateMessage(c *gin.Context) {
 // 表情取自路径段（前端按 URL 编码提交），服务端按 model.ReactionEmojis 复核。
 func (h *HTTPServer) setMessageReaction(on bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		candID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-		msgID, _ := strconv.ParseUint(c.Param("messageId"), 10, 64)
+		candID, err := parseIDParam(c, "id")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		msgID, err := parseIDParam(c, "messageId")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		emoji := c.Param("emoji")
-		err := h.svc.SetMessageReaction(c.Request.Context(), candID, msgID, auth.UserID(c), emoji, on)
+		err = h.svc.SetMessageReaction(c.Request.Context(), candID, msgID, auth.UserID(c), emoji, on)
 		if err != nil {
 			status, msg := stateErr(err)
 			c.JSON(status, gin.H{"error": msg})
@@ -316,6 +352,9 @@ type importCandidatesReq struct {
 // importCandidates 批量导入候选人：请求体只承载"已解析并映射好"的行，
 // 服务端负责校验、单事务全或无落库与行级报告（解析在浏览器内完成）。
 func (h *HTTPServer) importCandidates(c *gin.Context) {
+	// 2000 行 × 每行数 KB ≈ 数 MB：先用 MaxBytesReader 限住整包绑定（内存 DoS 面），
+	// 行数上限由 store 层兜底。8MB 远超 2000 行实际体量的数倍，误伤面很小。
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8<<20)
 	var req importCandidatesReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -336,7 +375,11 @@ func (h *HTTPServer) importCandidates(c *gin.Context) {
 }
 
 func (h *HTTPServer) checkin(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := h.svc.CheckIn(c.Request.Context(), id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -350,7 +393,11 @@ type updateCandidateReq struct {
 }
 
 func (h *HTTPServer) updateCandidate(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req updateCandidateReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
@@ -374,13 +421,17 @@ type updateCandidatePreferencesReq struct {
 
 // updateCandidatePreferences 修改候选人志愿与调剂（独立权限，不动其他资料）。
 func (h *HTTPServer) updateCandidatePreferences(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req updateCandidatePreferencesReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	err := h.svc.UpdateCandidatePreferences(c.Request.Context(), id, state.CandidatePreferences{
+	err = h.svc.UpdateCandidatePreferences(c.Request.Context(), id, state.CandidatePreferences{
 		FirstChoice:  req.FirstChoice,
 		SecondChoice: req.SecondChoice,
 		AcceptAdjust: req.AcceptAdjust,
@@ -394,7 +445,11 @@ func (h *HTTPServer) updateCandidatePreferences(c *gin.Context) {
 }
 
 func (h *HTTPServer) deleteCandidate(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := h.svc.DeleteCandidate(c.Request.Context(), id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -407,7 +462,11 @@ type resetStatusReq struct {
 }
 
 func (h *HTTPServer) resetCandidateStatus(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req resetStatusReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -424,7 +483,11 @@ func (h *HTTPServer) resetCandidateStatus(c *gin.Context) {
 //---- 房间 ----
 
 func (h *HTTPServer) getRoom(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	out, err := h.st.GetRoom(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
@@ -468,7 +531,11 @@ type renameRoomReq struct {
 
 // renameRoom 修改房间名（PATCH 部分更新；空串=清除命名）。
 func (h *HTTPServer) renameRoom(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req renameRoomReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -483,7 +550,11 @@ func (h *HTTPServer) renameRoom(c *gin.Context) {
 }
 
 func (h *HTTPServer) deleteRoom(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := h.svc.DeleteRoom(c.Request.Context(), id); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -496,7 +567,11 @@ type addMemberReq struct {
 }
 
 func (h *HTTPServer) addRoomMember(c *gin.Context) {
-	roomID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	roomID, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req addMemberReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.UserID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id required"})
@@ -510,8 +585,16 @@ func (h *HTTPServer) addRoomMember(c *gin.Context) {
 }
 
 func (h *HTTPServer) removeRoomMember(c *gin.Context) {
-	roomID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	userID, _ := strconv.ParseUint(c.Param("userId"), 10, 64)
+	roomID, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, err := parseIDParam(c, "userId")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := h.svc.RemoveRoomMember(c.Request.Context(), roomID, userID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -524,7 +607,11 @@ type pullCandidateReq struct {
 }
 
 func (h *HTTPServer) pullCandidate(c *gin.Context) {
-	roomID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	roomID, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req pullCandidateReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.CandidateID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "candidate_id required"})
@@ -596,7 +683,11 @@ type updateUserReq struct {
 }
 
 func (h *HTTPServer) updateUser(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req updateUserReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -615,7 +706,11 @@ func (h *HTTPServer) updateUser(c *gin.Context) {
 }
 
 func (h *HTTPServer) deleteUser(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	me := auth.UserID(c)
 	if me == id {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不能删除自己"})
@@ -634,7 +729,11 @@ type resetPasswordReq struct {
 }
 
 func (h *HTTPServer) resetUserPassword(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req resetPasswordReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.NewPassword == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "new_password required"})
@@ -696,7 +795,11 @@ func (h *HTTPServer) createRole(c *gin.Context) {
 }
 
 func (h *HTTPServer) updateRole(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req roleReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
@@ -720,7 +823,11 @@ func (h *HTTPServer) updateRole(c *gin.Context) {
 }
 
 func (h *HTTPServer) deleteRole(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := h.svc.DeleteRole(c.Request.Context(), id); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -772,7 +879,11 @@ func (h *HTTPServer) createDepartment(c *gin.Context) {
 }
 
 func (h *HTTPServer) updateDepartment(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req departmentReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
@@ -794,7 +905,11 @@ func (h *HTTPServer) updateDepartment(c *gin.Context) {
 }
 
 func (h *HTTPServer) deleteDepartment(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := h.svc.DeleteDepartment(c.Request.Context(), id); err != nil {
 		status, code := stateErr(err)
 		c.JSON(status, gin.H{"error": code})
@@ -885,7 +1000,11 @@ type upsertAdmissionReq struct {
 }
 
 func (h *HTTPServer) upsertCandidateAdmission(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("candidateId"), 10, 64)
+	id, err := parseIDParam(c, "candidateId")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	uid := auth.UserID(c)
 	var req upsertAdmissionReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -911,9 +1030,23 @@ func (h *HTTPServer) upsertCandidateAdmission(c *gin.Context) {
 
 //---- helpers ----
 
+// parseIDParam 解析路径参数中的资源 ID：必须是正整数（0 视为非法，避免 "abc" 静默变 0 后
+// 去库里查一轮 not_found）。失败返回业务错误，调用方回 400。
+func parseIDParam(c *gin.Context, name string) (uint64, error) {
+	id, err := strconv.ParseUint(c.Param(name), 10, 64)
+	if err != nil || id == 0 {
+		return 0, &state.Error{Code: "invalid_id", Msg: "路径参数必须是正整数"}
+	}
+	return id, nil
+}
+
+// statusLiteral 把查询参数 status 映射为候选人七档之一；未知/空值返回空串（= 不过滤）。
+// 七档必须齐全：漏档会导致该档的筛选被静默丢弃。
 func statusLiteral(s string) dsmodel.CandidateStatus {
-	switch s {
-	case "NOT_CHECKED_IN", "CHECKED_IN_PENDING_ASSIGN", "ASSIGNED", "IN_PROGRESS", "COMPLETED":
+	switch dsmodel.CandidateStatus(s) {
+	case dsmodel.StatusNotCheckedIn, dsmodel.StatusCheckedInPendingAssign,
+		dsmodel.StatusAssigned, dsmodel.StatusInProgress, dsmodel.StatusCompleted,
+		dsmodel.StatusAdmissionPending, dsmodel.StatusAdmitted:
 		return dsmodel.CandidateStatus(s)
 	default:
 		return ""
@@ -1004,7 +1137,11 @@ type upsertLeftoverBidReq struct {
 
 // upsertLeftoverBid 记录/覆盖本部门对候选人的出价（仅捡漏阶段、受预算约束）。
 func (h *HTTPServer) upsertLeftoverBid(c *gin.Context) {
-	candidateID, _ := strconv.ParseUint(c.Param("candidateId"), 10, 64)
+	candidateID, err := parseIDParam(c, "candidateId")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var req upsertLeftoverBidReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
