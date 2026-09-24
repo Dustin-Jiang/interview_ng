@@ -6,7 +6,7 @@ import type { Message, MessageReaction } from '@/models'
 import type { ChanEvent } from '@/api/ws-model'
 
 /** 后端 message_appended 事件 Data 字段（Go 无 tag 结构，字段名首字母大写）。 */
-export interface AppendedEventData {
+interface AppendedEventData {
   RoomID?: number
   CandidateID?: number
   SenderID?: number
@@ -89,7 +89,8 @@ export function replaceMessages(
 
 /** 追加一条新消息（不可变），返回新数组；已存在则原样返回。 */
 export function appendMessage(messages: readonly Message[], msg: Message): Message[] {
-  return hasMessage(messages, msg.id) ? [...messages] : mergeMessages(messages, [msg])
+  // mergeMessages 幂等去重：已存在则等价于原样（内容一致）。
+  return mergeMessages(messages, [msg])
 }
 
 /** 面试记录的编辑/撤回窗口（毫秒）：与后端 `state.MessageModifyWindow` 同一口径。 */

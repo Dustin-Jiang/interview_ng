@@ -26,8 +26,6 @@ import type { CandidateImportReport, CandidateImportRowError } from '@/models'
 
 /** 最后一次映射表达式的本地存储键（前端偏好，不入库）。 */
 const MAPPING_KEY = 'interview_ng_import_mapping'
-/** 已移除的命名预设键（历史数据，读到即清理）。 */
-const LEGACY_PRESET_KEY = 'interview_ng_import_presets'
 /** 表达式输入防抖（与列表刷新同一档位）。 */
 const DEBOUNCE_MS = 300
 /** 步骤总数（① 选文件 ② 映射+预览 ③ 确认提交）。 */
@@ -68,7 +66,6 @@ export interface UseCandidateImport {
 function readStoredMapping(): CandidateImportMapping {
   const fallback = emptyMapping()
   try {
-    localStorage.removeItem(LEGACY_PRESET_KEY)
     const raw = localStorage.getItem(MAPPING_KEY)
     if (!raw) return fallback
     const parsed: unknown = JSON.parse(raw)

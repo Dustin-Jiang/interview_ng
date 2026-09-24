@@ -7,7 +7,7 @@
 export const UNNAMED_ROOM_LABEL = '未命名'
 
 /** 取值形状：任何带 name 的房间快照（`Room` 或其子集）都可直接传入。 */
-export type RoomLabelSource = { name?: string | null }
+type RoomLabelSource = { name?: string | null }
 
 /**
  * 房间展示名：入参是**房间对象**（不是 name 字符串），未命名 → 「未命名」。

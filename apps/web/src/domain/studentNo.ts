@@ -5,7 +5,7 @@
  * 前端校验只做即时反馈，权威判定仍在服务端（唯一性也只有服务端能定）。
  */
 
-export const STUDENT_NO_MAX_LEN = 64
+const STUDENT_NO_MAX_LEN = 64
 
 /** 归一化并校验学号：合法返回归一化值，否则返回中文原因。 */
 export function normalizeStudentNo(raw: string): { value: string } | { error: string } {

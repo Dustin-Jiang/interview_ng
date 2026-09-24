@@ -22,7 +22,7 @@ export const IMPORT_MAX_ROWS = 2000
 export const IMPORT_MAX_BYTES = 5 * 1024 * 1024
 
 /** 源表的一行：行号（表头为第 1 行，数据自第 2 行起）+ 行对象。 */
-export interface ImportRow {
+interface ImportRow {
   line: number
   values: Record<string, unknown>
 }
@@ -105,7 +105,7 @@ export function emptyOutcome(): ImportOutcome {
  * 编译后的 JMESPath 表达式节点：依赖未导出该类型，这里按求值接口的参数签名取名，
  * 供「编译一次、多行复用」的映射流程与调用方共用。
  */
-export type CompiledExpression = Parameters<typeof TreeInterpreter.search>[0]
+type CompiledExpression = Parameters<typeof TreeInterpreter.search>[0]
 
 /** 单元格取值：空 → null；日期 → ISO 字符串（UTC 解释）；其余保留原始类型。 */
 function cellValue(cell: unknown): unknown {
