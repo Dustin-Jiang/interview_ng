@@ -143,6 +143,24 @@ export const observabilityApi = {
 
 // ---- 候选人 ----
 
+/** 逐页拉全的通用实现（后端单页上限 200）：url 决定取哪一批名单。 */
+async function listAllPages(
+  url: string,
+  params?: { status?: CandidateStatus; q?: string },
+): Promise<{ items: Candidate[] }> {
+  const PAGE_SIZE = 200
+  const items: Candidate[] = []
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const page = await request<{ items: Candidate[] }>({
+      url,
+      params: { ...params, limit: PAGE_SIZE, offset },
+    })
+    items.push(...page.items)
+    if (page.items.length < PAGE_SIZE) break
+  }
+  return { items }
+}
+
 export const candidateApi = {
   list(params?: {
     status?: CandidateStatus
@@ -159,17 +177,15 @@ export const candidateApi = {
    * 当全集用的页面（名册 / 拉取池 / 预算统计）都必须走这里，否则会被静默截断。
    */
   async listAll(params?: { status?: CandidateStatus; q?: string }): Promise<{ items: Candidate[] }> {
-    const PAGE_SIZE = 200
-    const items: Candidate[] = []
-    for (let offset = 0; ; offset += PAGE_SIZE) {
-      const page = await request<{ items: Candidate[] }>({
-        url: '/candidates',
-        params: { ...params, limit: PAGE_SIZE, offset },
-      })
-      items.push(...page.items)
-      if (page.items.length < PAGE_SIZE) break
-    }
-    return { items }
+    return listAllPages('/candidates', params)
+  },
+
+  /**
+   * 候场大屏名单：只含「未定局」的档位（面试已结束及其后的录取档不在其中——它们各有自己的页面），
+   * 避免大屏把已定局的多数行也逐页拉全。分页与 `listAll` 同口径。
+   */
+  async listWaiting(params?: { q?: string }): Promise<{ items: Candidate[] }> {
+    return listAllPages('/board/candidates', params)
   },
 
   get(id: number): Promise<Candidate> {
@@ -187,6 +203,14 @@ export const candidateApi = {
 
   checkin(id: number): Promise<{ ok: boolean }> {
     return put(`/candidates/${id}/check-in`)
+  },
+  /**
+   * 候场队列手动调序：direction = "up" | "down"（只对「已签到待分配」档有效，
+   * 与同档相邻一位交换，首次调序固化整档序号）。
+   * moved = false 表示已在档首/档尾（幂等 no-op，不是错误）。
+   */
+  setWaitingPriority(id: number, direction: 'up' | 'down'): Promise<{ ok: boolean; moved: boolean }> {
+    return put(`/candidates/${id}/priority`, { direction })
   },
 
   update(id: number, body: CandidateInfoPayload): Promise<{ ok: boolean }> {

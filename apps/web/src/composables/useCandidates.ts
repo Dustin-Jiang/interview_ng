@@ -3,6 +3,9 @@
  * 组合 useAsync 完成"加载候选人"；增/签/编辑/删除/重置等 action 以 promise 形式向下游组合。
  * 关键词检索（由后端执行）覆盖学号 / 姓名 / 简介。
  * 分配已改为"房间内拉取"（PUT /api/rooms/:id/candidate），本组合式不再提供 assign。
+ *
+ * `board: true` 走候场大屏名单（`GET /api/board/candidates`：只含未定局的档位）——
+ * 大屏按状态分档展示在流程中的人，没必要把已定局的录取档也逐页拉全；此时状态筛选无意义（忽略）。
  */
 import { computed, ref, type Ref } from 'vue'
 import { candidateApi } from '@/api/http'
@@ -36,17 +39,20 @@ export interface UseCandidates {
   resetStatus: (id: number, status: CandidateStatus) => Promise<void>
 }
 
-export function useCandidates(): UseCandidates {
+export function useCandidates(options?: { board?: boolean }): UseCandidates {
   const statusFilter = ref<CandidateStatus | ''>('')
   const keyword = ref('')
+  const board = options?.board === true
 
   // loader 闭包捕获筛选条件 —— 纯函数式地按当前条件查后端；
-  // listAll 逐页拉全（后端默认只给 50 条），全部行交给 DataTable 客户端分页。
+  // 两条路径都逐页拉全（后端默认只给 50 条），全部行交给 DataTable 客户端分页。
   const async = useAsync(() =>
-    candidateApi.listAll({
-      status: statusFilter.value || undefined,
-      q: keyword.value || undefined,
-    }),
+    board
+      ? candidateApi.listWaiting({ q: keyword.value || undefined })
+      : candidateApi.listAll({
+          status: statusFilter.value || undefined,
+          q: keyword.value || undefined,
+        }),
   )
 
   const candidates = computed<readonly Candidate[]>(() => async.data.value?.items ?? [])

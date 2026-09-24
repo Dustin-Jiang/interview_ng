@@ -67,6 +67,8 @@ export interface Candidate {
   interview_completed_at: string | null
   /** 进入「已签到待分配」的时刻（null = 不在排队中）；房间拉取列表据此先来后到排序。 */
   checked_in_at: string | null
+  /** 候场大屏手动优先级序号（null = 未调整，档内按 checked_in_at 先后；首次调序后整档固化成 1..n）。 */
+  waiting_priority: number | null
   /** 本次面试所在房间（面试结束时记录；房间被删除后为 null），名字快照见 interview_room_name。 */
   interview_room_id: number | null
   /** 面试所在房间当时的名字快照（空串 = 当时未命名）；房间改名/删除后仍按它展示。 */

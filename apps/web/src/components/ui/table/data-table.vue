@@ -11,6 +11,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
  * 卡片模式把同一行的单元格按「标签 + 值」纵向罗列，一屏内读完一条记录。
  * 列的约定（全仓库统一）：id 为 `actions` 的列是操作区，卡片里整行铺在底部；
  * 有字符串列头的列作字段标签；无列头的展示列并入卡片标题行右侧（不丢信息）。
+ * 卡片标题取「首个有字符串列头的列」（学号/姓名/名称这类标识列），故排名徽章这类
+ * 辅助展示列应留空列头：它不会顶掉标识列当标题，而是并到标题行右侧（桌面端表头为空，值自明）。
  */
 const props = defineProps<{
   columns: ColumnDef<DataTableFeatures, any>[]
@@ -37,23 +39,31 @@ function isActionCell(cell: Cell<DataTableFeatures, any>): boolean {
   return cell.column.id === 'actions'
 }
 
-/** 首个单元格（学号 / 姓名 / 名称这类标识列）作卡片标题。 */
-function titleCell(cells: Cell<DataTableFeatures, any>[]): Cell<DataTableFeatures, any> | undefined {
-  return cells[0]
+/** 卡片标题列的下标：首个有字符串列头的列（学号/姓名/名称这类标识列）；都没有则退回首列。 */
+function titleIndex(cells: Cell<DataTableFeatures, any>[]): number {
+  const idx = cells.findIndex((c) => !!labelOf(c))
+  return idx < 0 ? 0 : idx
 }
 
-/** 无列头、非操作列的单元格（如结果徽章）：并到标题行右侧。 */
+/** 卡片标题单元格。 */
+function titleCell(cells: Cell<DataTableFeatures, any>[]): Cell<DataTableFeatures, any> | undefined {
+  return cells[titleIndex(cells)]
+}
+
+/** 无列头、非操作列的单元格（如名次/结果徽章）：并到标题行右侧。 */
 function extraCells(cells: Cell<DataTableFeatures, any>[]): Cell<DataTableFeatures, any>[] {
-  return cells.slice(1).filter((c) => !isActionCell(c) && !labelOf(c))
+  const title = titleIndex(cells)
+  return cells.filter((c, i) => i !== title && !isActionCell(c) && !labelOf(c))
 }
 
 /** 「标签 + 值」字段行。 */
 function fieldCells(cells: Cell<DataTableFeatures, any>[]): Cell<DataTableFeatures, any>[] {
-  return cells.slice(1).filter((c) => !isActionCell(c) && !!labelOf(c))
+  const title = titleIndex(cells)
+  return cells.filter((c, i) => i !== title && !isActionCell(c) && !!labelOf(c))
 }
 
 function actionCells(cells: Cell<DataTableFeatures, any>[]): Cell<DataTableFeatures, any>[] {
-  return cells.slice(1).filter(isActionCell)
+  return cells.filter(isActionCell)
 }
 </script>
 

@@ -154,11 +154,18 @@ const phaseIndex = computed(() =>
           </EmptyState>
           <ul v-else class="space-y-2">
             <li
-              v-for="c in pullPool"
+              v-for="(c, i) in pullPool"
               :key="c.id"
               class="flex items-center justify-between gap-2 rounded-md bg-muted p-2"
             >
-              <span class="min-w-0 truncate text-sm">
+              <!-- 序号 = 候场队列名次（与候场大屏同口径：手动优先级优先，缺省按签到先后） -->
+              <span
+                class="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold tabular-nums text-primary"
+                :title="`候队列第 ${i + 1} 位（先到在先；管理员可在候场大屏手动调序）`"
+              >
+                {{ i + 1 }}
+              </span>
+              <span class="min-w-0 flex-1 truncate text-sm">
                 {{ c.name }}
                 <span v-if="c.profile" class="text-xs text-muted-foreground">· {{ c.profile }}</span>
               </span>
