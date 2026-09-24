@@ -281,7 +281,12 @@ API/WS」——本地开发就是这样，前端仍走 Vite :3000。
   保存即生效、无需重启；compose **不自带** greptime 服务，观察引擎自备（GreptimeDB
   standalone 的 HTTP :4000 即可，地址须 http(s):// 开头）。也可以用
   `OTEL_EXPORTER_OTLP_*` 环境变量作首次种子（仅当面板从没配过 endpoint 时生效）。
-  内容：HTTP RED 指标（`http_server_requests_total`、`http_server_request_duration_seconds`）、
+  **库不存在时后端会先自动建库**（`CREATE DATABASE IF NOT EXISTS`）：GreptimeDB 的「自动生成
+  表结构」只覆盖表，不建库——往不存在的库推 OTLP 会 400 `Failed to find schema`，引擎也没有
+  自动建库的配置项（实测 0.11.0 与 1.2.1 一致）。
+  内容：HTTP RED 指标（`http_server_requests_total`、`http_server_request_duration_seconds`；后者
+  按 Prometheus 兼容命名落成 `…_bucket` / `…_count` / `…_sum` 三张表 + `greptime_physical_table`，
+  没有同名单表，查询时按拆出来的表名写）、
   WS 在线连接/消息/丢帧（`ws_connections`、`ws_messages_appended`、`ws_messages_dropped`），
   以及 slog 日志双写（stdout + GreptimeDB 的 `opentelemetry_logs` 表）；未配置/关闭时
   观测全程 noop 零开销。

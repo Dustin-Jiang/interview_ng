@@ -225,9 +225,13 @@ func setup(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// ensureDatabase 确保目标库存在（GreptimeDB 不会从 OTLP 载荷自动建库）。
-// 通过 /v1/sql 发一条 CREATE DATABASE IF NOT EXISTS，带与 OTLP 推送同口径的
-// Basic 鉴权头（开了鉴权的 GreptimeDB 本请求也要过认证）；连接失败/版本不支持
+// ensureDatabase 确保目标库存在。GreptimeDB 的「自动生成表结构」只覆盖**表**（写入时建表、
+// 补列），**不建库**：往不存在的库推 OTLP 一律 400 `Failed to find schema`，且引擎没有
+// 「自动建库」配置项（`auto_create_schema` 只针对 PostgreSQL 元数据库的 schema）。
+// 实测 0.11.0 与 1.2.1 一致（OTLP metrics / logs、InfluxDB 行协议、`/v1/sql` 三条写入路径都不建库），
+// 故这里先补一条 CREATE DATABASE IF NOT EXISTS（两版本都幂等可用）——删掉它会让
+// 「面板里换个新库名」直接失效，只剩每 5~10s 一次的推送失败日志。
+// 带与 OTLP 推送同口径的 Basic 鉴权头（开了鉴权时本请求也要过认证）；连接失败/无权限
 // 都不致命（告警后继续——后续 OTLP 推送会持续报错但业务不受影响）。
 func ensureDatabase(ctx context.Context, cfg Config) {
 	body := "sql=" + url.QueryEscape("CREATE DATABASE IF NOT EXISTS "+cfg.Database)
