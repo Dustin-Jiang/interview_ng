@@ -80,15 +80,19 @@ func decorateRoom(r *dsmodel.Room) {
 
 // roomByCandidate 返回当前绑定该候选人的房间；未绑定返回 ErrNotFound。
 func (s *MemStateStore) roomByCandidate(ctx context.Context, candidateID uint64) (*dsmodel.Room, error) {
-	var r dsmodel.Room
-	err := s.db.WithContext(ctx).Where("candidate_id = ?", candidateID).First(&r).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
+	var rs []dsmodel.Room
+	// Limit(1).Find 而非 First：未绑定是常态分支（没进面的候选人占多数，
+	// 消息扇出路由/详情读都会走到这里），First 会把 gorm.ErrRecordNotFound
+	// 当错误打进 gorm 日志（Warn 级别同样打印），高频刷屏干扰排查；
+	// Find 空结果不产出日志，语义等价（candidate_id 绑定在约束上唯一）。
+	if err := s.db.WithContext(ctx).
+		Where("candidate_id = ?", candidateID).Limit(1).Find(&rs).Error; err != nil {
 		return nil, err
 	}
-	return &r, nil
+	if len(rs) == 0 {
+		return nil, ErrNotFound
+	}
+	return &rs[0], nil
 }
 
 // fillRoomID 单个候选人补齐 RoomID 投影。
