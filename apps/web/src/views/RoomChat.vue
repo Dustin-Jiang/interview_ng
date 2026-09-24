@@ -4,6 +4,7 @@ import { ArrowDown, ArrowLeft, MessageSquare, Timer, UserRound } from 'lucide-vu
 import { toast } from 'vue-sonner'
 
 import { useRoomChat } from '@/composables/useRoomChat'
+import { useWaitingQueue } from '@/composables/useWaitingQueue'
 import { nextPhaseOf, isInterviewing } from '@/domain/status'
 import { roomLabel } from '@/domain/room'
 import type { CandidateStatus } from '@/models'
@@ -28,12 +29,15 @@ const {
   connecting,
   error,
   phase,
-  pullPool,
   sendMessage,
   movePhase,
   pullCandidate,
   reloadRoom,
 } = useRoomChat(() => props.roomId)
+
+// 拉取池 = 候场队列：唯一共享数据源（useWaitingQueue，按看板通道事件刷新，
+// 与候场大屏同一份顺序口径），不再由 useRoomChat 各自拉一份。
+const { queue: pullPool, reload: reloadPullPool } = useWaitingQueue()
 
 const draft = ref('')
 
@@ -134,6 +138,8 @@ async function advance() {
 async function handlePull(candidateId: number) {
   try {
     await pullCandidate(candidateId)
+    // 自己拉的立即对齐（其余端由 candidate_assigned 事件刷新）：被拉者要马上从队列里消失。
+    void reloadPullPool()
     toast.success('候选人已拉入房间')
   } catch (e) {
     toastError(e)

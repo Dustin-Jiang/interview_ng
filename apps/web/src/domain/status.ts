@@ -113,33 +113,74 @@ export function sortRoster<
 }
 
 /**
- * 候场名单排序：过滤「已结束」不上屏，按状态优先级升序（**分档不跨**：正在面试仍在最上），
- * **档内按到达先后**（签到时刻升序）——已签到的各档因此都是「先来的在前」，就是叫号顺序；
- * 未签到的没有签到时刻，退回创建时间升序（原口径）。纯函数：输入不被修改。
+ * 候场队列顺序（唯一口径，与后端 `mem_store.go#compareWaiting` 逐项同构——改一处必须改另一处）：
+ *  1. `waiting_priority` 升序（null 排在所有显式序之后：新签到接在已固化队列的末尾，不插队）；
+ *  2. `checked_in_at` 升序（缺失/非法排最后，见 `arrivalAt`）；
+ *  3. `created_at` 升序（添加顺序）；
+ *  4. `id` 升序（兜底，保证全序稳定且不重复——后端固化整档时用的就是这一顺序，
+ *     少任何一项都可能让「固化的顺序」与「管理员看到的顺序」不一致）。
+ */
+export function compareWaiting(
+  a: { id: number; created_at: string; checked_in_at?: string | null; waiting_priority?: number | null },
+  b: { id: number; created_at: string; checked_in_at?: string | null; waiting_priority?: number | null },
+): number {
+  const byPriority = compareNum(waitingRank(a), waitingRank(b))
+  if (byPriority !== 0) return byPriority
+  const byArrival = compareNum(arrivalAt(a), arrivalAt(b))
+  if (byArrival !== 0) return byArrival
+  if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1
+  return a.id - b.id
+}
+
+/** 数值比较（不用减法：`arrivalAt` 可能是 Infinity，Infinity - Infinity = NaN）。 */
+function compareNum(a: number, b: number): number {
+  if (a < b) return -1
+  if (a > b) return 1
+  return 0
+}
+
+/** 档内排序键：手动序号升序（null → MAX_SAFE_INTEGER，即排在所有显式序之后）。 */
+function waitingRank(item: { waiting_priority?: number | null }): number {
+  return item.waiting_priority ?? Number.MAX_SAFE_INTEGER
+}
+
+/**
+ * 候场名单排序：过滤掉不上屏的档（已结束及其后的录取档），按状态优先级升序（**分档不跨**：
+ * 正在面试仍在最上），档内按 `compareWaiting`（手动优先级 → 签到先后 → 添加顺序）。
+ * 未做任何手动调序时，各档就是纯「先来后到」。纯函数：输入不被修改。
  */
 export function sortWaitingBoard<
-  T extends { status: CandidateStatus; created_at: string; checked_in_at?: string | null },
+  T extends {
+    id: number
+    status: CandidateStatus
+    created_at: string
+    checked_in_at?: string | null
+    waiting_priority?: number | null
+  },
 >(items: readonly T[]): T[] {
   return items
     .filter((c) => c.status !== 'COMPLETED' && c.status !== 'ADMISSION_PENDING' && c.status !== 'ADMITTED')
     .slice()
-    .sort(
-      (a, b) =>
-        WAITING_STATUS_RANK[a.status] - WAITING_STATUS_RANK[b.status] ||
-        arrivalAt(a) - arrivalAt(b) ||
-        a.created_at.localeCompare(b.created_at),
-    )
+    .sort((a, b) => {
+      const byTier = WAITING_STATUS_RANK[a.status] - WAITING_STATUS_RANK[b.status]
+      return byTier !== 0 ? byTier : compareWaiting(a, b)
+    })
 }
 
 /**
- * 拉取候选人列表的排序：先来后到（签到时刻升序）。
- * 与候场大屏共用同一条到达时刻口径；缺签到时刻的行（历史数据）排在有值的之后，
- * 并统一按 id 升序兜底，保证顺序稳定且无重复。纯函数：输入不被修改。
+ * 房间「拉取候选人」池排序（候场队列口径）：与候场大屏档内同一条 `compareWaiting`，
+ * RoomSidebar 据此显示 1..N 序号。纯函数：输入不被修改。
  */
-export function sortByArrival<T extends { id: number; checked_in_at?: string | null }>(
-  items: readonly T[],
-): T[] {
-  return items.slice().sort((a, b) => arrivalAt(a) - arrivalAt(b) || a.id - b.id)
+export function sortWaitingPool<
+  T extends {
+    id: number
+    status: CandidateStatus
+    created_at: string
+    checked_in_at?: string | null
+    waiting_priority?: number | null
+  },
+>(items: readonly T[]): T[] {
+  return items.slice().sort(compareWaiting)
 }
 
 /**
@@ -152,5 +193,23 @@ export const ROSTER_BOARD_EVENTS = [
   'candidate_created',
   'candidate_updated',
   'candidate_deleted',
+  // 候场队列手动调序（顺序变化，与资料编辑分开的独立事件）。
+  'candidate_priority_changed',
+  'room_phase_changed',
+] as const
+
+/**
+ * 候场队列（`useWaitingQueue`）关心的事件：能改变队列**成员**或**顺序**或候选人显示字段的那些。
+ * 不含 `candidate_created`（新建必为未签到，进不了队列）：导入会逐行发该事件，
+ * 订阅它会让队列在导入过程中反复重拉。
+ * `room_phase_changed` 必须留着——把候选人重置回「已签到待分配」（或被重置走）走的就是它。
+ */
+// 显式标 readonly string[]：消费者拿到的是事件名（string），不是字面量联合。
+export const QUEUE_BOARD_EVENTS: readonly string[] = [
+  'candidate_signed_in',
+  'candidate_assigned',
+  'candidate_updated',
+  'candidate_deleted',
+  'candidate_priority_changed',
   'room_phase_changed',
 ] as const

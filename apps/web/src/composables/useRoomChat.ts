@@ -13,7 +13,7 @@ import { candidateApi, getAuthToken, roomApi } from '@/api/http'
 import { WsChannel } from '@/api/ws'
 import type { ChanEvent, ReplyPayload } from '@/api/ws-model'
 import type { CandidateStatus, Message, Room } from '@/models'
-import { phaseRoom, clearRoomCandidate, isInterviewing, sortByArrival } from '@/domain/status'
+import { phaseRoom, clearRoomCandidate, isInterviewing } from '@/domain/status'
 import {
   addReaction,
   appendMessage,
@@ -34,8 +34,6 @@ export interface UseRoomChat {
   readonly error: Ref<string | null>
   /** 当前阶段（= 房间绑定候选人状态）。 */
   readonly phase: ComputedRef<CandidateStatus | null>
-  /** 可拉取候选人池（已签到待分配）。 */
-  readonly pullPool: Ref<import('@/models').Candidate[]>
   /** 发送一条消息。 */
   sendMessage: (content: string) => void
   /** 推进到某阶段。 */
@@ -51,7 +49,6 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
   const connected = ref(false)
   const connecting = ref(false)
   const error = ref<string | null>(null)
-  const pullPool = ref<import('@/models').Candidate[]>([])
 
   /** 当前阶段（= 候选人状态）。 */
   const phase = computed<CandidateStatus | null>(
@@ -63,27 +60,14 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
   let activeId: number | null = null
   const pendingReplies = new Map<string, (p: ReplyPayload) => void>()
 
-  // 待分配池实时刷新：签到/拉走等"池变化"事件合并触发（防抖，避免事件风暴时频繁 HTTP 拉取）。
-  let poolRefreshTimer: ReturnType<typeof setTimeout> | null = null
-  function schedulePoolRefresh(): void {
-    if (!channel) return
-    if (poolRefreshTimer) clearTimeout(poolRefreshTimer)
-    poolRefreshTimer = setTimeout(() => {
-      poolRefreshTimer = null
-      void refreshPullPool()
-    }, 300)
-  }
-
   // ---- 事件/回执处理（经 domain 纯函数，不可变更新） ----
   function applyEvent(ev: ChanEvent): void {
-    // candidate_signed_in（全局）/ candidate_assigned → "待分配池"变化，刷新拉取列表
-    if (ev.type === 'candidate_signed_in' || ev.type === 'candidate_assigned') {
-      schedulePoolRefresh()
-      // 他人把候选人拉进当前房间：本地补拉房间快照（自己拉的已在 REST 后刷新，此处幂等）
+    // 候场队列（拉取池）不在这里维护：它是 `useWaitingQueue` 这份共享数据源的事
+    // （统一走看板通道刷新，房间页/大屏不再各自拉一份）。
+    // 这里只处理「他人把候选人拉进当前房间」：本地补拉房间快照（自己拉的已在 REST 后刷新，幂等）。
+    if (ev.type === 'candidate_assigned') {
       const toRoom = (ev.data as { RoomID?: number } | undefined)?.RoomID
-      if (ev.type === 'candidate_assigned' && toRoom != null && toRoom === activeId) {
-        void reloadRoom()
-      }
+      if (toRoom != null && toRoom === activeId) void reloadRoom()
       return
     }
     // room_renamed（全局事件，载荷带房间 id）→ 本房改名则重拉快照
@@ -251,10 +235,6 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     room.value = null
     messages.value = []
     pendingReplies.clear()
-    if (poolRefreshTimer) {
-      clearTimeout(poolRefreshTimer)
-      poolRefreshTimer = null
-    }
   }
 
   // roomId 变化（含初始）自动连接 / 断开
@@ -286,12 +266,11 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     })
   }
 
-  /** 拉取候选人进房：成功后刷新房间快照与待分配池。 */
+  /** 拉取候选人进房：成功后刷新房间快照（候场队列由调用方按 useWaitingQueue 重拉，或由其事件刷新）。 */
   async function pullCandidate(candidateId: number): Promise<void> {
     const r = room.value
     if (!r) return
     await roomApi.pullCandidate(r.id, candidateId)
-    pullPool.value = pullPool.value.filter((c) => c.id !== candidateId)
     await reloadRoom()
   }
 
@@ -323,18 +302,7 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
         messages.value = mergeMessages(messages.value, p.messages)
       }
     })
-    await refreshPullPool()
   }
-
-  /** 拉取"已签到待分配"候选人池（房间侧栏"拉取候选人"列表），按先来后到（签到时刻）排序：
-   *  多人排队时先到的人排在前面，避免房间照着导入顺序随机拉人。 */
-  async function refreshPullPool(): Promise<void> {
-    const res = await candidateApi.listAll({ status: 'CHECKED_IN_PENDING_ASSIGN' })
-    pullPool.value = sortByArrival(res.items)
-  }
-
-  // 初始加载待分配池
-  void refreshPullPool()
 
   return {
     room,
@@ -343,7 +311,6 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
     connecting,
     error,
     phase,
-    pullPool,
     sendMessage,
     movePhase,
     pullCandidate,
