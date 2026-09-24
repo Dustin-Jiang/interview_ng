@@ -96,6 +96,10 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	authed.PUT("/oidc/config", h.require(dsmodel.PermUsersManage), h.putOidcConfig)
 	authed.POST("/oidc/probes", h.require(dsmodel.PermUsersManage), h.probeOidc)
 
+	// 可观测性配置（users.manage）：读取配置 / 覆盖保存（保存即生效，无需重启）。
+	authed.GET("/observability/config", h.require(dsmodel.PermUsersManage), h.getObservabilityConfig)
+	authed.PUT("/observability/config", h.require(dsmodel.PermUsersManage), h.putObservabilityConfig)
+
 	// 部门：浏览任意登录（志愿选择器需要部门名单），增删改 users.manage
 	authed.GET("/departments", h.listDepartments)
 	authed.POST("/departments", h.require(dsmodel.PermUsersManage), h.createDepartment)

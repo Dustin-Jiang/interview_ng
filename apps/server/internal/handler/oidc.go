@@ -2,7 +2,7 @@ package handler
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -83,13 +83,13 @@ func (h *HTTPServer) oidcCallback(c *gin.Context) {
 	id, err := h.oidc.Exchange(c.Request.Context(), cfg, stateParam, code)
 	if err != nil {
 		// 失败原因（换 token / 验签 / nonce / state）只在这里可见：不记日志就只能靠 HAR 猜。
-		log.Printf("[oidc] 回调换 token 失败: %v", err)
+		slog.Error("[oidc] 回调换 token 失败", slog.Any("error", err))
 		h.redirectOidcError(c, origin, oidcErrorCode(err))
 		return
 	}
 	roleID, hit, err := oidcauth.MatchRole(cfg.RoleRules, id.Claims)
 	if err != nil {
-		log.Printf("[oidc] 角色规则求值失败: %v", err)
+		slog.Error("[oidc] 角色规则求值失败", slog.Any("error", err))
 		h.redirectOidcError(c, origin, oidcErrorCode(err))
 		return
 	}
@@ -101,7 +101,7 @@ func (h *HTTPServer) oidcCallback(c *gin.Context) {
 	// 求值失败仍拒绝——归属判定不了就不放行，避免落到错误部门。
 	deptID, deptHit, err := oidcauth.MatchDepartment(cfg.DepartmentRules, id.Claims)
 	if err != nil {
-		log.Printf("[oidc] 部门规则求值失败: %v", err)
+		slog.Error("[oidc] 部门规则求值失败", slog.Any("error", err))
 		h.redirectOidcError(c, origin, oidcErrorCode(err))
 		return
 	}

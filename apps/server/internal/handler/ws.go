@@ -14,6 +14,7 @@ import (
 	"interview_ng/internal/auth"
 	"interview_ng/internal/broadcast"
 	dsmodel "interview_ng/internal/model"
+	"interview_ng/internal/observability"
 	"interview_ng/internal/service"
 	"interview_ng/internal/state"
 )
@@ -52,6 +53,7 @@ type wsClient struct {
 
 	mu        sync.Mutex // 串行化对底层 conn 的并发写保护
 	lastMsgID uint64     // 该连接所见最近消息 id（续传游标，按候选人维度）
+	role      string     // 通道角色（room|board），仅用于可观测性统计分组
 }
 
 func (c *wsClient) enqueue(frame []byte) {
@@ -59,6 +61,7 @@ func (c *wsClient) enqueue(frame []byte) {
 	case c.send <- frame:
 	default:
 		// 缓冲满：慢消费者，丢弃并交由重连续传补齐。
+		observability.WSDrop(c.role)
 	}
 }
 
@@ -108,7 +111,8 @@ func (w *WSServer) serveWS(c *gin.Context) {
 		return
 	}
 
-	client := &wsClient{conn: conn, roomID: roomID, send: make(chan []byte, 256)}
+	client := &wsClient{conn: conn, roomID: roomID, send: make(chan []byte, 256), role: "room"}
+	observability.WSConn("room", 1)
 	quit := make(chan struct{})
 
 	go w.writePump(client, quit)
@@ -121,6 +125,7 @@ func (w *WSServer) serveWS(c *gin.Context) {
 		w.svc.RemoveRoomMember(c.Request.Context(), roomID, client.userID)
 	}
 	w.h.remove(roomID, client)
+	observability.WSConn("room", -1)
 }
 
 // authTimer 为连接启动鉴权超时：10s 内未完成 auth 则断开。
@@ -193,7 +198,8 @@ func (w *WSServer) serveBoard(c *gin.Context) {
 		return
 	}
 
-	client := &wsClient{conn: conn, send: make(chan []byte, 256)}
+	client := &wsClient{conn: conn, send: make(chan []byte, 256), role: "board"}
+	observability.WSConn("board", 1)
 	quit := make(chan struct{})
 
 	go w.writePump(client, quit)
@@ -203,6 +209,7 @@ func (w *WSServer) serveBoard(c *gin.Context) {
 	if client.userID != 0 {
 		w.h.remove(boardHubKey, client)
 	}
+	observability.WSConn("board", -1)
 }
 
 // readBoardPump 看板通道读循环：鉴权前仅接受 auth；成功后进入纯接收模式。
@@ -264,6 +271,7 @@ func (w *WSServer) handleBoardAuth(client *wsClient, req *reqAuth, reqID string)
 		return false
 	}
 	client.userID = uid
+	observability.WSMessage("auth")
 	w.h.add(boardHubKey, client)
 	w.ensureBoardSink()
 	w.reply(client, reqID, map[string]any{"ok": true})
@@ -399,6 +407,7 @@ func (w *WSServer) handleAuth(ctx context.Context, client *wsClient, req *reqAut
 		return
 	}
 	client.userID = uid
+	observability.WSMessage("auth")
 	w.h.add(client.roomID, client)
 	w.ensureSink(client.roomID)
 	w.reply(client, reqID, map[string]any{"ok": true, "room_id": client.roomID})
@@ -434,7 +443,8 @@ func (w *WSServer) handleSendMsg(ctx context.Context, client *wsClient, req *req
 		w.reply(client, reqID, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	// 广播由 service 的 Publish 触发，此处只回执。
+	// 广播由 service 的 Publish 触发，此处只回执。业务消息已落库，计数（send_msg）。
+	observability.WSMessage("send_msg")
 	w.reply(client, reqID, map[string]any{"ok": true, "op": "send_msg", "room_id": client.roomID})
 }
 

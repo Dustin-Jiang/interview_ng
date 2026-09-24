@@ -219,6 +219,16 @@ func (s *InterviewService) SetOidcConfig(ctx context.Context, cfg *dsmodel.OidcC
 	return s.store.SetOidcConfig(ctx, cfg, clientSecret)
 }
 
+// GetObservabilityConfig 返回可观测性（OTLP → GreptimeDB）配置。
+func (s *InterviewService) GetObservabilityConfig(ctx context.Context) (*dsmodel.ObservabilityConfig, error) {
+	return s.store.GetObservabilityConfig(ctx)
+}
+
+// SetObservabilityConfig 覆盖保存可观测性配置（password 三段语义见 state 接口注释）。
+func (s *InterviewService) SetObservabilityConfig(ctx context.Context, cfg *dsmodel.ObservabilityConfig, password *string) error {
+	return s.store.SetObservabilityConfig(ctx, cfg, password)
+}
+
 // ---- 候选人管理 ----
 
 // UpdateCandidate 编辑候选人资料字段（学号/姓名/简介/志愿/联系方式）。先落库后广播。

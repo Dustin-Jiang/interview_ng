@@ -1188,6 +1188,71 @@ func (s *MemStateStore) SetOidcConfig(ctx context.Context, cfg *dsmodel.OidcConf
 	})
 }
 
+//---- 可观测性（OTLP → GreptimeDB） ----
+
+// observabilityConfigID 可观测性配置单行记录的固定主键（表独享，ID 恒为 1）。
+const observabilityConfigID = 1
+
+// ensureObservabilityConfig 读取可观测性配置行，不存在时按默认值落库（幂等初始化）：
+// 默认关闭（Enabled=false 且 Endpoint 为空），由管理面板或启动时的环境变量种子接管。
+func (s *MemStateStore) ensureObservabilityConfig(ctx context.Context) (*dsmodel.ObservabilityConfig, error) {
+	var cfg dsmodel.ObservabilityConfig
+	err := s.db.WithContext(ctx).First(&cfg, observabilityConfigID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		cfg = dsmodel.ObservabilityConfig{ID: observabilityConfigID}
+		if err := s.db.WithContext(ctx).Create(&cfg).Error; err != nil {
+			return nil, err
+		}
+		return &cfg, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+func (s *MemStateStore) GetObservabilityConfig(ctx context.Context) (*dsmodel.ObservabilityConfig, error) {
+	return s.ensureObservabilityConfig(ctx)
+}
+
+// SetObservabilityConfig 覆盖保存可观测性配置：启用时校验 endpoint 为 http(s) 完整地址；
+// database 为空回退默认 interview_ng，service_name 同理。password 三段语义见接口注释。
+func (s *MemStateStore) SetObservabilityConfig(ctx context.Context, cfg *dsmodel.ObservabilityConfig, password *string) error {
+	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
+	cfg.Username = strings.TrimSpace(cfg.Username)
+	cfg.ServiceName = strings.TrimSpace(cfg.ServiceName)
+	if cfg.Enabled && !strings.HasPrefix(cfg.Endpoint, "http://") && !strings.HasPrefix(cfg.Endpoint, "https://") {
+		return &Error{Code: "observability_endpoint_invalid", Msg: "Endpoint 必须是 http(s):// 开头的完整地址"}
+	}
+	if cfg.Database == "" {
+		cfg.Database = "interview_ng"
+	}
+	if cfg.Username == "" {
+		cfg.Username = "greptime"
+	}
+	if cfg.ServiceName == "" {
+		cfg.ServiceName = "interview_ng"
+	}
+	updates := map[string]any{
+		"enabled":      cfg.Enabled,
+		"endpoint":     cfg.Endpoint,
+		"database":     cfg.Database,
+		"username":     cfg.Username,
+		"service_name": cfg.ServiceName,
+	}
+	if password != nil {
+		updates["password"] = *password
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 锁内补建单行（与持锁写并发的幂等保障），再整体覆盖。
+	if _, err := s.ensureObservabilityConfig(ctx); err != nil {
+		return err
+	}
+	return s.db.WithContext(ctx).Model(&dsmodel.ObservabilityConfig{}).
+		Where("id = ?", observabilityConfigID).Updates(updates).Error
+}
+
 // checkOidcRuleExpression 校验第 i+1 条（1 起）JMESPath 规则的表达式：非空且可编译。
 // kind 只进中文文案（「规则」/「部门规则」），code 为该规则类的错误码。
 func checkOidcRuleExpression(expression string, i int, kind, code string) error {

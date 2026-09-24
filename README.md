@@ -272,6 +272,15 @@ API/WS」——本地开发就是这样，前端仍走 Vite :3000。
 - **密钥**：`JWT_SECRET` 缺失时 compose 直接报错（没有安全缺省值）；`ADMIN_INIT_PASSWORD`
   只在首次创建默认 admin 时生效。
 - **端口**：只发布一个端口（默认宿主机 8080 → 容器 8080）。
+- **可观测性（可选，OTLP → GreptimeDB）**：**不走环境变量**——部署后在管理面板
+  「设置 → 可观测性」（users.manage）里配置 Endpoint / 库名 / Basic 账号密码（只写不读），
+  保存即生效、无需重启；compose **不自带** greptime 服务，观察引擎自备（GreptimeDB
+  standalone 的 HTTP :4000 即可，地址须 http(s):// 开头）。也可以用
+  `OTEL_EXPORTER_OTLP_*` 环境变量作首次种子（仅当面板从没配过 endpoint 时生效）。
+  内容：HTTP RED 指标（`http_server_requests_total`、`http_server_request_duration_seconds`）、
+  WS 在线连接/消息/丢帧（`ws_connections`、`ws_messages_appended`、`ws_messages_dropped`），
+  以及 slog 日志双写（stdout + GreptimeDB 的 `opentelemetry_logs` 表）；未配置/关闭时
+  观测全程 noop 零开销。
 - **数据库**：沿用开发用的 `./data` 绑定目录与同一套账号（`postgres/postgres`）。换库或改
   密码时，`DATABASE_DSN` 与 `postgres` 服务两处要同时改。
 - **缓存**：`/assets/*`（带内容哈希）回 `Cache-Control: immutable`，`index.html` 回 `no-cache`。

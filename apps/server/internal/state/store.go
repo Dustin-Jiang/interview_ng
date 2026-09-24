@@ -131,8 +131,16 @@ type StateStore interface {
 	// DeleteDepartment 删除部门（仍有面试官归属时拒绝）。
 	DeleteDepartment(ctx context.Context, id uint64) error
 
-	// ---- 系统状态 ----
+	// ---- 可观测性（OTLP → GreptimeDB） ----
 
+	// GetObservabilityConfig 返回可观测性（OTLP → GreptimeDB）单行配置（不存在时按默认值懒建）。
+	GetObservabilityConfig(ctx context.Context) (*dsmodel.ObservabilityConfig, error)
+	// SetObservabilityConfig 覆盖保存可观测性配置；password 为 nil 表示保持原密码不变，
+	// "" 表示清除，非空表示覆盖。校验失败返回 *Error：observability_endpoint_invalid。
+	// 不发事件（配置面向管理员面板，前端写后自拉）。
+	SetObservabilityConfig(ctx context.Context, cfg *dsmodel.ObservabilityConfig, password *string) error
+
+	// ---- 系统状态 ----
 	// GetSystemStatus 返回当前系统阶段（面试/录取/捡漏）。
 	GetSystemStatus(ctx context.Context) (*dsmodel.SystemStatus, error)
 	// SetSystemStatus 切换系统阶段（仅面试/录取/捡漏/结算四档）。

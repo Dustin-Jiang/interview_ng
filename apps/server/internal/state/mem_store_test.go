@@ -37,6 +37,7 @@ func newTestStoreWithDB(t *testing.T) (state.StateStore, *gorm.DB) {
 		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
 		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
 		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{}, &dsmodel.OidcDeptRule{},
+		&dsmodel.ObservabilityConfig{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
