@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -64,6 +65,8 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token s
 	}
 	if e := m.db.WithContext(ctx).Table("users").Select("id, password_hash, token_version").
 		Where("username = ?", username).Scan(&u).Error; e != nil {
+		// DB 故障与凭据错误都对外返回 401（不泄漏内部状态），但服务端要能区分排查。
+		log.Printf("login: user %q query error: %v", username, e)
 		return "", 0, nil, nil, ErrUnauthorized
 	}
 	if u.ID == 0 {
