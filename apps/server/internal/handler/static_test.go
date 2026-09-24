@@ -120,9 +120,9 @@ func TestRegisterStaticSkipsUnusableRoot(t *testing.T) {
 	}
 
 	for name, root := range map[string]string{
-		"未设置":        "",
-		"目录不存在":      filepath.Join(t.TempDir(), "missing"),
-		"没有 index":   noIndex,
+		"未设置":      "",
+		"目录不存在":    filepath.Join(t.TempDir(), "missing"),
+		"没有 index": noIndex,
 	} {
 		r := gin.New()
 		if handler.RegisterStatic(r, root) {

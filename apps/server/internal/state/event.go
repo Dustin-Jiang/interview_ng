@@ -13,8 +13,8 @@ const (
 	// EventMessageReactionsChanged 表情回复增减（载荷为「谁 + 哪个表情 + 加还是撤」的增量，
 	// 与观察者无关：计数与「我回没回」由各前端按当前用户自行聚合）。
 	EventMessageReactionsChanged EventType = "message_reactions_changed"
-	EventMemberJoined      EventType = "member_joined"       // 面试官加入房间
-	EventMemberLeft        EventType = "member_left"         // 面试官离开房间
+	EventMemberJoined            EventType = "member_joined" // 面试官加入房间
+	EventMemberLeft              EventType = "member_left"   // 面试官离开房间
 
 	EventCandidateCreated EventType = "candidate_created" // 新建候选人（管理面）
 	EventCandidateUpdated EventType = "candidate_updated" // 编辑候选人资料
