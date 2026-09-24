@@ -1,6 +1,7 @@
 package state
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -161,12 +162,38 @@ func (s *MemStateStore) ListRooms(ctx context.Context, limit, offset int) ([]*ds
 }
 
 func (s *MemStateStore) ListCandidates(ctx context.Context, status dsmodel.CandidateStatus, q string, limit, offset int) ([]*dsmodel.Candidate, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
-	}
 	qdb := s.db.WithContext(ctx).Model(&dsmodel.Candidate{})
 	if status != "" {
 		qdb = qdb.Where("status = ?", status)
+	}
+	return s.listCandidates(ctx, qdb, q, limit, offset)
+}
+
+// ListWaitingCandidates 候场大屏名单：只取「未定局」的候选人（排除面试已结束及其后的录取档）。
+// 大屏按状态分档展示还在流程中的人，已定局的档位各有自己的页面（录取 / 捡漏）；
+// 把它们也逐页拉全既是无谓流量（录取档往往是多数），也让大屏每次刷新都白拉一遍全库。
+func (s *MemStateStore) ListWaitingCandidates(ctx context.Context, q string, limit, offset int) ([]*dsmodel.Candidate, error) {
+	qdb := s.db.WithContext(ctx).Model(&dsmodel.Candidate{}).Where("status IN ?", activeStatuses())
+	return s.listCandidates(ctx, qdb, q, limit, offset)
+}
+
+// activeStatuses 未定局档位：由状态机全档位按 Terminal() 过滤得出——
+// 不写死名单，新增档位时不会漏（漏一个就有人从大屏上消失）。
+func activeStatuses() []dsmodel.CandidateStatus {
+	out := make([]dsmodel.CandidateStatus, 0, len(dsmodel.ValidCandidateStatus()))
+	for _, st := range dsmodel.ValidCandidateStatus() {
+		if !st.Terminal() {
+			out = append(out, st)
+		}
+	}
+	return out
+}
+
+// listCandidates 候选人列表的统一实现：id 升序分页 + 房间投影补齐（RoomID）。
+// 调用方负责把状态过滤条件挂到 qdb 上（等值 / 未定局集合）。
+func (s *MemStateStore) listCandidates(ctx context.Context, qdb *gorm.DB, q string, limit, offset int) ([]*dsmodel.Candidate, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
 	}
 	if q != "" {
 		// 用户输入里的 %/_ 会改变 LIKE 语义（"%50%" 变通配），按字面量转义。
@@ -236,6 +263,8 @@ func (s *MemStateStore) CheckIn(ctx context.Context, candidateID uint64) (*Event
 	// 签到时刻 = 本次签到的时刻（房间拉取列表与候场大屏按它先来后到）。
 	// 不能改用 UpdatedAt：资料编辑/导入都会刷新它，一边排队一边导入就会打乱顺序。
 	updates["checked_in_at"] = now
+	// 重新签到 = 开始一段新的排队会话：清掉上一段的手动序号（否则旧序号会让人无声插队）。
+	updates["waiting_priority"] = nil
 	if err := s.db.WithContext(ctx).Model(c).Updates(updates).Error; err != nil {
 		return nil, err
 	}
@@ -1455,6 +1484,139 @@ func (s *MemStateStore) UpdateCandidatePreferences(ctx context.Context, id uint6
 	return ev, nil
 }
 
+// AdjustWaitingPriority 候场队列手动调序：dir = "up"/"down"，与同档相邻一位交换先后。
+// 只对「已签到待分配」档有效——它是候场队列的唯一消费方（房间拉取池），其余档位要么还没到队
+// （未签到）、要么顺序由面试进程决定（已在房间 / 面试中），调了没有读取方却要写整档。
+//
+// moved 表示是否真的换了位：档首 up / 档尾 down 是过期 UI 的常态（多人同看一块大屏、
+// WS 防抖窗口内连点），幂等返回 false 而不是报错——前端据此静默重拉，不弹错误。
+//
+// 档内顺序由 compareWaiting 唯一确定（与前端 domain/status.ts#compareWaiting 逐项同构）：
+// waiting_priority 升序（null 排最后）→ checked_in_at 升序 → created_at 升序 → id 升序。
+// 任一侧未显式赋值时，把整档按当时显示顺序固化成 1..n——此后调序就是在显式序号之间互换；
+// 后续新签到（priority = null）排在已固化的成员之后，再按签到时间排。
+// 固化在单个事务里完成：失败整体回滚，绝不留下半固化的重号/乱序（回归后无自愈路径）。
+// 发 candidate_priority_changed（全局扇出）：消费方只需为「顺序变了」重拉候场队列，
+// 不必为任何资料编辑（candidate_updated）跟着重拉。
+func (s *MemStateStore) AdjustWaitingPriority(ctx context.Context, id uint64, dir string) (bool, *Event, error) {
+	if dir != "up" && dir != "down" {
+		return false, nil, &Error{Code: "invalid_direction", Msg: "方向只能是 up 或 down"}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	self, err := s.ensureCandidate(ctx, id)
+	if err != nil {
+		return false, nil, err
+	}
+	if self.Status != dsmodel.StatusCheckedInPendingAssign {
+		return false, nil, &Error{Code: "invalid_status", Msg: "只有「已签到待分配」的候选人可以调整顺序"}
+	}
+	peers, err := s.waitingCohort(ctx, self.Status)
+	if err != nil {
+		return false, nil, err
+	}
+	idx := -1
+	for i := range peers {
+		if peers[i].ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 { // 不可达：同档里必然包含自己
+		return false, nil, ErrNotFound
+	}
+	jdx := idx - 1
+	if dir == "down" {
+		jdx = idx + 1
+	}
+	if jdx < 0 || jdx >= len(peers) {
+		// 已在档首/档尾：幂等 no-op（不写库、不广播）。
+		return false, nil, nil
+	}
+	// 目标序：整档按当时显示顺序编号 1..n，再交换相邻两行的序号。
+	// 已显式的行只在目标序号不变时跳过写入，常态只需两条 UPDATE（交换对）。
+	orders := make([]int64, len(peers))
+	for i := range orders {
+		orders[i] = int64(i + 1)
+	}
+	orders[idx], orders[jdx] = orders[jdx], orders[idx]
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for i := range peers {
+			if peers[i].WaitingPriority != nil && *peers[i].WaitingPriority == orders[i] {
+				continue
+			}
+			if err := tx.Model(&dsmodel.Candidate{}).Where("id = ?", peers[i].ID).
+				UpdateColumn("waiting_priority", orders[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return false, nil, err
+	}
+	ev := &Event{Type: EventCandidatePriorityChanged, Data: CandidateRef{id}}
+	s.emit(0, ev)
+	return true, ev, nil
+}
+
+// waitingCohort 取某一档全部候选人并按档内显示顺序排好。
+// 唯一排序入口：调序取相邻与固化编号都走它，避免两处口径分叉。
+func (s *MemStateStore) waitingCohort(ctx context.Context, status dsmodel.CandidateStatus) ([]dsmodel.Candidate, error) {
+	var peers []dsmodel.Candidate
+	if err := s.db.WithContext(ctx).Where("status = ?", status).Find(&peers).Error; err != nil {
+		return nil, err
+	}
+	sort.Slice(peers, func(i, j int) bool { return compareWaiting(peers[i], peers[j]) < 0 })
+	return peers, nil
+}
+
+// compareWaiting 候场档内顺序：与前端 domain/status.ts#compareWaiting 逐项同构（改一处必须改另一处）。
+//  1. waiting_priority 升序（null 排在所有显式序之后）；
+//  2. checked_in_at 升序（缺失排最后）；
+//  3. created_at 升序（添加/导入顺序）；
+//  4. id 升序（兜底，保证全序稳定且无重复，前后端冻结顺序才可能与显示顺序一致）。
+func compareWaiting(a, b dsmodel.Candidate) int {
+	if c := compareWaitingRank(a.WaitingPriority, b.WaitingPriority); c != 0 {
+		return c
+	}
+	if c := compareWaitingTime(a.CheckedInAt, b.CheckedInAt); c != 0 {
+		return c
+	}
+	if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.ID, b.ID)
+}
+
+// compareWaitingRank 显式序号升序；null 在排序视角里排在所有显式序之后
+// （新签到的人接在已固化队列的末尾，不会插队）。
+func compareWaitingRank(a, b *int64) int {
+	const unset = int64(1) << 62
+	va, vb := unset, unset
+	if a != nil {
+		va = *a
+	}
+	if b != nil {
+		vb = *b
+	}
+	return cmp.Compare(va, vb)
+}
+
+// compareWaitingTime 时刻升序；缺失或零值排在所有已知时刻之后。
+func compareWaitingTime(a, b *time.Time) int {
+	hasA, hasB := a != nil && !a.IsZero(), b != nil && !b.IsZero()
+	switch {
+	case hasA && hasB:
+		return (*a).Compare(*b)
+	case hasA:
+		return -1
+	case hasB:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // DeleteCandidate 删除候选人：解绑房间、连带删消息档案与录取/出价记录。
 func (s *MemStateStore) DeleteCandidate(ctx context.Context, id uint64) (*Event, error) {
 	s.mu.Lock()
@@ -2179,6 +2341,8 @@ func statusUpdates(to dsmodel.CandidateStatus, now time.Time) map[string]any {
 	// 不该把先到的人挪到队尾，重新排队应由「重新签到」这个动作本身表达。
 	if to == dsmodel.StatusNotCheckedIn {
 		updates["checked_in_at"] = nil
+		// 手动序号属于「排队会话」：离开排队体系就一起清掉（重新签到是重新排队）。
+		updates["waiting_priority"] = nil
 	}
 	return updates
 }

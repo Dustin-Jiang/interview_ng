@@ -229,6 +229,18 @@ func (s *InterviewService) SetObservabilityConfig(ctx context.Context, cfg *dsmo
 	return s.store.SetObservabilityConfig(ctx, cfg, password)
 }
 
+// AdjustWaitingPriority 候场队列手动调序（state 层定义调序、固化口径与幂等边界）。
+// moved = false 表示已在档首/档尾（无状态变更、无事件，不广播）；
+// 真的换了位才广播 candidate_priority_changed——候场大屏与房间侧栏据此实时重拉（先落库后广播）。
+func (s *InterviewService) AdjustWaitingPriority(ctx context.Context, id uint64, dir string) (bool, *state.Event, error) {
+	moved, ev, err := s.store.AdjustWaitingPriority(ctx, id, dir)
+	if err != nil || !moved {
+		return moved, ev, err
+	}
+	s.broad.Publish(ev)
+	return moved, ev, nil
+}
+
 // ---- 候选人管理 ----
 
 // UpdateCandidate 编辑候选人资料字段（学号/姓名/简介/志愿/联系方式）。先落库后广播。

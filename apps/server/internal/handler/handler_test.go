@@ -1587,3 +1587,211 @@ func TestInterviewRoomJSONContract(t *testing.T) {
 		t.Fatalf("面试结束后不应仍绑定房间: %v", got["room_id"])
 	}
 }
+
+// TestWaitingPriorityAPI 候场队列调序的 HTTP 契约：
+// PUT /api/candidates/:id/priority {direction} → {ok, moved}；
+// 档首/档尾是幂等 no-op（200 + moved=false，不是 409——多人同看大屏时快照必然过期）；
+// 只有「已签到待分配」档可调序（其余档位 400），方向非法 400，无 candidates.checkin 权限 403。
+func TestWaitingPriorityAPI(t *testing.T) {
+	r := newTestApp(t)
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	ids := make([]int, 0, 3)
+	for i, no := range []string{"2025001", "2025002", "2025003"} {
+		name := []string{"甲", "乙", "丙"}[i]
+		_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"`+no+`","name":"`+name+`"}`, token)
+		id := int(out["id"].(float64))
+		ids = append(ids, id)
+		if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(id)+"/check-in", "", token); code != http.StatusOK {
+			t.Fatalf("checkin %d: got %d", id, code)
+		}
+	}
+	a, b, c := ids[0], ids[1], ids[2]
+
+	// 乙提前一位：首次调序把整档固化成显式序（乙=1、甲=2、丙=3），并回 moved=true。
+	code, out := doJSON(t, r, "PUT", "/api/candidates/"+itoa(b)+"/priority", `{"direction":"up"}`, token)
+	if code != http.StatusOK || out["moved"] != true {
+		t.Fatalf("up: code=%d out=%v", code, out)
+	}
+	expectQueuePriority(t, r, token, map[int]float64{b: 1, a: 2, c: 3})
+
+	// 丙再提前一位：交换显式序号（丙=2、甲=3）。
+	if code, out = doJSON(t, r, "PUT", "/api/candidates/"+itoa(c)+"/priority", `{"direction":"up"}`, token); code != http.StatusOK || out["moved"] != true {
+		t.Fatalf("second up: code=%d out=%v", code, out)
+	}
+	expectQueuePriority(t, r, token, map[int]float64{b: 1, c: 2, a: 3})
+
+	// 档首 up：幂等 no-op（200 + moved=false，且序号不变）。
+	if code, out = doJSON(t, r, "PUT", "/api/candidates/"+itoa(b)+"/priority", `{"direction":"up"}`, token); code != http.StatusOK || out["moved"] != false {
+		t.Fatalf("档首 up 应为幂等 no-op: code=%d out=%v", code, out)
+	}
+	expectQueuePriority(t, r, token, map[int]float64{b: 1, c: 2, a: 3})
+
+	// 未签到（还没到队）：不在候场队列 → 400。
+	_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2025004","name":"丁"}`, token)
+	unchecked := int(out["id"].(float64))
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(unchecked)+"/priority", `{"direction":"up"}`, token); code != http.StatusBadRequest {
+		t.Fatalf("未签到档调序应 400: got %d", code)
+	}
+	// 方向非法 → 400。
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(a)+"/priority", `{"direction":"sideways"}`, token); code != http.StatusBadRequest {
+		t.Fatalf("非法方向应 400: got %d", code)
+	}
+	// 候选人不存在 → 404。
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/999999/priority", `{"direction":"up"}`, token); code != http.StatusNotFound {
+		t.Fatalf("候选人不存在应 404: got %d", code)
+	}
+
+	// 只读用户（无 candidates.checkin）→ 403。
+	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"reader","description":"只读","permissions":["rooms.view"]}`, token)
+	roleID := int(out["id"].(float64))
+	_, out = doJSON(t, r, "POST", "/api/users", `{"username":"reader1","name":"只读","password":"pass","role_ids":[`+itoa(roleID)+`]}`, token)
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"reader1","password":"pass"}`, "")
+	rToken := out["token"].(string)
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(b)+"/priority", `{"direction":"up"}`, rToken); code != http.StatusForbidden {
+		t.Fatalf("只读用户调序应 403: got %d", code)
+	}
+}
+
+// expectQueuePriority 断言候场队列（已签到待分配档）各候选人的显式序号。
+// 列表本身按 id 升序返回（排序由前端按 waiting_priority 完成），故这里逐人核对字段值。
+func expectQueuePriority(t *testing.T, r *gin.Engine, token string, want map[int]float64) {
+	t.Helper()
+	code, out := doJSON(t, r, "GET", "/api/candidates?status=CHECKED_IN_PENDING_ASSIGN&limit=50", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("list queue: got %d", code)
+	}
+	items, _ := out["items"].([]any)
+	if len(items) != len(want) {
+		t.Fatalf("队列人数应为 %d，实际 %d: %v", len(want), len(items), out["items"])
+	}
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		id := int(item["id"].(float64))
+		explicit, ok := want[id]
+		if !ok {
+			t.Fatalf("队列出现未预期的候选人 %d", id)
+		}
+		got, has := item["waiting_priority"]
+		if !has || got != explicit {
+			t.Fatalf("候选人 %d 期望序号 %v，实际 %v", id, explicit, got)
+		}
+	}
+}
+
+// TestBoardCandidatesAPI 候场大屏名单接口：GET /api/board/candidates 只回「未定局」的候选人
+// （面试已结束及其后的录取档不上屏——它们各有自己的页面），关键词筛选与分页参数同 /api/candidates。
+func TestBoardCandidatesAPI(t *testing.T) {
+	r := newTestApp(t)
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	newCandidate := func(no, name string) int {
+		_, o := doJSON(t, r, "POST", "/api/candidates", `{"student_no":"`+no+`","name":"`+name+`"}`, token)
+		return int(o["id"].(float64))
+	}
+	pending := newCandidate("2026001", "待定局")
+	settled := newCandidate("2026002", "已录取")
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(settled)+"/status", `{"status":"ADMITTED"}`, token); code != http.StatusOK {
+		t.Fatalf("置为已录取: got %d", code)
+	}
+
+	code, out := doJSON(t, r, "GET", "/api/board/candidates", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("board candidates: got %d", code)
+	}
+	items, _ := out["items"].([]any)
+	ids := map[int]bool{}
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		ids[int(item["id"].(float64))] = true
+	}
+	if !ids[pending] {
+		t.Fatal("未定局的候选人应在大屏名单里")
+	}
+	if ids[settled] {
+		t.Fatal("已录取的候选人不应出现在大屏名单里")
+	}
+
+	// 关键词筛选照常生效（且仍不含已定局者）。
+	if code, out = doJSON(t, r, "GET", "/api/board/candidates?q=2026002", "", token); code != http.StatusOK {
+		t.Fatalf("board candidates by q: got %d", code)
+	}
+	if items, _ = out["items"].([]any); len(items) != 0 {
+		t.Fatalf("已录取者被关键词命中: %v", items)
+	}
+}
+
+// TestWaitingPriorityBroadcast 调序必须实时推给看板通道（回归：service 曾漏了 Publish，
+// 前端点完 ↑/↓ 要等手动刷新才变），且幂等 no-op 不产生事件。
+// 断言手法：真换位读帧（载荷 candidate_id 区分候选人）；no-op 断言用「下一帧必须直接是
+// 后一次真换位的帧」表达——不用读超时（gorilla 一旦读超时，连接就永久带错，后续读取全废）。
+func TestWaitingPriorityBroadcast(t *testing.T) {
+	r := newTestApp(t)
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+
+	ids := make([]int, 0, 2)
+	for i, no := range []string{"2027001", "2027002"} {
+		_, out = doJSON(t, r, "POST", "/api/candidates", `{"student_no":"`+no+`","name":"`+[]string{"甲", "乙"}[i]+`"}`, token)
+		id := int(out["id"].(float64))
+		ids = append(ids, id)
+		if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(id)+"/check-in", "", token); code != http.StatusOK {
+			t.Fatalf("checkin %d: got %d", id, code)
+		}
+	}
+	a, b := ids[0], ids[1]
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/board", nil)
+	if err != nil {
+		t.Fatalf("dial board: %v", err)
+	}
+	defer conn.Close()
+	if !boardAuth(t, conn, "bp1", token) {
+		t.Fatal("board auth failed")
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+
+	// 乙提前一位（真换位）→ 看板应收到乙的调序事件。
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(b)+"/priority", `{"direction":"up"}`, token); code != http.StatusOK {
+		t.Fatalf("up: got %d", code)
+	}
+	readPriorityEvent(t, conn, b)
+
+	// 乙再 up（已在档首 = 幂等 no-op，不该广播）；紧接着甲 up（真换位）。
+	// 下一个调序帧必须直接是甲——若 no-op 也广播，中间会先夹一个乙的帧。
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(b)+"/priority", `{"direction":"up"}`, token); code != http.StatusOK {
+		t.Fatalf("boundary up: got %d", code)
+	}
+	if code, _ := doJSON(t, r, "PUT", "/api/candidates/"+itoa(a)+"/priority", `{"direction":"up"}`, token); code != http.StatusOK {
+		t.Fatalf("second up: got %d", code)
+	}
+	readPriorityEvent(t, conn, a)
+}
+
+// readPriorityEvent 读看板帧直到出现候选人为 want 的调序事件；途中若又看到别人的调序事件
+// 或 pending 里已有该候选人，直接失败（用于断言幂等 no-op 不广播）。
+func readPriorityEvent(t *testing.T, conn *websocket.Conn, want int) {
+	t.Helper()
+	for {
+		var env map[string]any
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("read event (waiting candidate %d): %v", want, err)
+		}
+		if env["type"] != "candidate_priority_changed" {
+			continue
+		}
+		outer, _ := env["data"].(map[string]any)
+		inner, _ := outer["data"].(map[string]any)
+		cid, _ := inner["candidate_id"].(float64)
+		if int(cid) == want {
+			return
+		}
+		t.Fatalf("期望候选人的调序事件 %d，却先收到 %d（幂等 no-op 不该广播）", want, int(cid))
+	}
+}

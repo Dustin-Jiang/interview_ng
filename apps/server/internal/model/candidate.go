@@ -63,6 +63,13 @@ func (s CandidateStatus) Interviewing() bool {
 	return s == StatusAssigned || s == StatusInProgress
 }
 
+// Terminal 判断该档位是否已「定局」：面试已结束（COMPLETED）及其后的录取档
+// （ADMISSION_PENDING / ADMITTED）。这批人已经走完面试流程，候场大屏不再上屏
+// （前端 domain/status.ts#sortWaitingBoard 过滤同一批档位）——它们的去处是录取 / 捡漏页。
+func (s CandidateStatus) Terminal() bool {
+	return s == StatusCompleted || s == StatusAdmissionPending || s == StatusAdmitted
+}
+
 // Candidate 面试者（非登录用户，是被面试/被记录的客体）。
 type Candidate struct {
 	ID uint64 `gorm:"primaryKey" json:"id"`
@@ -91,6 +98,10 @@ type Candidate struct {
 	// 也在档内按它排列——所以被拉进房间、开始面试等流转都不清空它。
 	// 不能用 UpdatedAt 代替：导入/编辑资料会刷新它，排队顺序会被打乱。
 	CheckedInAt *time.Time `json:"checked_in_at"`
+	// WaitingPriority 候场大屏的手动优先级序号：null = 未调整（按 checked_in_at 先后来），
+	// 非 null = 调序后按显式序号（数值升序优先）。调序会把该候选人所在档的全部成员
+	// 按当时显示顺序固化成 1..n（见 state 的 WaitingPriority 交换逻辑）。
+	WaitingPriority *int64 `gorm:"column:waiting_priority" json:"waiting_priority"`
 	// InterviewCompletedAt 这场面试的结束时刻：进入「面试已结束」时打点，**开始下一次面试**
 	// （重新进入「面试中」）才清空——与 interview_room_* 快照同族，结档后仍保留这次面试的时刻事实。
 	// 与 InterviewStartedAt 的分工：后者只表示「此刻是否在面试中」（离开即清空，前端计时用），

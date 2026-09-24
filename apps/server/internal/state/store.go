@@ -26,6 +26,9 @@ type StateStore interface {
 	ListRooms(ctx context.Context, limit, offset int) ([]*dsmodel.Room, error)
 	// ListCandidates 分页列出候选人（面试官浏览），可按状态与关键词（学号/姓名/简介）筛选。
 	ListCandidates(ctx context.Context, status dsmodel.CandidateStatus, q string, limit, offset int) ([]*dsmodel.Candidate, error)
+	// ListWaitingCandidates 分页列出候场大屏名单：只含「未定局」的档位
+	// （见 model.CandidateStatus.Terminal：面试已结束及其后的录取档不在其中），可按关键词筛选。
+	ListWaitingCandidates(ctx context.Context, q string, limit, offset int) ([]*dsmodel.Candidate, error)
 	// ListMessagesAfter 返回房间内 id>afterID 的消息（断线续传增量）。
 	ListMessagesAfter(ctx context.Context, roomID uint64, afterID uint64) ([]*dsmodel.Message, error)
 
@@ -140,7 +143,12 @@ type StateStore interface {
 	// 不发事件（配置面向管理员面板，前端写后自拉）。
 	SetObservabilityConfig(ctx context.Context, cfg *dsmodel.ObservabilityConfig, password *string) error
 
-	// ---- 系统状态 ----
+	// AdjustWaitingPriority 候场队列手动调序：dir = "up"/"down"，与同档相邻一位交换先后
+	// （waiting_priority：null 视为未调整、排在显式序之后；首次调序把该档固化成 1..n，
+	// 整档固化在单事务内完成）。只允许「已签到待分配」档，其余档位返回 *Error{invalid_status}；
+	// 已在档首/档尾是幂等 no-op（moved = false、不写库不广播）。
+	// moved 表示是否真的换了位；ev 为 nil 表示没有状态变更（不广播）。
+	AdjustWaitingPriority(ctx context.Context, id uint64, dir string) (moved bool, ev *Event, err error)
 	// GetSystemStatus 返回当前系统阶段（面试/录取/捡漏）。
 	GetSystemStatus(ctx context.Context) (*dsmodel.SystemStatus, error)
 	// SetSystemStatus 切换系统阶段（仅面试/录取/捡漏/结算四档）。

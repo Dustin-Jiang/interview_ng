@@ -48,6 +48,8 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 
 	// 候选人（浏览任意登录，操作按权限）
 	authed.GET("/candidates", h.listCandidates)
+	// 候场大屏名单（看板资源）：只回未定局的档位，大屏按状态分档展示。
+	authed.GET("/board/candidates", h.listWaitingCandidates)
 	authed.GET("/candidates/:id", h.getCandidate)
 	// 候选人面试记录归档（按候选人维度，完成后仍可查；任意登录用户可读 —— 查看与管理分离）
 	authed.GET("/candidates/:id/messages", h.listCandidateMessages)
@@ -64,6 +66,8 @@ func (h *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	// 批量导入（管理员数据导入）：请求体为浏览器侧解析+映射后的行数组，服务端单事务全或无落库。
 	authed.POST("/candidates/imports", h.require(dsmodel.PermCandidatesManage), h.importCandidates)
 	authed.PUT("/candidates/:id/check-in", h.require(dsmodel.PermCandidatesCheckin), h.checkin)
+	// 候场大屏手动调序：与签到同一权限档（大屏操作者）。
+	authed.PUT("/candidates/:id/priority", h.require(dsmodel.PermCandidatesCheckin), h.adjustWaitingPriority)
 	authed.PUT("/candidates/:id", h.require(dsmodel.PermCandidatesManage), h.updateCandidate)
 	authed.DELETE("/candidates/:id", h.require(dsmodel.PermCandidatesManage), h.deleteCandidate)
 	authed.PUT("/candidates/:id/status", h.require(dsmodel.PermCandidatesManage), h.resetCandidateStatus)
@@ -190,6 +194,20 @@ func (h *HTTPServer) listCandidates(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	out, err := h.st.ListCandidates(c.Request.Context(), status, q, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
+}
+
+// listWaitingCandidates 候场大屏名单：只回「未定局」的候选人（无状态参数——分档由大屏自己做）。
+// 与 /api/candidates 的区别就是不把已定局的录取档逐页拉全；分页参数同口径。
+func (h *HTTPServer) listWaitingCandidates(c *gin.Context) {
+	q := c.Query("q")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	out, err := h.st.ListWaitingCandidates(c.Request.Context(), q, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -389,6 +407,31 @@ func (h *HTTPServer) checkin(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// adjustWaitingPriority 候场队列调序：body {direction: "up"|"down"}；权限与签到同档（大屏操作者）。
+// 回 {ok, moved}：moved = false 表示已在档首/档尾（幂等 no-op，前端静默重拉即可，不算错误）；
+// 顺序变更由 candidate_priority_changed 事件防抖重拉（大屏与房间侧栏都已订阅）。
+func (h *HTTPServer) adjustWaitingPriority(c *gin.Context) {
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var req struct {
+		Direction string `json:"direction"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	moved, _, err := h.svc.AdjustWaitingPriority(c.Request.Context(), id, req.Direction)
+	if err != nil {
+		status, msg := stateErr(err)
+		c.JSON(status, gin.H{"error": msg})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "moved": moved})
 }
 
 // updateCandidateReq 编辑候选人：请求体即扁平的资料字段全集（state.CandidateInfo，全量覆盖）。

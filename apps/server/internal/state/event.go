@@ -18,12 +18,15 @@ const (
 
 	EventCandidateCreated EventType = "candidate_created" // 新建候选人（管理面）
 	EventCandidateUpdated EventType = "candidate_updated" // 编辑候选人资料
-	EventCandidateDeleted EventType = "candidate_deleted" // 删除候选人（级联清房删消息）
-	EventRoomCreated      EventType = "room_created"      // 新建空房
-	EventRoomDeleted      EventType = "room_deleted"      // 删除空房
-	EventRoomRenamed      EventType = "room_renamed"      // 房间命名/改名
-	EventLeftoverBid      EventType = "leftover_bid"      // 捡漏出价变更（不含金额，跨部门保密）
-	EventLeftoverResolved EventType = "leftover_resolved" // 捡漏候选人结算（最高出价录取）
+	// EventCandidatePriorityChanged 候场队列手动调序（载荷 CandidateRef）。
+	// 与 candidate_updated 分开：只为「队列顺序变了」重拉候场队列，不必为资料编辑跟着重拉。
+	EventCandidatePriorityChanged EventType = "candidate_priority_changed"
+	EventCandidateDeleted         EventType = "candidate_deleted" // 删除候选人（级联清房删消息）
+	EventRoomCreated              EventType = "room_created"      // 新建空房
+	EventRoomDeleted              EventType = "room_deleted"      // 删除空房
+	EventRoomRenamed              EventType = "room_renamed"      // 房间命名/改名
+	EventLeftoverBid              EventType = "leftover_bid"      // 捡漏出价变更（不含金额，跨部门保密）
+	EventLeftoverResolved         EventType = "leftover_resolved" // 捡漏候选人结算（最高出价录取）
 )
 
 // Event 是不可变的状态变更事件，是"系统内部状态唯一性"的对外契约。
