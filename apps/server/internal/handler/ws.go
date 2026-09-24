@@ -138,6 +138,18 @@ func (w *WSServer) authTimer(client *wsClient, quit chan struct{}) *time.Timer {
 // sink 负责把事件推给该房间内的所有当前连接的写队列。
 func (w *WSServer) ensureSink(roomID uint64) {
 	w.b.Bind(roomID, func(ev *state.Event) {
+		if ev.Type == state.EventMemberLeft {
+			// 成员被 REST 移出房间：主动断开其 WS 连接，避免被移除者继续收到聊天正文。
+			// 连接断开会触发 serveWS 的收尾清理（hub 移除、释放房间席位）。
+			if d, ok := ev.Data.(struct{ UserID uint64 }); ok {
+				for _, cl := range w.h.clientsIn(roomID) {
+					if cl.userID == d.UserID {
+						_ = cl.conn.Close()
+					}
+				}
+			}
+			return
+		}
 		frame := encodeEvent(ev)
 		if frame == nil {
 			return
