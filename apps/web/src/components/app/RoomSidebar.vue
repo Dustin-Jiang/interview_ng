@@ -1,28 +1,32 @@
 <!--
-  RoomSidebar —— 面试房间左侧信息栏（RoomChat 专用，三张卡片 + 简介卡片）。
+  RoomSidebar —— 面试房间左侧信息栏（RoomChat 专用：候选人信息 + 简介 + 录取决定 + 状态与阶段控制）。
   候选人信息（学号 / 志愿 / 接受调剂 / 联系方式）、个人简介单独成卡（长文本不撑破信息行）、
-  拉取候选人、当前状态与阶段控制。
-  纯展示 + 向上抛事件：数据与命令仍由 RoomChat 的 useRoomChat 持有。
+  本部门录取表态（面试阶段起，与候选人查看页共用 AdmissionDecisionControl）、拉取候选人、当前状态与阶段控制。
+  纯展示 + 向上抛事件：房间数据与命令仍由 RoomChat 的 useRoomChat 持有；
+  录取决定**不经父级**——它由共享数据源 `useAdmissionList`（经 useAdmissions）持有，写后自己刷新。
 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Pencil, UserPlus, UserRound } from 'lucide-vue-next'
 
+import { useAdmissions } from '@/composables/useAdmissions'
 import { useAuth } from '@/composables/useAuth'
 import {
   CANDIDATE_STATUSES,
   PERMISSIONS,
+  type AdmissionStatus,
   type Candidate,
   type CandidateStatus,
   type Room,
 } from '@/models'
-import { STATUS_PRESENTATION } from '@/presenters/status'
+import { ADMISSION_PRESENTATION, STATUS_PRESENTATION } from '@/presenters/status'
 import { roomLabel } from '@/domain/room'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { IconBadge } from '@/components/ui/icon-badge'
+import AdmissionDecisionControl from '@/components/app/AdmissionDecisionControl.vue'
 import CandidatePreferenceDialog from '@/components/app/CandidatePreferenceDialog.vue'
 import EmptyState from '@/components/app/EmptyState.vue'
 
@@ -38,9 +42,29 @@ const props = defineProps<{
 
 const emit = defineEmits<{ pull: [candidateId: number]; advance: []; saved: [] }>()
 
-const { hasPermission } = useAuth()
+const { hasPermission, user } = useAuth()
 
 const hasCandidate = computed(() => !!props.room?.candidate)
+
+// ---- 本部门录取表态 ----
+// 决定列表与部门名单都来自共享数据源（`useAdmissions` 消费 `useAdmissionList` / `useDepartments`，
+// 模块级单例），本页只是又一个读取方与写入方：**不自己拉一份**，写后共享缓存自己刷新。
+const {
+  loading: admissionsLoading,
+  canRecord,
+  showControls,
+  ownStatus,
+  switchAdmission,
+} = useAdmissions(() => props.room?.candidate ?? null)
+
+/** 只在「有候选人 + 面试阶段起 + 可记录 + 有本部门」时展示。
+ *  无部门者没有可表态的主体（服务端也按调用者的部门落库），与候选人查看页同一判据。 */
+const showDecision = computed(() => hasCandidate.value && showControls.value && canRecord.value && !!user.value?.department_id)
+
+function onAdmissionSelect(status: AdmissionStatus): void {
+  const c = props.room?.candidate
+  if (c) void switchAdmission(c, status)
+}
 
 // ---- 志愿与调剂编辑（独立小权限；保存后由父级重拉房间快照） ----
 const canEditPreferences = computed(() => hasPermission(PERMISSIONS.CANDIDATES_PREFERENCES))
@@ -172,6 +196,26 @@ const phaseIndex = computed(() =>
               <Button size="sm" variant="outline" @click="emit('pull', c.id)">拉取</Button>
             </li>
           </ul>
+        </CardContent>
+      </Card>
+
+      <!-- 本部门录取表态：面试阶段起可记录、结算阶段不展示（竞拍已自动结算、录取档已同步），
+           与候选人查看页共用 AdmissionDecisionControl；无部门者没有可表态的主体，整卡不出现。
+           键帽不显示——本页没有注册 1/2/3（键盘留给消息输入区）。 -->
+      <Card v-if="showDecision">
+        <CardContent class="space-y-3 p-4">
+          <div class="flex items-center justify-between gap-2">
+            <p class="text-sm font-medium">录取决定</p>
+            <Badge v-if="ownStatus" :variant="ADMISSION_PRESENTATION[ownStatus].badge">
+              {{ ADMISSION_PRESENTATION[ownStatus].label }}
+            </Badge>
+            <Badge v-else variant="outline">未表态</Badge>
+          </div>
+          <AdmissionDecisionControl
+            :value="ownStatus"
+            :disabled="admissionsLoading"
+            @select="onAdmissionSelect"
+          />
         </CardContent>
       </Card>
 

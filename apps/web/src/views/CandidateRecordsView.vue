@@ -28,6 +28,7 @@ import {
   ADMISSION_STATUSES,
   CANDIDATE_STATUSES,
   PERMISSIONS,
+  type AdmissionStatus,
   type Candidate,
   type CandidateStatus,
   type Message,
@@ -40,10 +41,9 @@ import { hasMessage } from '@/domain/messages'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Kbd } from '@/components/ui/kbd'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { segmentedItemVariants } from '@/components/ui/tokens'
+import AdmissionDecisionControl from '@/components/app/AdmissionDecisionControl.vue'
 import CandidateDetailHeader from '@/components/app/CandidateDetailHeader.vue'
 import CandidatePreferenceDialog from '@/components/app/CandidatePreferenceDialog.vue'
 import CandidateStatusRadio from '@/components/app/CandidateStatusRadio.vue'
@@ -211,6 +211,15 @@ useRosterHotkeys({
     return true
   },
 })
+
+/**
+ * 段式控件（AdmissionDecisionControl）回传档位：与 1/2/3 快捷键走同一条写入口。
+ * `switchAdmission` 写库后刷新共享数据源 `useAdmissionList`，各页的「本部门决定」随之对齐。
+ */
+function onAdmissionSelect(status: AdmissionStatus): void {
+  const candidate = selected.value
+  if (candidate) void switchAdmission(candidate, status)
+}
 
 // ---- 面试过程记录 ----
 const { messages, loading: msgsLoading, error: msgsError, sending: msgsSending, load: loadMessages, prefetch: prefetchMessages, send: sendMessage } = useCandidateMessages()
@@ -509,26 +518,13 @@ function onPreferencesSaved(): void {
                 </Badge>
               </div>
 
-              <div
+              <AdmissionDecisionControl
                 v-if="canRecord && user?.department_id"
-                class="inline-flex items-center rounded-lg bg-muted p-1"
-                role="group"
-                aria-label="本部门录取决定（快捷键 1/2/3）"
-              >
-                <!-- 项内键帽 = 该档的快捷键序号（下标即 1/2/3，与 onOtherKey 的取档同一口径）；
-                     轨道是 bg-muted，故键帽用 surface 底色，否则会与轨道同色看不见。 -->
-                <button
-                  v-for="(s, i) in ADMISSION_STATUSES"
-                  :key="s"
-                  type="button"
-                  :class="segmentedItemVariants({ active: ownStatus === s })"
-                  :disabled="admissionsLoading"
-                  @click="switchAdmission(selected, s)"
-                >
-                  {{ ADMISSION_PRESENTATION[s].label }}
-                  <Kbd tone="surface">{{ i + 1 }}</Kbd>
-                </button>
-              </div>
+                :value="ownStatus"
+                :disabled="admissionsLoading"
+                key-hints
+                @select="onAdmissionSelect"
+              />
               <span v-else-if="ownStatus" class="text-sm text-muted-foreground">
                 {{ ADMISSION_PRESENTATION[ownStatus].label }}
               </span>
