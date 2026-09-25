@@ -3,6 +3,7 @@ import { computed, nextTick, onScopeDispose, ref, watch } from 'vue'
 import { ArrowDown, ArrowLeft, MessageSquare, Timer, UserRound } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 
+import { useConfirmAction } from '@/composables/useConfirmAction'
 import { useRoomChat } from '@/composables/useRoomChat'
 import { useWaitingQueue } from '@/composables/useWaitingQueue'
 import { nextPhaseOf, isInProgress } from '@/domain/status'
@@ -13,6 +14,7 @@ import { toastError } from '@/lib/toast'
 
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
+import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import EmptyState from '@/components/app/EmptyState.vue'
 import MessageComposer from '@/components/app/MessageComposer.vue'
 import MessageTranscript from '@/components/app/MessageTranscript.vue'
@@ -141,9 +143,32 @@ function send() {
   void scrollToBottom()
 }
 
-async function advance() {
-  if (!nextPhase.value) return
-  movePhase(nextPhase.value)
+/**
+ * 「推进到面试已结束」二次确认：不可逆结档（后端会解绑房间并留档「这场面试在哪间房间做的」、
+ * 消息通道关闭、记录转只读归档），与删除/结算同列；推进到「面试中」是常规操作，不拦。
+ * 命令仍走 WS（先落库后广播）：确认后立即关闭，阶段变化由 `room_phase_changed` 事件回填，
+ * 失败与直接推进走同一条错误路口（房间页顶部横幅）。
+ */
+const {
+  target: finishTarget,
+  request: requestFinish,
+  onOpenChange: onFinishOpenChange,
+  confirm: confirmFinish,
+} = useConfirmAction<CandidateStatus>({
+  action: async (to) => {
+    movePhase(to)
+  },
+})
+
+/** 阶段控制：推到「面试已结束」先确认，其余直接推进。 */
+function advance() {
+  const to = nextPhase.value
+  if (!to) return
+  if (to === 'COMPLETED') {
+    requestFinish(to)
+    return
+  }
+  movePhase(to)
 }
 
 async function handlePull(candidateId: number) {
@@ -304,5 +329,14 @@ watch(connecting, (v, prev) => {
       </div>
 
     </div>
+
+    <!-- 「推进到面试已结束」的二次确认（不可逆结档：释放房间 + 记录转只读归档） -->
+    <ConfirmDialog
+      :open="!!finishTarget"
+      title="结束这场面试并释放房间？"
+      confirm-text="结束面试"
+      @update:open="onFinishOpenChange"
+      @confirm="confirmFinish"
+    />
   </div>
 </template>
