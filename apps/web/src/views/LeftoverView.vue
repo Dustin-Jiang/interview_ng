@@ -4,6 +4,7 @@
   右侧：预算卡（本部门 / browse_all 各部门）+ 选中候选人的出价与结算详情。
   出价需 admissions.record 且已分配部门且处于捡漏阶段（行内数字输入 + ←/→ 步进 + Enter/按钮保存）；
   键位：**↑/↓ 切换候选人**、**←/→ 调整报价**（焦点在出价输入框内同样生效）、Enter 保存。
+  键位直接以 `ui/kbd` 键帽标在控件上（←/→ 就是两侧步进按钮、Enter 就是保存按钮），触屏上照样看得到。
   结算不由本页触发：进入「结算阶段」时后端按出价自动结算全部竞拍，结算结果以带文字 Badge 呈现。
   结算阶段竞拍数据只读。无部门用户只读。
 
@@ -13,7 +14,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { Check, Eye, EyeOff, Gavel, Minus, Plus, SearchX, UsersRound } from 'lucide-vue-next'
+import { Check, Eye, EyeOff, Gavel, SearchX, UsersRound } from 'lucide-vue-next'
 
 import { useLeftover } from '@/composables/useLeftover'
 import { useRosterHotkeys } from '@/composables/useRosterHotkeys'
@@ -27,6 +28,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Kbd } from '@/components/ui/kbd'
 import CandidateDetailHeader from '@/components/app/CandidateDetailHeader.vue'
 import EmptyState from '@/components/app/EmptyState.vue'
 import ErrorAlert from '@/components/app/ErrorAlert.vue'
@@ -315,16 +317,20 @@ function searchQuery(): Record<string, string> {
             <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
               <span class="shrink-0 text-muted-foreground">出价</span>
               <template v-if="bidEditable">
-                <div class="flex items-center gap-1">
+                <!-- 步进按钮直接以 ←/→ 键帽呈现（点它 = 按它），保存按钮给出 Enter 键帽：
+                     这三个键是本页唯一的快捷键，键帽让它们在触屏上也可见（不再是纯 aria-label）。
+                     步进方向由「键帽在数字两侧」自明，动作名留在 title / aria-label 里。 -->
+                <div class="flex flex-wrap items-center justify-end gap-1">
                   <Button
                     size="icon"
                     variant="outline"
                     class="h-8 w-8"
                     :disabled="savingId === selected.id"
                     aria-label="减少出价（←）"
+                    title="减少出价（←）"
                     @click="stepDraft(selected, -1)"
                   >
-                    <Minus aria-hidden="true" />
+                    <Kbd>←</Kbd>
                   </Button>
                   <Input
                     :model-value="drafts[selected.id] ?? ''"
@@ -342,19 +348,22 @@ function searchQuery(): Record<string, string> {
                     class="h-8 w-8"
                     :disabled="savingId === selected.id"
                     aria-label="增加出价（→）"
+                    title="增加出价（→）"
                     @click="stepDraft(selected, 1)"
                   >
-                    <Plus aria-hidden="true" />
+                    <Kbd>→</Kbd>
                   </Button>
                   <Button
-                    size="icon"
+                    size="sm"
                     variant="outline"
-                    class="h-8 w-8"
+                    class="h-8 px-2"
                     :disabled="savingId === selected.id"
                     :aria-label="`保存「${selected.name}」的出价`"
+                    title="保存出价（Enter）"
                     @click="saveBid(selected)"
                   >
                     <Check aria-hidden="true" />
+                    <Kbd>Enter</Kbd>
                   </Button>
                 </div>
               </template>

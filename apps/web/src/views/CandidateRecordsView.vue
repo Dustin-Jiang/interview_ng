@@ -38,6 +38,7 @@ import { sortRoster, ROSTER_BOARD_EVENTS } from '@/domain/status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Kbd } from '@/components/ui/kbd'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { segmentedItemVariants } from '@/components/ui/tokens'
@@ -496,10 +497,11 @@ function onPreferencesSaved(): void {
                 class="inline-flex items-center rounded-lg bg-muted p-1"
                 role="group"
                 aria-label="本部门录取决定（快捷键 1/2/3）"
-                title="快捷键：1 待定 / 2 录取 / 3 放弃"
               >
+                <!-- 项内键帽 = 该档的快捷键序号（下标即 1/2/3，与 onOtherKey 的取档同一口径）；
+                     轨道是 bg-muted，故键帽用 surface 底色，否则会与轨道同色看不见。 -->
                 <button
-                  v-for="s in ADMISSION_STATUSES"
+                  v-for="(s, i) in ADMISSION_STATUSES"
                   :key="s"
                   type="button"
                   :class="segmentedItemVariants({ active: ownStatus === s })"
@@ -507,6 +509,7 @@ function onPreferencesSaved(): void {
                   @click="switchAdmission(selected, s)"
                 >
                   {{ ADMISSION_PRESENTATION[s].label }}
+                  <Kbd tone="surface">{{ i + 1 }}</Kbd>
                 </button>
               </div>
               <span v-else-if="ownStatus" class="text-sm text-muted-foreground">

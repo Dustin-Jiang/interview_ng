@@ -20,6 +20,7 @@
 import { nextTick, ref, watch, type ComponentPublicInstance } from 'vue'
 
 import { Button } from '@/components/ui/button'
+import { Kbd } from '@/components/ui/kbd'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -67,10 +68,14 @@ watch(
       @keydown.esc="emit('cancel')"
     />
     <div class="flex items-center justify-end gap-2">
-      <Button variant="ghost" size="sm" :disabled="props.saving" @click="emit('cancel')">取消</Button>
+      <Button variant="ghost" size="sm" :disabled="props.saving" @click="emit('cancel')">
+        取消
+        <Kbd>Esc</Kbd>
+      </Button>
       <Button size="sm" :disabled="props.saving || !props.modelValue.trim()" @click="emit('save')">
         <Spinner v-if="props.saving" />
         保存
+        <Kbd>Enter</Kbd>
       </Button>
     </div>
   </div>

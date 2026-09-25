@@ -48,9 +48,10 @@ export type NavItemVariants = VariantProps<typeof navItemVariants>
 /**
  * 段式选择控件项（shadcn 风格）：置于 bg-muted 轨道内，激活项以 bg-background 脱离轨道。
  * 无实底填充、无阴影，仅激活文字/底色区分（含文字标签，不依赖颜色单通道）。
+ * 行内 flex：项内可能是「文字 + 键帽」（如录取决定的 1/2/3 快捷键提示）。
  */
 export const segmentedItemVariants = cva(
-  'shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-lg:min-h-11',
+  'inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-lg:min-h-11',
   {
     variants: {
       active: {
