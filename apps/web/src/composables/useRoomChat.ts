@@ -13,7 +13,7 @@ import { candidateApi, getAuthToken, roomApi } from '@/api/http'
 import { WsChannel } from '@/api/ws'
 import type { ChanEvent, ReplyPayload } from '@/api/ws-model'
 import type { CandidateStatus, Message, Room } from '@/models'
-import { phaseRoom, clearRoomCandidate, isInterviewing } from '@/domain/status'
+import { phaseRoom, clearRoomCandidate, isInterviewing, isInProgress } from '@/domain/status'
 import {
   addReaction,
   appendMessage,
@@ -250,8 +250,9 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
   // ---- 命令 ----
   function sendMessage(content: string): void {
     if (!room.value || !channel) return
-    // 面试已结档（或房间空闲）：消息通道关闭，本地直接不发（后端同样拒绝，见 AppendMessage）。
-    if (!isInterviewing(phase.value)) return
+    // 只有「面试中」（IN_PROGRESS）可写记录：待面试（还没点开始）与结档后都本地直接不发
+    // （后端 AppendMessage 同样拒绝：interview_not_started / interview_finished）。
+    if (!isInProgress(phase.value)) return
     const reqId = channel.sendMessage(content)
     expectReply(reqId, (p) => {
       if (!p.ok) error.value = p.error ?? '发送失败'

@@ -198,6 +198,9 @@ func TestSubscribeDeliversEvents(t *testing.T) {
 	defer cancel()
 
 	_, _, _ = st.JoinRoom(ctx, roomID, 7)
+	if _, err := st.MovePhase(ctx, roomID, 7, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("start interview: %v", err)
+	}
 	_, err := st.AppendMessage(ctx, roomID, 7, "hi")
 	if err != nil {
 		t.Fatalf("append: %v", err)

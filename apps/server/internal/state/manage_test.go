@@ -222,13 +222,18 @@ func TestCompleteCandidateClearsRoom(t *testing.T) {
 	if _, _, err := st.JoinRoom(ctx, roomID, 1); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, roomID, 1, "A 的面试记录"); err != nil {
-		t.Fatalf("append: %v", err)
+
+	// 「待面试」：候选人已拉进房间但面试还没开始，记录入口未开放
+	if _, err := st.AppendMessage(ctx, roomID, 1, "还没开始的记录"); !errors.Is(err, state.ErrInterviewNotStarted) {
+		t.Fatalf("待面试不该能写记录, want ErrInterviewNotStarted, got %v", err)
 	}
 
 	// 依次推进到 IN_PROGRESS -> COMPLETED
 	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
 		t.Fatalf("move in_progress: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, roomID, 1, "A 的面试记录"); err != nil {
+		t.Fatalf("append: %v", err)
 	}
 	mev, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusCompleted)
 	if err != nil {
@@ -286,6 +291,9 @@ func TestDeleteCandidateCascade(t *testing.T) {
 	}
 	if _, _, err := st.JoinRoom(ctx, roomID, 99); err != nil {
 		t.Fatalf("join: %v", err)
+	}
+	if _, err := st.MovePhase(ctx, roomID, 99, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("start interview: %v", err)
 	}
 	if _, err := st.AppendMessage(ctx, roomID, 99, "记录"); err != nil {
 		t.Fatalf("append: %v", err)
@@ -500,6 +508,9 @@ func TestEditAndDeleteMessageWindow(t *testing.T) {
 	if _, err := st.PullCandidate(ctx, roomID, cand); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("start interview: %v", err)
+	}
 	ev, err := st.AppendMessage(ctx, roomID, 1, "原始记录")
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -618,6 +629,9 @@ func TestMessageReactions(t *testing.T) {
 	}
 	if _, err := st.PullCandidate(ctx, roomID, cand); err != nil {
 		t.Fatalf("pull: %v", err)
+	}
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("start interview: %v", err)
 	}
 	ev, err := st.AppendMessage(ctx, roomID, 1, "待评价的记录")
 	if err != nil {

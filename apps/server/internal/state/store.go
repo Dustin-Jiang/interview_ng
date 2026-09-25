@@ -235,6 +235,9 @@ var (
 	// ErrInterviewFinished 这段面试已结档（候选人已完成及其后的录取档），房间消息通道关闭，
 	// 面试记录只读归档（归档补充走 AppendCandidateMessage，不受此限）。
 	ErrInterviewFinished = &Error{Code: "interview_finished", Msg: "面试已结束，不能再发送消息"}
+	// ErrInterviewNotStarted 候选人已拉进房间但面试还没开始（ASSIGNED「待面试」）：
+	// 消息通道只对「面试中」（IN_PROGRESS）开放，先推进到面试中再写记录。
+	ErrInterviewNotStarted = &Error{Code: "interview_not_started", Msg: "面试尚未开始，不能发送消息"}
 	// ErrInvalidContent 消息内容为空（去除首尾空白后）。
 	ErrInvalidContent = &Error{Code: "invalid_content", Msg: "消息内容不能为空"}
 	// ErrMessageNotOwner 只能编辑/撤回自己发送的消息（发送者已被删除的消息同属此列，无从归属）。

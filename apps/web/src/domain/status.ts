@@ -21,12 +21,22 @@ export function roomPhaseOf(room: Room): CandidateStatus | null {
 }
 
 /**
- * 是否处于「面试进行中」（已分配 / 面试中）——房间绑定与消息通道只在此期间有意义。
+ * 是否处于「面试进行中」（已分配 / 面试中）——房间绑定只在此期间有意义。
  * 面试结档（已完成及其后的待录取 / 已录取）时后端解绑房间：房间快照应清空候选人，
  * 面试记录转为只读归档（与后端 `model.CandidateStatus.Interviewing` 同一判据）。
  */
 export function isInterviewing(status: CandidateStatus | null): boolean {
   return status === 'ASSIGNED' || status === 'IN_PROGRESS'
+}
+
+/**
+ * 是否处于「面试中」（IN_PROGRESS）—— 房间消息通道（面试记录）只在这档开放。
+ * 「待面试」（ASSIGNED，已拉进房间但还没点开始面试）与结档后的录取档都不能写记录，
+ * 与后端 `model.CandidateStatus.InProgress` 同一判据（**改一处必须改另一处**）。
+ * 注意与 `isInterviewing` 的区别：后者描述「房间还绑着候选人」，用于结档解绑后的本地清理。
+ */
+export function isInProgress(status: CandidateStatus | null): boolean {
+  return status === 'IN_PROGRESS'
 }
 
 /**

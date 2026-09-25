@@ -551,11 +551,15 @@ func TestCandidateTranscriptArchivedAfterComplete(t *testing.T) {
 		return readReply(reqID)
 	}
 
-	// auth → 推进 IN_PROGRESS → 发两条记录 → 推进 COMPLETED
+	// auth → 「待面试」阶段发送被拒 → 推进 IN_PROGRESS → 发两条记录 → 推进 COMPLETED
 	if d := sendOp("a1", "auth", map[string]any{"token": token}); d == nil {
 		t.Fatalf("unreachable")
 	} else if ok, _ := d["data"].(map[string]any)["ok"].(bool); !ok {
 		t.Fatalf("auth failed: %v", d)
+	}
+	// 消息只属于「面试中」：候选人刚被拉进房间（ASSIGNED「待面试」）时写入被拒
+	if d := sendOp("s0", "send_msg", map[string]any{"content": "还没开始面试"}); d["data"].(map[string]any)["ok"] != false {
+		t.Fatalf("待面试阶段不该能发消息: %v", d)
 	}
 	sendOp("m1", "move_phase", map[string]any{"to": "IN_PROGRESS"})
 	sendOp("s1", "send_msg", map[string]any{"content": "自我介绍与项目经历"})
@@ -1519,6 +1523,10 @@ func TestMessageSenderDepartment(t *testing.T) {
 	roomID := int(out["id"].(float64))
 	doJSON(t, r, "PUT", "/api/rooms/"+itoa(roomID)+"/candidate", `{"candidate_id":`+itoa(candID)+`}`, token)
 	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/members", `{"user_id":`+itoa(userID)+`}`, token)
+	// 消息只属于「面试中」：先把候选人从「待面试」推进到 IN_PROGRESS（否则 send_msg 会被拒）。
+	if code, out := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/status", `{"status":"IN_PROGRESS"}`, token); code != http.StatusOK {
+		t.Fatalf("start interview: %d %v", code, out)
+	}
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()

@@ -57,10 +57,16 @@ func CanTransition(from, to CandidateStatus) bool {
 }
 
 // Interviewing 判断该档位是否处于「面试进行中」（已分配 / 正在进行中）。
-// 房间内的消息通道只在此期间开放：面试结档（已完成及其后的待录取 / 已录取）时房间即解绑，
-// 面试记录转为只读归档——空房间与已结档的房间都不再接收新消息。
+// 房间绑定只在此期间有意义：面试结档（已完成及其后的待录取 / 已录取）时房间即解绑。
 func (s CandidateStatus) Interviewing() bool {
 	return s == StatusAssigned || s == StatusInProgress
+}
+
+// InProgress 判断该档位是否处于「面试中」（IN_PROGRESS）—— 房间消息通道（面试记录）只在这段开放：
+// 「待面试」（ASSIGNED，候选人已拉进房间但还没点开始）与结档后的录取档都不得写记录。
+// 前端 `domain/status.ts#isInProgress` 是同一判据，**改一处必须改另一处**。
+func (s CandidateStatus) InProgress() bool {
+	return s == StatusInProgress
 }
 
 // Terminal 判断该档位是否已「定局」：面试已结束（COMPLETED）及其后的录取档

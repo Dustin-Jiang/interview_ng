@@ -518,14 +518,19 @@ func (s *MemStateStore) AppendMessage(ctx context.Context, roomID, senderID uint
 	if !s.isMemberLocked(ctx, roomID, senderID) {
 		return nil, ErrNotMember
 	}
-	// 消息只属于「正在面试」（已分配 / 面试中）的候选人：面试结档后这段记录只读归档。
-	// 正常路径下结档时房间已解绑（空房间上文已拒），此处按候选人状态再兜一道——
-	// 历史遗留的「已结档却仍绑着房间」的行同样不得再写入。
+	// 消息只属于「面试中」（IN_PROGRESS）：
+	//  - 「待面试」（ASSIGNED）只是已拉进房间、还没点开始，记录入口未开放（前端同步禁用）；
+	//  - 结档档位（COMPLETED 及其后的录取档）房间已解绑，记录只读归档，此处再兜一道——
+	//    历史遗留的「已结档却仍绑着房间」的行同样不得再写入。
 	c, err := s.ensureCandidate(ctx, *room.CandidateID)
 	if err != nil {
 		return nil, err
 	}
-	if !c.Status.Interviewing() {
+	switch {
+	case c.Status.InProgress():
+	case c.Status == dsmodel.StatusAssigned:
+		return nil, ErrInterviewNotStarted
+	default:
 		return nil, ErrInterviewFinished
 	}
 	return s.appendMessageLocked(ctx, roomID, *room.CandidateID, senderID, content)

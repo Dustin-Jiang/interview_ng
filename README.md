@@ -67,7 +67,7 @@ interview_ng/
 - **学号（身份键）**：`student_no` 必填、纯数字（1–64 位，全角数字按半角归一化、首尾空白去除）、唯一（DB 唯一索引兜底），前导零有意义（`00123` ≠ `123`）；新增/编辑/导入三条写入路径同一套校验，单条编辑允许改学号（撞号 → 409「学号已存在」，改号不影响运行态：房间绑定/消息/录取决定/出价均随候选人 id 保留）。**该列为 NOT NULL，故旧库必须重置**（AutoMigrate 无法给已有数据的表加 NOT NULL 列）：服务端启动时若发现这种旧库会**拒绝启动并打印处置提示**，`DB_RESET=1`（或 `just db-reset`）先删全部业务表再重建，**数据不可恢复**——这是唯一路径，不会自动清库（开发与部署共用同一个 Postgres）。
 - **候选人与状态机**：五档状态 `NOT_CHECKED_IN → CHECKED_IN_PENDING_ASSIGN → ASSIGNED → IN_PROGRESS → COMPLETED` 为唯一权威；管理端支持"重置到任意档"（向后自动解绑房间、向前须已有房间）。
 - **完成后自动清房**：候选人完成（无论房间内推进到 `COMPLETED`，还是管理端重置到 `COMPLETED`）自动清空房间绑定（`rooms.candidate_id` 置空，绑定唯一权威在房间侧），房间转空闲、成员留守，可立即拉取下一位候选人；消息仍**按候选人归档保留**，新候选人会话从零开始。
-- **面试结档即关闭消息通道**：结档档位不止 `COMPLETED`——`ADMISSION_PENDING`（待录取）/`ADMITTED`（已录取）位于面试完成之后，把**已绑定房间**的候选人重置到这两档同样自动解绑房间（并留档「在哪间房间面的」）。房间消息只写给「面试进行中」（`ASSIGNED`/`IN_PROGRESS`）的候选人：结档后这段记录**只读归档**（空房间与已结档候选人的房间发消息均被拒，`model.CandidateStatus.Interviewing` 为唯一判据），界面上房间输入区同步禁用。**归档本身仍可写**：候选人查看页的「面试记录」卡带补充入口（`POST /api/candidates/:id/messages`，需 `rooms.chat`），结档后照样能补记录——房间通道服务进行中的面试，归档补充不依赖房间与在场成员。
+- **面试中才开消息通道**：房间消息只写给**正在面试**（`IN_PROGRESS`）的候选人——「待面试」（`ASSIGNED`，已拉进房间但还没点开始）与结档后都拒写（`interview_not_started` / `interview_finished`，均 400），界面上房间输入区同步禁用（占位文案区分「还没开始」「已结束」）。结档档位不止 `COMPLETED`——`ADMISSION_PENDING`（待录取）/`ADMITTED`（已录取）位于面试完成之后，把**已绑定房间**的候选人重置到这两档同样自动解绑房间（并留档「在哪间房间面的」），这段记录随之**只读归档**（空房间仍拒发）。**归档本身仍可写**：候选人查看页的「面试记录」卡带补充入口（`POST /api/candidates/:id/messages`，需 `rooms.chat`），不限档位、也不依赖房间与在场成员——忘记开面试或已经结档，记录照样补得回来。
 - **鉴权**：登录 + JWT（7 天，`ver` 吊销计数）；RBAC 角色↔权限（9 枚权限目录），权限判断走内存缓存即时生效；`users.manage` 下可管理用户与角色。
 
 ---
@@ -147,7 +147,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 {"type":"reply","req_id":"r2","data":{"ok":true,...}}
 ```
 
-> `seq` 全局单调事件序；`msg_id` 为**候选人维度**续传游标——消息按候选人归属，候选人换房后历史随人走。空房间（无候选人）可入房但 `send_msg` 会被拒（`not_found`）；面试已结档（`COMPLETED` 及其后的录取档）同样被拒（`interview_finished`，记录只读）。结档后仍要补记录走归档入口 `POST /api/candidates/:id/messages`（不需房间与在场成员；候选人无房间时该事件全局扇出，房间页按候选人过滤，不串档）。
+> `seq` 全局单调事件序；`msg_id` 为**候选人维度**续传游标——消息按候选人归属，候选人换房后历史随人走。空房间（无候选人）可入房但 `send_msg` 会被拒（`not_found`）；「待面试」（`ASSIGNED`，还没点开始）被拒（`interview_not_started`）；面试已结档（`COMPLETED` 及其后的录取档）同样被拒（`interview_finished`，记录只读）——只有「面试中」（`IN_PROGRESS`）可写（`model.CandidateStatus.InProgress` 为唯一判据）。结档 / 未开始仍要补记录走归档入口 `POST /api/candidates/:id/messages`（不需房间与在场成员；候选人无房间时该事件全局扇出，房间页按候选人过滤，不串档）。
 > `message_appended` 同时带发送者展示名与**部门名**（`SenderName` / `SenderDepartment`，无部门为空串）：消息头部要显示「姓名 + 部门头衔 + 时间」，实时事件自带这两项，前端不必二次查询；历史消息（`GET /api/candidates/:id/messages` 与 `sync` 回执）同样预加载了 `sender.department`，故归档回放与实时聊天显示一致（`domain/messages.ts#senderDepartmentLabel`）。
 > 捡漏类事件：`leftover_bid`（出价变更，载荷 `{CandidateID, DepartmentID}`，**不含金额**）、`leftover_resolved`（结算，载荷 `{CandidateID, DepartmentID, Amount}`）——均全局扇出。
 >

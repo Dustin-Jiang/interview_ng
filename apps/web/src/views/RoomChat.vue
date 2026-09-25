@@ -5,7 +5,7 @@ import { toast } from 'vue-sonner'
 
 import { useRoomChat } from '@/composables/useRoomChat'
 import { useWaitingQueue } from '@/composables/useWaitingQueue'
-import { nextPhaseOf, isInterviewing } from '@/domain/status'
+import { nextPhaseOf, isInProgress } from '@/domain/status'
 import { roomLabel } from '@/domain/room'
 import type { CandidateStatus } from '@/models'
 import { formatDateTime } from '@/lib/format'
@@ -47,17 +47,28 @@ const nextPhase = computed<CandidateStatus | null>(() => nextPhaseOf(phase.value
 const hasCandidate = computed(() => !!room.value?.candidate)
 
 /**
- * 消息通道是否开放：只有「面试进行中」（已分配 / 面试中）的候选人可写记录。
- * 面试结档（已完成及其后的录取档）时后端解绑房间，这段记录转为只读归档，
- * 输入区随之禁用（与后端 AppendMessage 同一判据）。
+ * 消息通道是否开放：只有「面试中」（IN_PROGRESS）的候选人可写记录。
+ * 「待面试」（已分配进房、还没点开始面试）与面试结档（已完成及其后的录取档，此时后端已解绑房间）
+ * 都发不了——前者先推进到「面试中」，后者的记录转为只读归档（与后端 AppendMessage 同一判据）。
  */
-const canSend = computed(() => isInterviewing(phase.value))
+const canSend = computed(() => isInProgress(phase.value))
 
-/** 输入框占位文案：区分「房间空闲」与「面试已结束」两种不可发送的原因。 */
-const inputPlaceholder = computed(() => {
-  if (canSend.value) return '输入面试记录，Enter 发送…'
-  return hasCandidate.value ? '面试已结束，面试记录只读' : '等待候选人进房后可发送消息'
+/** 「还不能发记录」的原因：区分「房间空闲」「还没开始面试」「面试已结束」三种。 */
+const blockedReason = computed(() => {
+  if (!hasCandidate.value) return '等待候选人进房后可发送消息'
+  if (phase.value === 'ASSIGNED') return '尚未开始面试，推进到「面试中」后即可记录'
+  return '面试已结束，面试记录只读'
 })
+
+/** 输入框占位文案。 */
+const inputPlaceholder = computed(() =>
+  canSend.value ? '输入面试记录，Enter 发送…' : blockedReason.value,
+)
+
+/** 无消息时的空态文案：还没开始时提示怎么开始，结档后说明记录只读。 */
+const emptyHint = computed(() =>
+  canSend.value ? '暂无消息，发送第一条面试记录吧' : blockedReason.value,
+)
 
 // ---- 阶段计时器：仅在「面试中」计时，起点 = 切到面试中的那一刻 ----
 const showTimer = computed(() => phase.value === 'IN_PROGRESS')
@@ -259,7 +270,7 @@ watch(connecting, (v, prev) => {
               房间空闲，拉取候选人后开始面试
             </EmptyState>
             <EmptyState v-else-if="!messages.length && !connecting" bare :icon="MessageSquare" class="py-12">
-              {{ canSend ? '暂无消息，发送第一条面试记录吧' : '面试已结束，这场面试没有留下记录' }}
+              {{ emptyHint }}
             </EmptyState>
 
             <!-- 消息列表：与归档页共用 MessageTranscript（同一视觉语言 + 同一套编辑/撤回交互） -->
