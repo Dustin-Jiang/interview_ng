@@ -99,7 +99,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 | `candidates` | id, **student_no(唯一, NOT NULL)**, name, profile, first_choice, second_choice, accept_adjust, phone, qq, email, status, **interview_started_at(可空)**, **interview_completed_at(可空)**, **checked_in_at(可空)**, **waiting_priority(可空)**, **interview_room_id(可空)**, **interview_room_name** | 候选人（非登录用户）；**学号 = 身份键**（纯数字、唯一、前导零有意义），志愿/联系方式为可选资料字段，当前房间归属为查询投影（`rooms.candidate_id` 主导，`room_id` 不落库）；`interview_started_at` = 进入「面试中」时打点、离开该档即清空（NULL = 不在面试中），前端面试计时以此为准（`updated_at` 会被任意资料编辑刷新，不能当计时起点）；`interview_completed_at` = 进入「面试已结束」时打点、**开始下一次面试才作废**（与 `interview_room_*` 快照同族：结档后仍是事实，名册里「面试过的那组按面试时间升序、排在没面试记录者之后」以它为准）；`checked_in_at` = **签到那一刻打点，只有重置回「未签到」才清空**（被拉进房间 / 开始面试 / 完成都不清空——大屏要让已签到的各档按到达先后排列）；房间「拉取候选人」列表与候场大屏据此先来后到（同理不能用 `updated_at`：导入/编辑资料会刷新它，排队顺序会被打乱）；`interview_room_id` / `interview_room_name` = **这场面试在哪间房间做的**，在推进到「面试已结束」的那一刻记录（房间随即解绑，不留档就查不到），名字存快照 —— 房间之后改名或删除仍能回答「当时在哪间」，房间删除时 id 置空、快照保留（候选人查看页的「面试房间」筛选取值即 `interview_room_id`，选项名优先用快照） |
 | `rooms` | id, **name**, candidate_id(可空) | 房间 = 独立物理会议室记录，`name` 为可选别名（空串=未命名，UI 回退「房间 #id」，不要求唯一），`candidate_id` 可空；无状态机、无主持人，"状态"= 候选人状态的查询投影 |
 | `room_members` | room_id, user_id（`idx_room_user` 唯一） | 房间成员（**席位 = 此刻在场**：进程启动时清空，WS 断开即退房；一人可同时在多间房） |
-| `messages` | id, candidate_id, sender_id(可空), content | 群聊记录（长存），**按候选人归属**，`id` 即候选人维度续传游标 |
+| `messages` | id, candidate_id, sender_id(可空), content, reply_to_id(可空) | 群聊记录（长存），**按候选人归属**，`id` 即候选人维度续传游标；`reply_to_id` = 引用的先行消息（**只存 id，不存内容快照**，详见「消息引用」） |
 | `message_reactions` | message_id, user_id, emoji（三者联合唯一）, created_at | 记录上的表情回复：**一人对一条记录的同一表情只能一份**（重复提交幂等）；表情限 `model.ReactionEmojis` 允许集（24 枚，按「态度/评价/关注/其他」分组，前端同序镜像）；撤回消息 / 删除候选人 / 删除用户时显式连带清理 |
 | `system_status` | id=1(单行), phase(interview/admission/leftover/settlement) | 系统状态：当前面试 / 录取 / 捡漏 / 结算阶段，管理端可切换 |
 | `candidate_admissions` | candidate_id + department_id（联合唯一）, status(pending/admitted/withdrawn) | 各部门对候选人的录取决定（候选人无固定部门，按部门分别记） |
@@ -134,7 +134,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 ```json
 {"op":"auth",        "req_id":"a1", "data":{"token":"<jwt>"}}
 {"op":"sync",        "req_id":"r1", "data":{"last_msg_id":0}}
-{"op":"send_msg",    "req_id":"r2", "data":{"content":"hello"}}
+{"op":"send_msg",    "req_id":"r2", "data":{"content":"hello", "reply_to_id":41}}
 {"op":"move_phase",  "req_id":"r4", "data":{"to":"IN_PROGRESS"}}
 ```
 
@@ -142,7 +142,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 服务端推送（事件 / 回复）：
 ```json
-{"type":"message_appended","room_id":3,"seq":12,"msg_id":101,"data":{"RoomID":3,"CandidateID":5,"SenderID":1,"SenderName":"张三","SenderDepartment":"技术部","Content":"hello"}}
+{"type":"message_appended","room_id":3,"seq":12,"msg_id":101,"data":{"RoomID":3,"CandidateID":5,"SenderID":1,"SenderName":"张三","SenderDepartment":"技术部","Content":"hello","ReplyToID":98}}
 {"type":"candidate_signed_in","room_id":0,"seq":11,"data":{"CandidateID":5}}
 {"type":"reply","req_id":"r2","data":{"ok":true,...}}
 ```
@@ -154,6 +154,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 > 事件类型：`candidate_signed_in`（全局）、`candidate_assigned`、`room_phase_changed`、`message_appended`、`message_updated`、`message_deleted`、`message_reactions_changed`、`member_joined/left`（以上带 room_id）、`candidate_created/updated/deleted`、`candidate_priority_changed`（候场队列手动调序）与 `room_created/deleted/renamed`（全局，载荷 `{CandidateID}` / `{RoomID}`）。
 > 消息编辑 / 撤回（`message_updated` 载荷 `{CandidateID, MessageID, Content}`、`message_deleted` 载荷 `{CandidateID, MessageID}`）同样按「候选人所属房间」路由——归档页与房间页都能就地改/撤；**窗口 2 分钟且仅发送者本人**（`state.MessageModifyWindow`，`EditMessage`/`DeleteMessage` 复核，编辑不延长窗口）。
 > 表情回复（`message_reactions_changed` 载荷 `{CandidateID, MessageID, Emoji, UserID, Added, UserName, UserDepartment}`）是**与观察者无关的一条增量**：各端据 `UserID`/`Added` 加减，计数、是否「我回的」与**回复人明细**（右键菜单「谁回了什么」）自行聚合——因此同一事件可直接广播给所有人。**事件自带回复人展示名与部门**（与 `message_appended` 带 `SenderName`/`SenderDepartment` 同理），只靠事件得知的回复也能显示姓名，前端不必查用户表。状态未变化的重复提交不广播（幂等）。
+> **消息引用**：一条记录可引用同候选人名下的一条先行记录（`messages.reply_to_id`，写入时经 `POST /api/candidates/:id/messages` 的 `reply_to_id` 或 WS `send_msg` 的同名字段；实时事件在 `message_appended` 载荷里带 `ReplyToID`）。引用**只存 id、不存内容快照**，因此：跨候选人引用一律拒绝（`invalid_reply`，400）；被引用记录撤回（物理删除）后该 id **悬空**、不做级联清空，读取方在自己已加载的记录里按 id 现查，查不到就显示「引用的消息已撤回」——引用不保留内容副本，撤回的语义就是内容消失。编辑记录只覆盖 `content`，**不**改引用（请求体里的 `reply_to_id` 被忽略）。
 
 ## 认证与鉴权
 
@@ -224,7 +225,7 @@ pnpm dev                      # http://localhost:3000 （vite 已把 /api 与 /w
 - `PATCH /api/candidates/:id/preferences` `{first_choice, second_choice, accept_adjust}`（**志愿与调剂**：独立权限 `candidates.preferences`（面试官默认持有），只覆盖这三列，其他资料与运行态不动；三项须完整给出，bool 无缺省语义）
 - `PUT  /api/candidates/:id/status` `{status}`（重置到任意档：向后自动解绑、向前须已有房间）
 - `GET  /api/candidates/:id/messages`（候选人历史面试记录归档，完成 / 换房后仍可查）
-- `POST /api/candidates/:id/messages`（向归档补充一条记录，需 `rooms.chat`；**不依赖房间与在场成员**，面试结档后仍可写——这是「面试完成后仍要补记录」的唯一入口，房间通道只服务进行中的面试）
+- `POST /api/candidates/:id/messages` `{content, reply_to_id?}`（向归档补充一条记录，需 `rooms.chat`；**不依赖房间与在场成员**，面试结档后仍可写——这是「面试完成后仍要补记录」的唯一入口，房间通道只服务进行中的面试。`reply_to_id` 引用**同候选人**名下的一条先行记录：不存在或跨候选人 → `400 invalid_reply`）
 - `PATCH /api/candidates/:id/messages/:messageId` `{content}` / `DELETE /api/candidates/:id/messages/:messageId`（**编辑 / 撤回自己的记录**，需 `rooms.chat` + 发送者本人 + 距发送 ≤ 2 分钟：他人记录 → `403`，超窗口 → `409`，消息不在该候选人名下或不存在 → `404`；撤回为物理删除）
 - `PUT|DELETE /api/candidates/:id/messages/:messageId/reactions/:emoji`（**表情回复**，需 `rooms.chat`；PUT 加上、DELETE 撤回，均幂等且**不设时间窗口**——任何档位、任何时间都能回；表情限允许集，之外 → `400`。消息的 `reactions` 字段随归档读取带出：`[{user_id, emoji, user}]`（`user` 为回复人展示名与部门，供右键菜单显示「谁回了什么」；不含凭据字段），计数与「我回没回」由前端按当前用户聚合）
 - `POST /api/candidates/imports` `{rows:[{student_no, name, profile, first_choice, second_choice, accept_adjust, phone, qq, email, updated_at?}]}`（**批量导入**，需 `candidates.manage`）：单事务**全或无**，按学号 upsert（命中即覆盖全部资料列，值相同也写；批内同学号后者覆盖前者），只写资料列，运行态一律不动；`updated_at`（可选，RFC3339）早于库中该行 `updated_at` 的行判为**过期 → 跳过不覆盖**（不写库不广播，报告 `status:"skipped"` 并带 `stored_updated_at`；比较基准是导入开始时的库中快照，故批内后行不会因前行写回而被误判）；成功 `200 {created, updated, skipped, rows:[{index, status, candidate_id, stored_updated_at?}]}`，任一行的硬错误 → `400 {error, rows:[{index, error}]}`（整批未落库）。单次上限 2000 行
