@@ -14,6 +14,11 @@ db:
 server:
     cd apps/server && GOCACHE="$PWD/.gopath/gocache" go run ./cmd/server
 
+# 用途：旧库 schema 与本版本不兼容（AutoMigrate 只会建表/加列，改不了既有列的约束）
+# 重置数据库 schema：删全部业务表后重建（破坏性，数据不可恢复）
+db-reset:
+    cd apps/server && GOCACHE="$PWD/.gopath/gocache" DB_RESET=1 go run ./cmd/server
+
 # 启动前端 web（Vite，:8000）
 web:
     pnpm run dev:web

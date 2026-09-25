@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -46,15 +47,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 自动建表（演示用；生产建议用迁移工具）。
-	if err := db.AutoMigrate(
-		&dsmodel.User{}, &dsmodel.Candidate{}, &dsmodel.Room{},
-		&dsmodel.RoomMember{}, &dsmodel.Message{}, &dsmodel.MessageReaction{},
-		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
-		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
-		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{}, &dsmodel.OidcDeptRule{},
-		&dsmodel.ObservabilityConfig{},
-	); err != nil {
+	// 自动建表（演示用；生产建议用迁移工具）。AutoMigrate 只会建表/加列，改不了既有列的约束，
+	// 所以旧库 schema 与本版本不兼容时唯一的出路是删表重建：默认拒绝启动并给出处置提示，
+	// 只有显式 DB_RESET=1 才真的删——开发与部署共用同一个 Postgres（及 ./data 目录），
+	// 自动清库会把真实数据一起删掉。
+	if dbReset() {
+		slog.Warn("DB_RESET 已设置：删除全部业务表后重建（数据不可恢复）")
+		if err := db.Migrator().DropTable(appModels()...); err != nil {
+			slog.Error("drop tables", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+	}
+	if err := db.AutoMigrate(appModels()...); err != nil {
+		if hint := incompatibleSchemaHint(db); hint != "" {
+			slog.Error("旧库 schema 与本版本不兼容", slog.String("hint", hint))
+		}
 		slog.Error("migrate", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
@@ -144,6 +151,40 @@ func main() {
 			slog.Error("graceful shutdown", slog.String("error", err.Error()))
 		}
 	}
+}
+
+// appModels 是 AutoMigrate 的权威表清单：新增模型只改这里（删表重建也用它）。
+func appModels() []any {
+	return []any{
+		&dsmodel.User{}, &dsmodel.Candidate{}, &dsmodel.Room{},
+		&dsmodel.RoomMember{}, &dsmodel.Message{}, &dsmodel.MessageReaction{},
+		&dsmodel.Role{}, &dsmodel.RolePermission{}, &dsmodel.UserRole{},
+		&dsmodel.Department{}, &dsmodel.SystemStatus{}, &dsmodel.CandidateAdmission{}, &dsmodel.Bid{},
+		&dsmodel.OidcConfig{}, &dsmodel.OidcRoleRule{}, &dsmodel.OidcDeptRule{},
+		&dsmodel.ObservabilityConfig{},
+	}
+}
+
+// dbReset 读取 DB_RESET 开关：显式选择「不兼容旧库 → 删表重建」的破坏性路径。
+// 默认关闭——开发与部署共用同一个 Postgres（及 ./data 目录），自动清库会连真实数据一起删。
+func dbReset() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DB_RESET"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// incompatibleSchemaHint 识别 AutoMigrate 修不了的旧库形状，返回可执行的处置提示（空串 = 没识别出）。
+// 目前已知一种：candidates 表在但缺 student_no —— 该列是本版本的身份键（NOT NULL + 唯一），
+// 没法补到已有数据的表上（Postgres 报 `column contains null values`），只能重建。
+func incompatibleSchemaHint(db *gorm.DB) string {
+	m := db.Migrator()
+	if !m.HasTable(&dsmodel.Candidate{}) || m.HasColumn(&dsmodel.Candidate{}, "student_no") {
+		return ""
+	}
+	return "candidates 表缺少 student_no 列（本版本该列为 NOT NULL 身份键，AutoMigrate 无法给已有数据的表补上）；" +
+		"旧库需要重建：设置 DB_RESET=1 重启（或 `just db-reset`）会先删除全部业务表再重新建表，数据不可恢复"
 }
 
 func envOr(k, def string) string {
