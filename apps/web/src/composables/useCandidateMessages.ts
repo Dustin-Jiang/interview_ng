@@ -28,7 +28,7 @@ export interface UseCandidateMessages {
    * 写入成功后强制重拉该候选人记录：先回放旧内容（不闪骨架）再静默替换为最新。
    * 失败（无权限 / 内容为空 / 网络）原样抛出，由调用方提示。
    */
-  send: (candidateId: number, content: string) => Promise<void>
+  send: (candidateId: number, content: string, replyToId?: number | null) => Promise<void>
 }
 
 export function useCandidateMessages(): UseCandidateMessages {
@@ -96,10 +96,10 @@ export function useCandidateMessages(): UseCandidateMessages {
     }
   }
 
-  async function send(candidateId: number, content: string): Promise<void> {
+  async function send(candidateId: number, content: string, replyToId?: number | null): Promise<void> {
     sending.value = true
     try {
-      await candidateApi.appendMessage(candidateId, content)
+      await candidateApi.appendMessage(candidateId, content, replyToId)
       // 归档已写入：丢掉在途请求（它可能是写入前发出的旧快照），再走 load ——
       // 命中缓存先回放旧内容（不闪骨架），随后静默复检替换为最新。
       inflight.delete(candidateId)

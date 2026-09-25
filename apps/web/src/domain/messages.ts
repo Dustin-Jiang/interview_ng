@@ -14,6 +14,8 @@ interface AppendedEventData {
   /** 发送者部门名（无部门为空串）：实时消息头部的「头衔」用它，不必二次查询。 */
   SenderDepartment?: string
   Content?: string
+  /** 引用的先行消息 id（无引用时字段缺省）。 */
+  ReplyToID?: number
 }
 
 /** 从「message_appended」频道事件构建一条 Message；非该事件返回 null。 */
@@ -40,6 +42,7 @@ export function messageFromEvent(ev: ChanEvent): Message | null {
     sender,
     content: d.Content ?? '',
     created_at: new Date().toISOString(),
+    reply_to_id: d.ReplyToID ?? null,
   }
 }
 
@@ -281,8 +284,19 @@ export function lastMessageId(messages: readonly Message[]): number {
 }
 
 /**
+ * 发送者的展示名来源：**姓名 → 用户名**。面试官的「姓名」是选填（用户列表里空姓名显示「-」），
+ * 故凡是显示发送者的地方都必须回落到用户名——否则同一个人会在消息头部显示用户名、
+ * 在引用块里退化成「面试官 {id}」。姓名与用户名都空（或 sender 缺失，如发送者已被删）
+ * 返回 undefined，交给 `senderLabel` 走各自的分支（自己 →「我」、已删 →「已删除用户」、
+ * 其余 →「面试官 {id}」）。
+ */
+export function senderDisplayName(m: Message): string | undefined {
+  return m.sender?.name || m.sender?.username
+}
+
+/**
  * 消息发送者展示名：自己 → 「我」；发送者已删 → 「已删除用户」；
- * 有预加载资料 → 姓名/用户名；否则退化为「面试官 {id}」（实时事件不携带 sender）。
+ * 有预加载资料 → `senderDisplayName(m)`（姓名 → 用户名）；否则退化为「面试官 {id}」。
  */
 export function senderLabel(
   senderId: number | null,
@@ -303,4 +317,20 @@ export function senderLabel(
  */
 export function senderDepartmentLabel(m: Message): string {
   return m.sender?.department?.name ?? ''
+}
+
+/**
+ * 引用块的展示口径（气泡外的引用块与输入区的「正在引用」条共用）：被引用消息的「谁」+ 原文。
+ * 只给这两样：引用块是**单行**提示，部门头衔（消息头部已经有了）不在此重复。
+ * 传 undefined（被引用消息已撤回 / 不在当前记录窗口内）返回 null，由调用方显示占位文案。
+ */
+export function quotedPreview(
+  message: Message | undefined,
+  currentUserId: number | null,
+): { label: string; content: string } | null {
+  if (!message) return null
+  return {
+    label: senderLabel(message.sender_id, currentUserId, senderDisplayName(message)),
+    content: message.content,
+  }
 }

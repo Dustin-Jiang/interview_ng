@@ -11,7 +11,7 @@
   交互：在气泡上**右键**（触屏长按、键盘菜单键同效）打开菜单——「自己发送且两分钟内」的记录
   才能编辑/撤回（`domain/messages.ts#canModifyMessage`，窗口口径与后端 `state.MessageModifyWindow`
   一致）；其余记录触发区禁用，右键即浏览器默认菜单。编辑就地改、撤回走二次确认（不可逆）。
-  菜单含「复制消息」+ 本人 2 分钟内的「编辑」「撤回」。**正在编辑这条时触发区整块禁用**：
+  菜单含「复制消息」「引用」+ 本人 2 分钟内的「编辑」「撤回」。**正在编辑这条时触发区整块禁用**：
   编辑框要的是系统的复制/粘贴/选中菜单，所以此时既不 preventDefault 也不拦长按（reka 的
   `disabled` 语义，见 `ContextMenuTrigger`），右键/长按回到浏览器原生菜单；取消编辑走 Esc
   或气泡下方的取消按钮。
@@ -19,17 +19,16 @@
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Copy, Pencil, Undo2 } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 
 import { candidateApi } from '@/api/http'
 import { useAuth } from '@/composables/useAuth'
 import { useConfirmAction } from '@/composables/useConfirmAction'
 import {
-  REACTION_EMOJIS,
   canModifyMessage,
   continuesGroup,
   senderLabel,
+  senderDisplayName,
   senderDepartmentLabel,
   summarizeReactions,
   type ReactionSummary,
@@ -40,17 +39,13 @@ import { toastError } from '@/lib/toast'
 import { PERMISSIONS, type Message } from '@/models'
 
 import { Badge } from '@/components/ui/badge'
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from '@/components/ui/context-menu'
-import { chatBubbleVariants } from '@/components/ui/tokens'
+import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { chatBubbleVariants, quotedBlockVariants } from '@/components/ui/tokens'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
+import MessageContextMenu from '@/components/app/MessageContextMenu.vue'
 import MessageEditor from '@/components/app/MessageEditor.vue'
 import MessageReactions from '@/components/app/MessageReactions.vue'
+import QuotedMessageRef from '@/components/app/QuotedMessageRef.vue'
 import { cn } from '@/lib/utils'
 
 const props = defineProps<{
@@ -58,16 +53,20 @@ const props = defineProps<{
   messages: Message[]
 }>()
 
-/** 编辑/撤回成功：内容已落库，持有方据此重拉或就地更新。 */
-const emit = defineEmits<{ changed: [] }>()
+/** 编辑/撤回成功：内容已落库，持有方据此重拉或就地更新；`quote` = 请求引用某条记录（持有方接管待发引用）。 */
+const emit = defineEmits<{ changed: []; quote: [message: Message] }>()
 
 const { currentUserId, hasPermission } = useAuth()
 
-/** 能否回复表情：与写入记录同一枚权限（房间聊天）；不设时间窗口，任何档位都可回。 */
-const canReact = computed(() => hasPermission(PERMISSIONS.ROOMS_CHAT))
+/**
+ * 能否写这条记录（`rooms.chat`）：表情回复、引用、编辑**同属「可写」这一枚权限**，
+ * 故统一用 `canChat` 表达。表情与引用不设时间窗口（任何档位都可），编辑另受
+ * `canModifyMessage` 的两分钟窗口约束。
+ */
+const canChat = computed(() => hasPermission(PERMISSIONS.ROOMS_CHAT))
 
 function reactable(m: Message): boolean {
-  return canReact.value && m.candidate_id > 0
+  return canChat.value && m.candidate_id > 0
 }
 
 /**
@@ -83,12 +82,18 @@ onBeforeUnmount(() => {
 })
 
 function labelOf(m: Message): string {
-  return senderLabel(m.sender_id, currentUserId.value, m.sender?.name || m.sender?.username)
+  return senderLabel(m.sender_id, currentUserId.value, senderDisplayName(m))
 }
 
 function isOwn(m: Message): boolean {
   return m.sender_id != null && m.sender_id === currentUserId.value
 }
+
+/** id → 消息（本页已加载的记录）：引用块据此现查被引用消息——服务端不存内容快照。 */
+const byId = computed(() => new Map(props.messages.map((m) => [m.id, m])))
+
+/** 取被引用消息；查不到（已撤回 = 物理删除，或不在当前记录窗口内）返回 undefined，由 QuotedMessageRef 显示占位。 */
+const quotedOf = (id: number) => byId.value.get(id)
 
 function modifiable(m: Message): boolean {
   return canModifyMessage(m, currentUserId.value, now.value)
@@ -277,6 +282,17 @@ const {
           </div>
           <time v-else class="sr-only">{{ formatDateTime(m.created_at) }}</time>
 
+          <!-- 引用块：**在气泡外、气泡正上方**（贴同一侧、与气泡同一收缩宽度上限）——
+               引用是「这条在回哪条」的说明，不该挤进气泡、也不该随着气泡的两种底色变样。
+               被引用消息从本页已加载记录里按 id 现查（服务端不存内容快照，查不到即「已撤回」）。
+               表面与输入区「正在引用」条共用 `quotedBlockVariants`（同一视觉语言）。 -->
+          <div
+            v-if="m.reply_to_id"
+            :class="cn(quotedBlockVariants(), 'max-w-[85%] sm:max-w-[75%]')"
+          >
+            <QuotedMessageRef :message="quotedOf(m.reply_to_id)" />
+          </div>
+
           <!-- 编辑态：气泡换成多行输入（Enter 保存 / Shift+Enter 换行 / Esc 取消） -->
           <MessageEditor
             v-if="editingId === m.id"
@@ -309,62 +325,20 @@ const {
         </div>
       </ContextMenuTrigger>
 
-      <!-- 弹层默认 min-w 只有 9rem：6 列表情网格需要更宽的底板，顺带让「谁回了什么」一行放得下。
-           触屏再放宽到 17rem——手机窄屏下 13rem 会把每格表情压成 30px 宽的细条（高度却是 44px），
-           「过细」得不像可点的目标；17rem 让 6 列各约 42px ≈ 方格。上限 `100vw-1rem` 防溢出。 -->
-      <ContextMenuContent
-        class="max-h-[var(--reka-context-menu-content-available-height)] min-w-[13rem] max-w-[calc(100vw-1rem)] overflow-y-auto max-lg:min-w-[17rem]"
-      >
-        <!-- 表情回复：24 个表情铺成 6×4 网格（与 `REACTION_EMOJIS` 的分组顺序一致，一点即回，
-             不必再开子菜单）。
-             已经回过的表情用实底标出（MenuItem 的 aria-checked + data-state，见下），避免「再点一下把它撤了」的意外。 -->
-        <div v-if="reactable(m)" class="grid grid-cols-6 gap-0.5 p-1" role="presentation">
-          <ContextMenuItem
-            v-for="e in REACTION_EMOJIS"
-            :key="e"
-            class="justify-center px-0 text-base leading-none"
-            :class="mineEmojis(m).has(e) ? 'bg-primary text-primary-foreground' : ''"
-            role="menuitemcheckbox"
-            :aria-checked="mineEmojis(m).has(e)"
-            :aria-label="mineEmojis(m).has(e) ? `撤回 ${e}` : `用 ${e} 回复`"
-            @select="toggleReaction(m, e)"
-          >
-            <span aria-hidden="true">{{ e }}</span>
-          </ContextMenuItem>
-        </div>
-        <ContextMenuSeparator v-if="reactable(m) && (hasReactions(m) || modifiable(m))" />
-
-        <!-- 谁回了什么：每个表情一行，列出回复人（姓名·部门，自己显示「我」）。
-             纯展示区，不是菜单项——避免方向键停在无动作的行上。 -->
-        <div v-if="hasReactions(m)" class="space-y-0.5 px-2 py-1.5" role="group" aria-label="表情回复明细">
-          <div
-            v-for="d in reactionDetails.get(m.id)"
-            :key="d.emoji"
-            class="flex items-baseline gap-2 text-xs"
-          >
-            <!-- 与右侧姓名同字号、同基线：emoji 用更大的字号或 items-start 会让两者差开 ~2px -->
-            <span class="w-4 shrink-0 text-center" aria-hidden="true">{{ d.emoji }}</span>
-            <span class="shrink-0 tabular-nums text-muted-foreground">×{{ d.count }}</span>
-            <span class="min-w-0 break-words text-foreground/90">{{ d.names }}</span>
-          </div>
-        </div>
-        <ContextMenuSeparator v-if="hasReactions(m) && modifiable(m)" />
-
-        <!-- 复制消息：任何能打开菜单的记录都可复制（含别人的、已过编辑窗口的）。 -->
-        <ContextMenuItem @select="copyMessage(m)">
-          <Copy class="h-4 w-4" aria-hidden="true" />
-          复制消息
-        </ContextMenuItem>
-        <ContextMenuItem v-if="modifiable(m)" @select="startEdit(m)">
-          <Pencil class="h-4 w-4" aria-hidden="true" />
-          编辑
-        </ContextMenuItem>
-        <ContextMenuSeparator v-if="modifiable(m)" />
-        <ContextMenuItem v-if="modifiable(m)" destructive @select="requestRecall(m)">
-          <Undo2 class="h-4 w-4" aria-hidden="true" />
-          撤回
-        </ContextMenuItem>
-      </ContextMenuContent>
+      <!-- 弹层内容拆到 `MessageContextMenu`（本组件接近 400 行上限）：行为与无障碍属性逐字保留，
+           数据与写入动作仍由本组件持有，经 props/emits 往返。 -->
+      <MessageContextMenu
+        :reactable="reactable(m)"
+        :modifiable="modifiable(m)"
+        :can-chat="canChat"
+        :mine="mineEmojis(m)"
+        :details="reactionDetails.get(m.id) ?? []"
+        @react="toggleReaction(m, $event)"
+        @copy="copyMessage(m)"
+        @quote="emit('quote', m)"
+        @edit="startEdit(m)"
+        @recall="requestRecall(m)"
+      />
     </ContextMenu>
 
     <!-- 撤回确认（不可逆） -->

@@ -30,10 +30,12 @@ import {
   PERMISSIONS,
   type Candidate,
   type CandidateStatus,
+  type Message,
 } from '@/models'
 import { formatDateTime } from '@/lib/format'
 import { toastError } from '@/lib/toast'
 import { sortRoster, ROSTER_BOARD_EVENTS } from '@/domain/status'
+import { hasMessage } from '@/domain/messages'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -220,21 +222,34 @@ const { messages, loading: msgsLoading, error: msgsError, sending: msgsSending, 
 const canCompose = computed(() => hasPermission(PERMISSIONS.ROOMS_CHAT))
 const draft = ref('')
 
+/** 待发引用目标：右键「引用」某条记录后置上，发送成功、切候选人或引用目标撤回（见 watch）时清空。 */
+const quoteTarget = ref<Message | null>(null)
+
 async function submitMessage(): Promise<void> {
   const id = selectedId.value
   const text = draft.value.trim()
   if (!id || !text || msgsSending.value) return
   try {
-    await sendMessage(id, text)
+    await sendMessage(id, text, quoteTarget.value?.id)
     draft.value = ''
+    // 引用只对这一条生效：发完即清，避免下一句误带引用。
+    quoteTarget.value = null
   } catch (e) {
     toastError(e)
   }
 }
 
+// 引用目标从本地记录里消失（被别人撤回 = 物理删除）就丢掉待发引用：
+// 否则 id 悬空，发送会被服务端拒 `invalid_reply`。
+watch(messages, (list) => {
+  if (quoteTarget.value && !hasMessage(list, quoteTarget.value.id)) quoteTarget.value = null
+})
+
 watch(selectedId, (id) => {
   // 切人即清空草稿：补充的记录只属于当前选中的候选人，避免误写到下一位身上。
   draft.value = ''
+  // 引用同属上一位候选人的记录，一并清空（被引用消息不在本候选人的记录窗口内）。
+  quoteTarget.value = null
   if (!id) return
   void loadMessages(id)
   // 预取相邻候选人记录：↑/↓ 连续浏览几乎全程命中缓存，切换零等待。
@@ -535,7 +550,7 @@ function onPreferencesSaved(): void {
             <p v-else-if="messages.length === 0" class="text-sm text-muted-foreground">
               暂无面试记录
             </p>
-            <MessageTranscript v-else :messages="messages" @changed="reloadMessages" />
+            <MessageTranscript v-else :messages="messages" @changed="reloadMessages" @quote="quoteTarget = $event" />
 
             <!-- 补充记录：归档写入（面试结档、房间解绑后仍可补），权限与房间聊天一致 -->
             <div v-if="canCompose" class="mt-4 border-t pt-3">
@@ -544,7 +559,9 @@ function onPreferencesSaved(): void {
                 :sending="msgsSending"
                 placeholder="补充一条面试记录，Enter 发送…"
                 label="补充面试记录"
+                :quoted="quoteTarget"
                 @send="submitMessage"
+                @cancel-quote="quoteTarget = null"
               />
             </div>
           </CardContent>

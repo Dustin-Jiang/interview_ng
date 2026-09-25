@@ -88,6 +88,17 @@ export const tileVariants = cva(
 
 export type TileVariants = VariantProps<typeof tileVariants>
 
+/**
+ * 引用块表面（气泡**外**的引用块 + 输入区「正在引用」条共用，同一视觉语言）：
+ * **只描边、无底色**——一圈 `border-border` 细边把引用框出来，与有底色无边框的气泡区分开。
+ * 不填底色的原因：`bg-muted` 在气泡上方要同时压住页面/卡片与两种气泡底色，换表面就失配
+ * （`--muted` 融进别人的气泡、`--border` 在深色下又与 `--muted` 同色）；留空即随所在表面自然成立。
+ * 宽度由调用方给：气泡外的引用块要跟气泡同一收缩宽度上限，输入区的条占满本行。
+ */
+export const quotedBlockVariants = cva('rounded-lg border border-border px-2 py-1')
+
+export type QuotedBlockVariants = VariantProps<typeof quotedBlockVariants>
+
 /** 聊天气泡：房间实时聊天与归档回看共用的统一外观。 */
 export const chatBubbleVariants = cva(
   'max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm leading-relaxed sm:max-w-[75%]',

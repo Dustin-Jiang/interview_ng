@@ -135,8 +135,10 @@ export class WsChannel {
     return this.send('sync', { last_msg_id: lastMsgId })
   }
 
-  sendMessage(content: string): string {
-    return this.send('send_msg', { content })
+  sendMessage(content: string, replyToId?: number | null): string {
+    return replyToId
+      ? this.send('send_msg', { content, reply_to_id: replyToId })
+      : this.send('send_msg', { content })
   }
 
   movePhase(to: string): string {

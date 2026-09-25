@@ -7,8 +7,9 @@ import { useConfirmAction } from '@/composables/useConfirmAction'
 import { useRoomChat } from '@/composables/useRoomChat'
 import { useWaitingQueue } from '@/composables/useWaitingQueue'
 import { nextPhaseOf, isInProgress } from '@/domain/status'
+import { hasMessage } from '@/domain/messages'
 import { roomLabel } from '@/domain/room'
-import type { CandidateStatus } from '@/models'
+import type { CandidateStatus, Message } from '@/models'
 import { formatDateTime } from '@/lib/format'
 import { toastError } from '@/lib/toast'
 
@@ -42,6 +43,15 @@ const {
 const { queue: pullPool, reload: reloadPullPool } = useWaitingQueue()
 
 const draft = ref('')
+
+/** 待发引用目标：右键「引用」某条消息后置上，发送成功或引用目标撤回（见下方 watch）时清空。 */
+const quoteTarget = ref<Message | null>(null)
+
+// 引用目标从本地记录里消失（被别人撤回 = 物理删除）就丢掉待发引用：
+// 否则 id 悬空，发送会被服务端拒 `invalid_reply`。
+watch(messages, (list) => {
+  if (quoteTarget.value && !hasMessage(list, quoteTarget.value.id)) quoteTarget.value = null
+})
 
 /** 当前阶段允许推进到的下一档（纯函数推导，仅展示单步，完整状态机由后端校验）。 */
 const nextPhase = computed<CandidateStatus | null>(() => nextPhaseOf(phase.value))
@@ -137,8 +147,10 @@ const elapsedLabel = computed(() => {
 function send() {
   const text = draft.value.trim()
   if (!text) return
-  sendMessage(text)
+  sendMessage(text, quoteTarget.value?.id)
   draft.value = ''
+  // 引用只对这一条生效：发完即清，避免下一句误带引用。
+  quoteTarget.value = null
   // 自己发完就跳到最新：上翻读历史时发送，不该停在原处看不见自己刚写的那条。
   void scrollToBottom()
 }
@@ -299,7 +311,7 @@ watch(connecting, (v, prev) => {
             </EmptyState>
 
             <!-- 消息列表：与归档页共用 MessageTranscript（同一视觉语言 + 同一套编辑/撤回交互） -->
-            <MessageTranscript v-else :messages="messages" @changed="reloadRoom" />
+            <MessageTranscript v-else :messages="messages" @changed="reloadRoom" @quote="quoteTarget = $event" />
 
           </div>
 
@@ -322,7 +334,9 @@ watch(connecting, (v, prev) => {
             v-model="draft"
             :disabled="!canSend"
             :placeholder="inputPlaceholder"
+            :quoted="quoteTarget"
             @send="send"
+            @cancel-quote="quoteTarget = null"
           />
         </div>
         </div>

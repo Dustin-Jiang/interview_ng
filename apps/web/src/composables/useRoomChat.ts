@@ -34,8 +34,8 @@ export interface UseRoomChat {
   readonly error: Ref<string | null>
   /** 当前阶段（= 房间绑定候选人状态）。 */
   readonly phase: ComputedRef<CandidateStatus | null>
-  /** 发送一条消息。 */
-  sendMessage: (content: string) => void
+  /** 发送一条消息（`replyToId` = 引用的先行消息 id，可选）。 */
+  sendMessage: (content: string, replyToId?: number | null) => void
   /** 推进到某阶段。 */
   movePhase: (to: CandidateStatus) => void
   /** 拉取一名候选人进房。 */
@@ -248,12 +248,12 @@ export function useRoomChat(roomId: MaybeRefOrGetter<number | null>): UseRoomCha
   onScopeDispose(close)
 
   // ---- 命令 ----
-  function sendMessage(content: string): void {
+  function sendMessage(content: string, replyToId?: number | null): void {
     if (!room.value || !channel) return
     // 只有「面试中」（IN_PROGRESS）可写记录：待面试（还没点开始）与结档后都本地直接不发
     // （后端 AppendMessage 同样拒绝：interview_not_started / interview_finished）。
     if (!isInProgress(phase.value)) return
-    const reqId = channel.sendMessage(content)
+    const reqId = channel.sendMessage(content, replyToId)
     expectReply(reqId, (p) => {
       if (!p.ok) error.value = p.error ?? '发送失败'
     })

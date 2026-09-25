@@ -239,8 +239,9 @@ export const candidateApi = {
    * 向候选人面试记录归档补充一条消息（需 rooms.chat，与房间聊天同一权限）。
    * 不依赖房间与在场成员，故面试结档后仍可补充；返回新记录的 id。
    */
-  appendMessage(id: number, content: string): Promise<{ id: number }> {
-    return post(`/candidates/${id}/messages`, { content })
+  appendMessage(id: number, content: string, replyToId?: number | null): Promise<{ id: number }> {
+    // 引用为可选，只传被引用消息 id；无引用时 undefined 会被 JSON 序列化省略。
+    return post(`/candidates/${id}/messages`, { content, reply_to_id: replyToId ?? undefined })
   },
 
   /** 编辑自己刚发出的记录（2 分钟内、仅发送者本人；服务端复核窗口与归属）。 */

@@ -198,6 +198,9 @@ export interface Message {
   sender_id: number | null
   sender?: User
   content: string
+  /** 引用的先行消息 id（同候选人内）。只存 id：被引用消息撤回（物理删除）后 id 悬空，
+   *  前端在本地已加载的记录里按 id 现查，查不到就显示「引用的消息已撤回」。 */
+  reply_to_id?: number | null
   created_at: string
   /** 表情回复（后端预加载；旧客户端可忽略）。 */
   reactions?: MessageReaction[]
