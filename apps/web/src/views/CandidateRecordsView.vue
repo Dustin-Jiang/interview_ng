@@ -1,8 +1,8 @@
 <!--
   CandidateRecordsView —— 候选人查看页（与「候选人管理」分离，对普通用户开放）。
-  左侧：候选人名册（搜索 + 状态筛选 + 键盘可达的 listbox）；右侧：选中候选人的详细资料与面试过程记录。
+  左侧：候选人名册（搜索 + 状态 / 面试房间筛选 + 键盘可达的 listbox）；右侧：选中候选人的详细资料与面试过程记录。
   移动端为「列表 ↔ 详情」两段式导航（选中候选人后进入详情，可返回列表）；桌面端左右分栏。
-  筛选条件与选中条目分别同步到 URL query（`?q=`/`?status=`）与路径参数（`/candidates/:candidateId`，可深链 / 分享）；
+  筛选条件与选中条目分别同步到 URL query（`?q=`/`?status=`/`?room=`）与路径参数（`/candidates/:candidateId`，可深链 / 分享）；
   记录经 REST GET /api/candidates/:id/messages 拉取，并可在本页补充（POST 同一路径，需 rooms.chat）——
   归档写入不依赖房间与在场成员，面试结档后照样能补记录。
 
@@ -39,6 +39,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { segmentedItemVariants } from '@/components/ui/tokens'
 import CandidateDetailHeader from '@/components/app/CandidateDetailHeader.vue'
 import CandidatePreferenceDialog from '@/components/app/CandidatePreferenceDialog.vue'
@@ -66,22 +67,50 @@ const { candidates, loading: poolLoading, error: poolError, load } = useCandidat
 const keyword = ref('')
 /** 状态筛选：'' = 全部。 */
 const statusFilter = ref<'' | CandidateStatus>('')
+/** 面试房间筛选：'' = 全部；取值是 `interview_room_id` 的字符串形式（便于同步 URL query）。 */
+const roomFilter = ref('')
+/** 房间筛选下拉的「全部」哨兵（reka Select 不接受空串值）。 */
+const ALL_ROOMS = 'ALL'
 /** 筛选浮层开关。 */
 const filterOpen = ref(false)
 
 /** 是否处于任一筛选激活态（用于统计条与空态文案）。 */
-const hasFilter = computed(() => Boolean(keyword.value.trim() || statusFilter.value))
+const hasFilter = computed(
+  () => Boolean(keyword.value.trim() || statusFilter.value || roomFilter.value),
+)
+
+// 房间展示名：候选人身上只有 room_id / 面试房间的名字快照，按 id 反查补名。
+const { roomLabelOf } = useRoomNames()
 
 /**
- * 客户端-filtered 名册（关键词 + 状态）。
+ * 面试房间筛选项：取自名册自身的 `interview_room_id`（面试结束那一刻留档的「这场面试在哪间做的」）。
+ * 展示名优先用当时的名字快照（房间之后改名/删除也仍是当时的名字），快照为空时按 id 反查；
+ * 不拉房间接口，房间删掉后筛选照样可用。
+ */
+const interviewRoomOptions = computed(() => {
+  const seen = new Map<number, string>()
+  for (const c of candidates.value) {
+    const id = c.interview_room_id
+    if (id == null || seen.has(id)) continue
+    seen.set(id, c.interview_room_name || roomLabelOf(id))
+  }
+  return [...seen]
+    .map(([id, label]) => ({ id, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN'))
+})
+
+/**
+ * 客户端-filtered 名册（关键词 + 状态 + 面试房间）。
  * 直接按 `sortRoster` 的展示顺序排好——上/下切换（useRosterSelection）、RosterPager
  * 与 RosterList 内部的排序是同一份（sortRoster 对已序输入幂等），↑/↓ 切换顺序才和左侧列表一致。
  */
 const filtered = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
+  const room = roomFilter.value ? Number(roomFilter.value) : null
   return sortRoster(
     candidates.value.filter((c) => {
       if (statusFilter.value && c.status !== statusFilter.value) return false
+      if (room !== null && c.interview_room_id !== room) return false
       if (!kw) return true
       return (
         c.student_no.includes(kw) ||
@@ -95,6 +124,12 @@ const filtered = computed(() => {
 function clearFilters() {
   keyword.value = ''
   statusFilter.value = ''
+  roomFilter.value = ''
+}
+
+/** 房间下拉选中 → 筛选值（`ALL_ROOMS` → '' 即全部）。reka Select 的载荷是 AcceptableValue，故统一字符串化。 */
+function onRoomFilterChange(value: unknown): void {
+  roomFilter.value = value === ALL_ROOMS ? '' : String(value ?? '')
 }
 
 // ---- 选中 / 切换 / 键盘导航 / 移动端两段式 ----
@@ -125,10 +160,12 @@ useRosterRouteSync<Candidate>({
   onMount: () => {
     const q = route.query.q
     const st = route.query.status
+    const room = route.query.room
     if (typeof q === 'string') keyword.value = q
     if (typeof st === 'string' && (CANDIDATE_STATUSES as readonly string[]).includes(st)) {
       statusFilter.value = st as CandidateStatus
     }
+    if (typeof room === 'string' && /^\d+$/.test(room)) roomFilter.value = room
     void load()
   },
 })
@@ -139,6 +176,7 @@ function filterQuery(): Record<string, string> {
   const kw = keyword.value.trim()
   if (kw) query.q = kw
   if (statusFilter.value) query.status = statusFilter.value
+  if (roomFilter.value) query.room = roomFilter.value
   return query
 }
 
@@ -225,9 +263,6 @@ useBoardChannel().subscribe((ev) => {
 
 // ---- 深链与写回见上方（onMounted 恢复 + useUrlSync） ----
 
-// ---- 房间展示名：候选人身上只有 room_id，按 id 反查名字（未命名显示「未命名」） ----
-const { roomLabelOf } = useRoomNames()
-
 function goRoom(c: Candidate) {
   if (!c.room_id) return
   void router.push({ name: 'room', params: { roomId: String(c.room_id) } })
@@ -293,6 +328,18 @@ function onPreferencesSaved(): void {
               <div class="space-y-3">
                 <SearchInput v-model="keyword" full placeholder="搜索学号 / 姓名 / 简介…" />
                 <CandidateStatusRadio v-model="statusFilter" allow-all />
+                <!-- 面试房间（取自候选人身上留档的「这场面试在哪间做的」，含已删除房间的名字快照） -->
+                <Select :model-value="roomFilter || ALL_ROOMS" @update:model-value="onRoomFilterChange">
+                  <SelectTrigger class="w-full" aria-label="按面试房间筛选">
+                    <SelectValue placeholder="全部面试房间" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem :value="ALL_ROOMS">全部面试房间</SelectItem>
+                    <SelectItem v-for="r in interviewRoomOptions" :key="r.id" :value="String(r.id)">
+                      {{ r.label }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
                 <Button
                   v-if="hasFilter"
                   variant="ghost"

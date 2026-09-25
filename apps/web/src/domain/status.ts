@@ -84,11 +84,12 @@ function momentAt(value: string | null | undefined): number {
 
 /**
  * 名册排序（候选人查看 / 捡漏页左栏共用，由 `RosterList` 统一应用）：
- *  1. **面试过的在前，按面试时间升序**——「面试时间」取这场面试的时刻：在面试中用开始时刻
- *     （`interview_started_at`），已结束用结束时刻（`interview_completed_at`，后端结档时打点）；
- *  2. **没面试过的在后，按添加顺序**（`created_at` 升序，导入/新建即添加顺序）。
+ *  1. **没有面试记录的在前（视作更早）**，按添加顺序（`created_at` 升序，导入/新建即添加顺序）；
+ *  2. **面试过的在后，按面试时间升序**——「面试时间」取这场面试的时刻：在面试中用开始时刻
+ *     （`interview_started_at`），已结束用结束时刻（`interview_completed_at`，后端结档时打点）。
  * 并列时退回 `created_at`、再退回 `id`，保证顺序稳定且不重复。
- * 为什么不能用 updated_at：任何资料编辑 / 导入都会刷新它（见 `arrivalAt` 的同款理由）。
+ * 为什么不能改用 `created_at` / `updated_at` 排「面试过」那一组：前者是导入顺序，
+ * 后者会被任意资料编辑/导入刷新（见 `arrivalAt` 的同款理由）。
  */
 export function sortRoster<
   T extends {
@@ -98,18 +99,22 @@ export function sortRoster<
     interview_completed_at?: string | null
   },
 >(items: readonly T[]): T[] {
-  /** 这场面试的时刻：在面试中 → 开始时刻；已结束 → 结束时刻；都没有 → Infinity（未面试组）。 */
-  const interviewAt = (c: T): number =>
-    Math.min(momentAt(c.interview_started_at), momentAt(c.interview_completed_at))
+  /**
+   * 这场面试的时刻：在面试中 → 开始时刻；已结束 → 结束时刻；都没有（没记录）→ -Infinity，
+   * 因此「没面试记录」视作更早、排在面过的前面。
+   */
+  const interviewAt = (c: T): number => {
+    const t = Math.min(momentAt(c.interview_started_at), momentAt(c.interview_completed_at))
+    return Number.isFinite(t) ? t : Number.NEGATIVE_INFINITY
+  }
   const addedAt = (c: T): number => momentAt(c.created_at)
-  return items
-    .slice()
-    .sort(
-      (a, b) =>
-        interviewAt(a) - interviewAt(b) ||
-        addedAt(a) - addedAt(b) ||
-        a.id - b.id,
-    )
+  return items.slice().sort((a, b) => {
+    const at = interviewAt(a)
+    const bt = interviewAt(b)
+    // 两个「没记录」都是 -Infinity，差是 NaN，所以显式比大小、不相减。
+    if (at !== bt) return at < bt ? -1 : 1
+    return addedAt(a) - addedAt(b) || a.id - b.id
+  })
 }
 
 /**
