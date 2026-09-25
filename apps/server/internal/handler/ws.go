@@ -438,8 +438,9 @@ func (w *WSServer) handleSync(ctx context.Context, client *wsClient, req *reqSyn
 }
 
 // handleSendMsg 发送一条聊天消息（service 先落库后广播）。
+// req.ReplyToID 非空时引用该候选人名下的一条先行消息（跨候选人 / 已撤回 → invalid_reply）。
 func (w *WSServer) handleSendMsg(ctx context.Context, client *wsClient, req *reqSendMsg, reqID string) {
-	if err := w.svc.SendMessage(ctx, client.roomID, client.userID, req.Content); err != nil {
+	if err := w.svc.SendMessage(ctx, client.roomID, client.userID, req.Content, req.ReplyToID); err != nil {
 		w.reply(client, reqID, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}

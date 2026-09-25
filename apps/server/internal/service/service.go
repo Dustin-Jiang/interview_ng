@@ -75,8 +75,9 @@ func (s *InterviewService) MovePhase(ctx context.Context, roomID, operatorID uin
 }
 
 // SendMessage 发送聊天消息。先落库后广播（事件携带 MsgID 供客户端续传对齐）。
-func (s *InterviewService) SendMessage(ctx context.Context, roomID, senderID uint64, content string) error {
-	ev, err := s.store.AppendMessage(ctx, roomID, senderID, content)
+// replyToID 为引用的先行消息（可空，仅限同一候选人）。
+func (s *InterviewService) SendMessage(ctx context.Context, roomID, senderID uint64, content string, replyToID *uint64) error {
+	ev, err := s.store.AppendMessage(ctx, roomID, senderID, content, replyToID)
 	if err != nil {
 		return err
 	}
@@ -86,8 +87,9 @@ func (s *InterviewService) SendMessage(ctx context.Context, roomID, senderID uin
 
 // AppendCandidateMessage 向候选人面试记录归档补充一条消息（不需要房间与在场成员，
 // 面试结档后仍可补充）。先落库后广播；返回事件供 handler 取新记录 id。
-func (s *InterviewService) AppendCandidateMessage(ctx context.Context, candidateID, senderID uint64, content string) (*state.Event, error) {
-	ev, err := s.store.AppendCandidateMessage(ctx, candidateID, senderID, content)
+// replyToID 为引用的先行消息（可空，仅限同一候选人）。
+func (s *InterviewService) AppendCandidateMessage(ctx context.Context, candidateID, senderID uint64, content string, replyToID *uint64) (*state.Event, error) {
+	ev, err := s.store.AppendCandidateMessage(ctx, candidateID, senderID, content, replyToID)
 	if err != nil {
 		return nil, err
 	}

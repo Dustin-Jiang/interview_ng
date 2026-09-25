@@ -1596,6 +1596,191 @@ func TestMessageSenderDepartment(t *testing.T) {
 	}
 }
 
+// TestMessageReplyREST 归档引用的 HTTP 契约：POST 带 reply_to_id 落库并在 GET 归档里原样返回
+// （无引用时该字段缺省）、引用不存在或别的候选人的记录 → 400 invalid_reply、
+// 编辑只改 content（请求体里的 reply_to_id 一律忽略）。
+func TestMessageReplyREST(t *testing.T) {
+	r := newTestApp(t)
+	token := adminToken(t, r)
+
+	mkCandidate := func(studentNo, name string) int {
+		t.Helper()
+		code, out := doJSON(t, r, "POST", "/api/candidates", `{"student_no":"`+studentNo+`","name":"`+name+`"}`, token)
+		if code != http.StatusCreated {
+			t.Fatalf("create candidate: %d %v", code, out)
+		}
+		return int(out["id"].(float64))
+	}
+	first := mkCandidate("2024101", "引用甲")
+	other := mkCandidate("2024102", "引用乙")
+
+	// 第一条无引用
+	code, out := doJSON(t, r, "POST", "/api/candidates/"+itoa(first)+"/messages", `{"content":"第一条"}`, token)
+	if code != http.StatusCreated {
+		t.Fatalf("append: %d %v", code, out)
+	}
+	firstID := int(out["id"].(float64))
+
+	// 第二条引用第一条（同候选人）
+	code, out = doJSON(t, r, "POST", "/api/candidates/"+itoa(first)+"/messages",
+		`{"content":"引用第一条","reply_to_id":`+itoa(firstID)+`}`, token)
+	if code != http.StatusCreated {
+		t.Fatalf("append reply: %d %v", code, out)
+	}
+	replyID := int(out["id"].(float64))
+
+	// 归档读取：引用方带 reply_to_id，无引用那条不带该键（无引用时缺省）
+	code, out = doJSON(t, r, "GET", "/api/candidates/"+itoa(first)+"/messages", "", token)
+	if code != http.StatusOK {
+		t.Fatalf("list: %d %v", code, out)
+	}
+	items, _ := out["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("归档应有 2 条: %v", out)
+	}
+	byID := map[int]map[string]any{}
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		byID[int(m["id"].(float64))] = m
+	}
+	if _, ok := byID[firstID]["reply_to_id"]; ok {
+		t.Fatalf("无引用的记录不该带 reply_to_id: %v", byID[firstID])
+	}
+	if got, _ := byID[replyID]["reply_to_id"].(float64); int(got) != firstID {
+		t.Fatalf("引用方应带 reply_to_id=%d: %v", firstID, byID[replyID])
+	}
+
+	// 引用不存在的 id → 400 invalid_reply（stateErr 未列出的业务码统一 400）
+	code, out = doJSON(t, r, "POST", "/api/candidates/"+itoa(first)+"/messages",
+		`{"content":"引用幽灵","reply_to_id":999999}`, token)
+	if code != http.StatusBadRequest || out["error"] != state.ErrInvalidReply.Msg {
+		t.Fatalf("引用不存在的 id 应 400 %q: %d %v", state.ErrInvalidReply.Msg, code, out)
+	}
+	// 引用别的候选人的记录 → 400
+	code, out = doJSON(t, r, "POST", "/api/candidates/"+itoa(other)+"/messages",
+		`{"content":"跨人引用","reply_to_id":`+itoa(firstID)+`}`, token)
+	if code != http.StatusBadRequest || out["error"] != state.ErrInvalidReply.Msg {
+		t.Fatalf("跨候选人引用应 400: %d %v", code, out)
+	}
+
+	// 编辑只改 content：body 里同样带 reply_to_id，但引用不动
+	code, out = doJSON(t, r, "PATCH", "/api/candidates/"+itoa(first)+"/messages/"+itoa(replyID),
+		`{"content":"改过的正文","reply_to_id":`+itoa(firstID)+`}`, token)
+	if code != http.StatusOK {
+		t.Fatalf("edit: %d %v", code, out)
+	}
+	_, out = doJSON(t, r, "GET", "/api/candidates/"+itoa(first)+"/messages", "", token)
+	items, _ = out["items"].([]any)
+	edited, _ := items[1].(map[string]any)
+	if edited["content"] != "改过的正文" {
+		t.Fatalf("编辑应覆盖正文: %v", edited)
+	}
+	if got, _ := edited["reply_to_id"].(float64); int(got) != firstID {
+		t.Fatalf("编辑不得改引用: %v", edited)
+	}
+}
+
+// TestWSMessageReply WS send_msg 带 reply_to_id：收到的 message_appended 事件
+// data.ReplyToID（PascalCase，与 SenderID/Content 同口径）等于被引用消息 id。
+func TestWSMessageReply(t *testing.T) {
+	r := newTestApp(t)
+	token := adminToken(t, r)
+
+	// 候选人签到 → 建房 → 拉取 → 推进 IN_PROGRESS（消息只属于面试中）→ 加入成员
+	_, out := doJSON(t, r, "POST", "/api/candidates", `{"student_no":"2024103","name":"WS 引用"}`, token)
+	candID := int(out["id"].(float64))
+	doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/check-in", "", token)
+	_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
+	roomID := int(out["id"].(float64))
+	doJSON(t, r, "PUT", "/api/rooms/"+itoa(roomID)+"/candidate", `{"candidate_id":`+itoa(candID)+`}`, token)
+	_, out = doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
+	adminID := int(out["user"].(map[string]any)["id"].(float64))
+	doJSON(t, r, "POST", "/api/rooms/"+itoa(roomID)+"/members", `{"user_id":`+itoa(adminID)+`}`, token)
+	if code, out := doJSON(t, r, "PUT", "/api/candidates/"+itoa(candID)+"/status", `{"status":"IN_PROGRESS"}`, token); code != http.StatusOK {
+		t.Fatalf("start interview: %d %v", code, out)
+	}
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/rooms/"+itoa(roomID), nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.WriteJSON(map[string]any{"op": "auth", "req_id": "a1", "data": map[string]string{"token": token}}); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+
+	// readAppended 读到下一条 message_appended，返回外层 chanEvent（含 msg_id）与载荷
+	readAppended := func() (map[string]any, map[string]any) {
+		t.Helper()
+		for i := 0; i < 20; i++ {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			var env map[string]any
+			if err := conn.ReadJSON(&env); err != nil {
+				t.Fatalf("read ws: %v", err)
+			}
+			if env["type"] != "message_appended" {
+				continue
+			}
+			ev, _ := env["data"].(map[string]any)
+			d, _ := ev["data"].(map[string]any)
+			return ev, d
+		}
+		t.Fatalf("message_appended 未收到")
+		return nil, nil
+	}
+
+	// 第一条：无引用（载荷无 json tag，ReplyToID 以 null 出现）
+	if err := conn.WriteJSON(map[string]any{"op": "send_msg", "req_id": "m1", "data": map[string]any{"content": "第一条"}}); err != nil {
+		t.Fatalf("write send_msg 1: %v", err)
+	}
+	ev, d := readAppended()
+	if d["ReplyToID"] != nil {
+		t.Fatalf("无引用的消息载荷 ReplyToID 应为空: %v", d)
+	}
+	firstID := int(ev["msg_id"].(float64))
+
+	// 第二条：引用第一条（id 用 chanEvent.msg_id；不回执里给，事件里给）
+	if err := conn.WriteJSON(map[string]any{"op": "send_msg", "req_id": "m2",
+		"data": map[string]any{"content": "引用第一条", "reply_to_id": firstID}}); err != nil {
+		t.Fatalf("write send_msg 2: %v", err)
+	}
+	_, d = readAppended()
+	if got, _ := d["ReplyToID"].(float64); got != float64(firstID) || d["ReplyToID"] == nil {
+		t.Fatalf("事件载荷应带 ReplyToID=%d: %v", firstID, d)
+	}
+
+	// 跨候选人 / 不存在的引用经 WS 也被拒（回执 ok=false，错误码为 invalid_reply）
+	if err := conn.WriteJSON(map[string]any{"op": "send_msg", "req_id": "m3",
+		"data": map[string]any{"content": "幽灵引用", "reply_to_id": 999999}}); err != nil {
+		t.Fatalf("write send_msg 3: %v", err)
+	}
+	rejected := false
+	for i := 0; i < 20 && !rejected; i++ {
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var env map[string]any
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("read ws: %v", err)
+		}
+		if env["type"] != "reply" || env["req_id"] != "m3" {
+			continue
+		}
+		dd, _ := env["data"].(map[string]any)
+		if dd["ok"] == true {
+			t.Fatalf("引用不存在的 id 不该成功: %v", env)
+		}
+		if msg, _ := dd["error"].(string); !strings.Contains(msg, state.ErrInvalidReply.Code) {
+			t.Fatalf("错误应带 invalid_reply: %v", env)
+		}
+		rejected = true
+	}
+	if !rejected {
+		t.Fatalf("m3 回执未收到")
+	}
+}
+
 // TestInterviewRoomJSONContract 面试房间与面试时刻的 JSON 契约（前端候选人详情显示「面试房间」、
 // 名册按面试时间排序都据此）：未面试为空；面试结束后带上房间 id、**当时的名字快照**与结束时刻。
 func TestInterviewRoomJSONContract(t *testing.T) {

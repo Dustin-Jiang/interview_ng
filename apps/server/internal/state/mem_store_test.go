@@ -171,7 +171,7 @@ func TestLifecycleThroughStore(t *testing.T) {
 		t.Fatalf("status=%s", c.Status)
 	}
 
-	mev, err := st.AppendMessage(ctx, roomID, 1, "hello")
+	mev, err := st.AppendMessage(ctx, roomID, 1, "hello", nil)
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestSubscribeDeliversEvents(t *testing.T) {
 	if _, err := st.MovePhase(ctx, roomID, 7, dsmodel.StatusInProgress); err != nil {
 		t.Fatalf("start interview: %v", err)
 	}
-	_, err := st.AppendMessage(ctx, roomID, 7, "hi")
+	_, err := st.AppendMessage(ctx, roomID, 7, "hi", nil)
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}

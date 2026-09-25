@@ -56,13 +56,14 @@ type StateStore interface {
 	// 消息只写给「正在面试」（ASSIGNED / IN_PROGRESS）的候选人：空房间 → ErrNotFound，
 	// 面试已结档（COMPLETED 及其后的录取档）→ ErrInterviewFinished（记录只读归档）。
 	// 内容空白 → ErrInvalidContent。房间内的实时会话走这里；归档补充走 AppendCandidateMessage。
-	AppendMessage(ctx context.Context, roomID, senderID uint64, content string) (*Event, error)
+	// replyToID 为要引用的先行消息（可空，仅限同一候选人的消息，否则 ErrInvalidReply）。
+	AppendMessage(ctx context.Context, roomID, senderID uint64, content string, replyToID *uint64) (*Event, error)
 	// AppendCandidateMessage 直接向候选人的面试记录归档追加一条消息（返回事件，带 MsgID）。
 	// 与 AppendMessage 的区别是**不需要房间与在场成员**：面试结档后房间已解绑，
 	// 但记录仍可在候选人查看页补充（这正是归档存在的意义），故只要求候选人存在。
-	// 候选人不存在 → ErrNotFound；内容空白 → ErrInvalidContent。
+	// 候选人不存在 → ErrNotFound；内容空白 → ErrInvalidContent；引用目标不属于该候选人 → ErrInvalidReply。
 	// 候选人当前若仍在房间内，事件按该房间扇出（房间页同步可见），否则全局扇出。
-	AppendCandidateMessage(ctx context.Context, candidateID, senderID uint64, content string) (*Event, error)
+	AppendCandidateMessage(ctx context.Context, candidateID, senderID uint64, content string, replyToID *uint64) (*Event, error)
 	// EditMessage 编辑一条面试记录：**仅发送者本人**，且距发送不超过 MessageModifyWindow。
 	// content 为新正文（TrimSpace；空白 → ErrInvalidContent）。窗口自消息创建时刻起算，编辑不延长窗口。
 	// 消息不属于该候选人 / 不存在 → ErrNotFound；非本人 → ErrMessageNotOwner；超窗口 → ErrMessageWindowExpired。
@@ -246,6 +247,8 @@ var (
 	ErrMessageWindowExpired = &Error{Code: "message_window_expired", Msg: "超过 2 分钟，不能再编辑或撤回"}
 	// ErrInvalidReaction 表情不在允许集内（model.ReactionEmojis）。
 	ErrInvalidReaction = &Error{Code: "invalid_reaction", Msg: "不支持的表情回复"}
+	// ErrInvalidReply 引用目标不存在 / 不属于该候选人（同候选人内才能引用）。
+	ErrInvalidReply = &Error{Code: "invalid_reply", Msg: "引用的消息不存在（可能已被撤回）"}
 	// ErrStudentNoExists 学号已被其他候选人占用（候选人身份键唯一，编辑/新增均返回此错）。
 	ErrStudentNoExists = &Error{Code: "student_no_exists", Msg: "学号已存在"}
 )

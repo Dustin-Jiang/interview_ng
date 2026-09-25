@@ -7,12 +7,16 @@ import "time"
 // 消息属于候选人而非房间：候选人换房/解绑后，历史消息随人走。
 // SenderID 可空（OnDelete:SET NULL）：面试官被删后其消息保留（候选人档案不受销毁），sender 置空。
 type Message struct {
-	ID          uint64    `gorm:"primaryKey" json:"id"`
-	CandidateID uint64    `gorm:"index:idx_candidate_id" json:"candidate_id"`
-	SenderID    *uint64   `gorm:"index" json:"sender_id"`
-	Sender      *User     `gorm:"foreignKey:SenderID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"sender,omitempty"`
-	Content     string    `gorm:"type:text" json:"content"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          uint64  `gorm:"primaryKey" json:"id"`
+	CandidateID uint64  `gorm:"index:idx_candidate_id" json:"candidate_id"`
+	SenderID    *uint64 `gorm:"index" json:"sender_id"`
+	Sender      *User   `gorm:"foreignKey:SenderID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"sender,omitempty"`
+	Content     string  `gorm:"type:text" json:"content"`
+	// ReplyToID 本消息引用的先行消息（同候选人内，可空）。只存 id，不存内容快照：
+	// 被引用的消息撤回（物理删除）后该 id 悬空，读取方在自己已加载的记录里按 id 现查，
+	// 查不到就显示「引用的消息已撤回」——引用不保留内容副本，撤回的语义就是内容消失。
+	ReplyToID *uint64   `gorm:"index" json:"reply_to_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 	// Reactions 表情回复：读取时预加载（`ListMessagesAfter` 统一带上）。
 	// 只暴露「谁 + 哪个表情」——计数与「我回没回」由前端按当前用户聚合（事件因此与观察者无关）。
 	Reactions []MessageReaction `gorm:"foreignKey:MessageID" json:"reactions"`

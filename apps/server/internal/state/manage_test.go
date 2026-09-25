@@ -2,6 +2,7 @@ package state_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -224,7 +225,7 @@ func TestCompleteCandidateClearsRoom(t *testing.T) {
 	}
 
 	// 「待面试」：候选人已拉进房间但面试还没开始，记录入口未开放
-	if _, err := st.AppendMessage(ctx, roomID, 1, "还没开始的记录"); !errors.Is(err, state.ErrInterviewNotStarted) {
+	if _, err := st.AppendMessage(ctx, roomID, 1, "还没开始的记录", nil); !errors.Is(err, state.ErrInterviewNotStarted) {
 		t.Fatalf("待面试不该能写记录, want ErrInterviewNotStarted, got %v", err)
 	}
 
@@ -232,7 +233,7 @@ func TestCompleteCandidateClearsRoom(t *testing.T) {
 	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
 		t.Fatalf("move in_progress: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, roomID, 1, "A 的面试记录"); err != nil {
+	if _, err := st.AppendMessage(ctx, roomID, 1, "A 的面试记录", nil); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	mev, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusCompleted)
@@ -295,7 +296,7 @@ func TestDeleteCandidateCascade(t *testing.T) {
 	if _, err := st.MovePhase(ctx, roomID, 99, dsmodel.StatusInProgress); err != nil {
 		t.Fatalf("start interview: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, roomID, 99, "记录"); err != nil {
+	if _, err := st.AppendMessage(ctx, roomID, 99, "记录", nil); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 
@@ -359,7 +360,7 @@ func TestEmptyRoomRejectsMessage(t *testing.T) {
 	if _, _, err := st.JoinRoom(ctx, roomID, 1); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, roomID, 1, "hi"); err == nil {
+	if _, err := st.AppendMessage(ctx, roomID, 1, "hi", nil); err == nil {
 		t.Fatalf("expected error for empty room message")
 	}
 }
@@ -386,7 +387,7 @@ func TestInterviewFinishedClosesRoomChat(t *testing.T) {
 	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
 		t.Fatalf("start interview: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, roomID, 1, "面试中的记录"); err != nil {
+	if _, err := st.AppendMessage(ctx, roomID, 1, "面试中的记录", nil); err != nil {
 		t.Fatalf("面试中应可写记录: %v", err)
 	}
 	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusCompleted); err != nil {
@@ -395,7 +396,7 @@ func TestInterviewFinishedClosesRoomChat(t *testing.T) {
 	if room, _ := st.GetRoom(ctx, roomID); room.Candidate != nil {
 		t.Fatalf("面试完成后房间应解绑: %+v", room.Candidate)
 	}
-	if _, err := st.AppendMessage(ctx, roomID, 1, "结束后还想发"); err == nil {
+	if _, err := st.AppendMessage(ctx, roomID, 1, "结束后还想发", nil); err == nil {
 		t.Fatalf("面试完成后不该还能发消息")
 	}
 	if got, _ := st.GetCandidate(ctx, first); got.InterviewRoomID == nil || *got.InterviewRoomID != roomID {
@@ -435,7 +436,7 @@ func TestInterviewFinishedClosesRoomChat(t *testing.T) {
 	if err := db.Exec("UPDATE rooms SET candidate_id = ? WHERE id = ?", admittedCand, admittedRoom).Error; err != nil {
 		t.Fatalf("rebind legacy row: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, admittedRoom, admittedUID, "遗留行也想发"); !errors.Is(err, state.ErrInterviewFinished) {
+	if _, err := st.AppendMessage(ctx, admittedRoom, admittedUID, "遗留行也想发", nil); !errors.Is(err, state.ErrInterviewFinished) {
 		t.Fatalf("已结档的遗留房间应拒写，want ErrInterviewFinished, got %v", err)
 	}
 }
@@ -450,7 +451,7 @@ func TestAppendCandidateMessageArchive(t *testing.T) {
 	// 已结档的候选人（房间已解绑）：仍可补充，事件全局扇出
 	done := mustCreateCandidate(ctx, st, "已结档", "")
 	mustCompleteCandidate(ctx, st, done)
-	ev, err := st.AppendCandidateMessage(ctx, done, 7, "  面试结论：通过  ")
+	ev, err := st.AppendCandidateMessage(ctx, done, 7, "  面试结论：通过  ", nil)
 	if err != nil {
 		t.Fatalf("append to finished candidate: %v", err)
 	}
@@ -474,7 +475,7 @@ func TestAppendCandidateMessageArchive(t *testing.T) {
 	if _, err := st.PullCandidate(ctx, roomID, inRoom); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
-	ev, err = st.AppendCandidateMessage(ctx, inRoom, 7, "补充一条")
+	ev, err = st.AppendCandidateMessage(ctx, inRoom, 7, "补充一条", nil)
 	if err != nil {
 		t.Fatalf("append for bound candidate: %v", err)
 	}
@@ -483,10 +484,10 @@ func TestAppendCandidateMessageArchive(t *testing.T) {
 	}
 
 	// 空白内容 / 不存在的候选人
-	if _, err := st.AppendCandidateMessage(ctx, done, 7, "   "); !errors.Is(err, state.ErrInvalidContent) {
+	if _, err := st.AppendCandidateMessage(ctx, done, 7, "   ", nil); !errors.Is(err, state.ErrInvalidContent) {
 		t.Fatalf("空白内容应拒写: %v", err)
 	}
-	if _, err := st.AppendCandidateMessage(ctx, 9999, 7, "x"); !errors.Is(err, state.ErrNotFound) {
+	if _, err := st.AppendCandidateMessage(ctx, 9999, 7, "x", nil); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("不存在的候选人应 404: %v", err)
 	}
 }
@@ -511,7 +512,7 @@ func TestEditAndDeleteMessageWindow(t *testing.T) {
 	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
 		t.Fatalf("start interview: %v", err)
 	}
-	ev, err := st.AppendMessage(ctx, roomID, 1, "原始记录")
+	ev, err := st.AppendMessage(ctx, roomID, 1, "原始记录", nil)
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -564,7 +565,7 @@ func TestEditAndDeleteMessageWindow(t *testing.T) {
 	}
 
 	// 窗口内撤回：物理删除，归档不再返回，事件仍在房间维度
-	ev2, err := st.AppendMessage(ctx, roomID, 1, "待撤回")
+	ev2, err := st.AppendMessage(ctx, roomID, 1, "待撤回", nil)
 	if err != nil {
 		t.Fatalf("send 2: %v", err)
 	}
@@ -586,7 +587,7 @@ func TestEditAndDeleteMessageWindow(t *testing.T) {
 	}
 
 	// 空白内容不可写入（用窗口内的新消息；上面那条已被改成超时）
-	fresh, err := st.AppendMessage(ctx, roomID, 1, "再写一条")
+	fresh, err := st.AppendMessage(ctx, roomID, 1, "再写一条", nil)
 	if err != nil {
 		t.Fatalf("send 3: %v", err)
 	}
@@ -633,7 +634,7 @@ func TestMessageReactions(t *testing.T) {
 	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
 		t.Fatalf("start interview: %v", err)
 	}
-	ev, err := st.AppendMessage(ctx, roomID, 1, "待评价的记录")
+	ev, err := st.AppendMessage(ctx, roomID, 1, "待评价的记录", nil)
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -722,7 +723,7 @@ func TestMessageReactions(t *testing.T) {
 
 	// 删除候选人：连带删其消息的表情回复
 	cand2 := mustCreateCandidate(ctx, st, "带表情的候选人", "")
-	ev2, err := st.AppendCandidateMessage(ctx, cand2, 1, "另一条记录")
+	ev2, err := st.AppendCandidateMessage(ctx, cand2, 1, "另一条记录", nil)
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -745,6 +746,178 @@ func reactionRows(db *gorm.DB, t *testing.T, messageID uint64) int64 {
 		t.Fatalf("count reactions: %v", err)
 	}
 	return n
+}
+
+// TestMessageReplySameCandidate 消息引用先行消息：只存被引用 id（不存内容快照），
+// 落库后读取原样带出，实时 message_appended 事件载荷同样带 ReplyToID，
+// 编辑只覆盖 content、不动引用。
+func TestMessageReplySameCandidate(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	cand := mustCreateCandidate(ctx, st, "引用", "")
+	if _, err := st.CheckIn(ctx, cand); err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	roomID := mustCreateRoom(ctx, st)
+	if _, _, err := st.JoinRoom(ctx, roomID, 1); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	if _, err := st.PullCandidate(ctx, roomID, cand); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if _, err := st.MovePhase(ctx, roomID, 1, dsmodel.StatusInProgress); err != nil {
+		t.Fatalf("start interview: %v", err)
+	}
+
+	// 第一条无引用：事件载荷里 ReplyToID 缺省（nil）
+	first, err := st.AppendMessage(ctx, roomID, 1, "第一条", nil)
+	if err != nil {
+		t.Fatalf("send first: %v", err)
+	}
+	if got := eventReplyToID(t, first); got != 0 {
+		t.Fatalf("无引用的消息事件不该带 ReplyToID: %d", got)
+	}
+
+	// 第二条引用第一条：事件载荷带被引用 id（线上键 = Go 字段名 ReplyToID）
+	second, err := st.AppendMessage(ctx, roomID, 1, "回复第一条", &first.MsgID)
+	if err != nil {
+		t.Fatalf("send reply: %v", err)
+	}
+	if got := eventReplyToID(t, second); got != first.MsgID {
+		t.Fatalf("事件载荷应带被引用 id: got %d want %d", got, first.MsgID)
+	}
+
+	// 归档读取：引用 id 原样带出（读取方在自己的记录里按 id 现查被引用内容）
+	msgs, err := st.ListMessagesAfter(ctx, cand, 0)
+	if err != nil || len(msgs) != 2 {
+		t.Fatalf("归档应有 2 条: %v err=%v", msgs, err)
+	}
+	byID := map[uint64]*dsmodel.Message{}
+	for _, m := range msgs {
+		byID[m.ID] = m
+	}
+	if m := byID[first.MsgID]; m == nil || m.ReplyToID != nil {
+		t.Fatalf("无引用的记录不该有 reply_to_id: %+v", m)
+	}
+	rep := byID[second.MsgID]
+	if rep == nil || rep.ReplyToID == nil || *rep.ReplyToID != first.MsgID {
+		t.Fatalf("回复记录应带被引用 id: %+v", rep)
+	}
+
+	// 编辑只改 content，引用不动
+	if _, err := st.EditMessage(ctx, cand, second.MsgID, 1, "回复第一条（改过）"); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	msgs, _ = st.ListMessagesAfter(ctx, cand, 0)
+	for _, m := range msgs {
+		if m.ID != second.MsgID {
+			continue
+		}
+		if m.ReplyToID == nil || *m.ReplyToID != first.MsgID {
+			t.Fatalf("编辑不得改引用: %+v", m)
+		}
+		if m.Content != "回复第一条（改过）" {
+			t.Fatalf("编辑应覆盖正文: %+v", m)
+		}
+	}
+}
+
+// TestMessageReplyValidation 引用校验：引用目标必须存在且属于同一候选人，否则 ErrInvalidReply；
+// 被拒的消息不落库。
+func TestMessageReplyValidation(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	cand := mustCreateCandidate(ctx, st, "引用校验", "")
+	other := mustCreateCandidate(ctx, st, "别人", "")
+	otherEv, err := st.AppendCandidateMessage(ctx, other, 1, "别人的记录", nil)
+	if err != nil {
+		t.Fatalf("append other: %v", err)
+	}
+
+	// 不存在的 id（含已被撤回后的悬空 id）
+	missing := uint64(999999)
+	if _, err := st.AppendCandidateMessage(ctx, cand, 1, "引用幽灵", &missing); !errors.Is(err, state.ErrInvalidReply) {
+		t.Fatalf("引用不存在的 id 应 ErrInvalidReply: %v", err)
+	}
+	// 别的候选人名下的记录
+	if _, err := st.AppendCandidateMessage(ctx, cand, 1, "跨候选人引用", &otherEv.MsgID); !errors.Is(err, state.ErrInvalidReply) {
+		t.Fatalf("跨候选人引用应 ErrInvalidReply: %v", err)
+	}
+	// 反向同样成立（另一候选人也引用不到本候选人的记录）
+	ev, err := st.AppendCandidateMessage(ctx, cand, 1, "自己的记录", nil)
+	if err != nil {
+		t.Fatalf("append own: %v", err)
+	}
+	if _, err := st.AppendCandidateMessage(ctx, other, 1, "反向跨引用", &ev.MsgID); !errors.Is(err, state.ErrInvalidReply) {
+		t.Fatalf("跨候选人引用应 ErrInvalidReply: %v", err)
+	}
+
+	// 被拒的两条不得落库：本候选人名下只有那条合法记录
+	msgs, err := st.ListMessagesAfter(ctx, cand, 0)
+	if err != nil || len(msgs) != 1 || msgs[0].ID != ev.MsgID {
+		t.Fatalf("校验失败的消息不该落库: %v err=%v", msgs, err)
+	}
+}
+
+// TestMessageReplySurvivesRecall 引用不做级联：被引用消息撤回（物理删除）后，
+// 引用方的 reply_to_id 仍指向那个已不存在的 id —— 悬空是既定行为，
+// 读取方按 id 现查、查不到就显示「引用的消息已撤回」。
+func TestMessageReplySurvivesRecall(t *testing.T) {
+	ctx := context.Background()
+	st, db := newTestStoreWithDB(t)
+
+	cand := mustCreateCandidate(ctx, st, "撤回引用", "")
+	a, err := st.AppendCandidateMessage(ctx, cand, 1, "被引用的记录", nil)
+	if err != nil {
+		t.Fatalf("append a: %v", err)
+	}
+	b, err := st.AppendCandidateMessage(ctx, cand, 1, "引用上面那条", &a.MsgID)
+	if err != nil {
+		t.Fatalf("append b: %v", err)
+	}
+
+	// 撤回 A：物理删除
+	if _, err := st.DeleteMessage(ctx, cand, a.MsgID, 1); err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	var n int64
+	if err := db.Model(&dsmodel.Message{}).Where("id = ?", a.MsgID).Count(&n).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("撤回应物理删除被引用记录: %d", n)
+	}
+
+	// B 仍在，且引用 id 悬空（未被级联清空）
+	msgs, err := st.ListMessagesAfter(ctx, cand, 0)
+	if err != nil || len(msgs) != 1 || msgs[0].ID != b.MsgID {
+		t.Fatalf("只剩引用方那条: %v err=%v", msgs, err)
+	}
+	if msgs[0].ReplyToID == nil || *msgs[0].ReplyToID != a.MsgID {
+		t.Fatalf("撤回不做级联清空，引用 id 应保持悬空: %+v", msgs[0])
+	}
+}
+
+// eventReplyToID 从 message_appended 事件载荷里取出 ReplyToID（载荷是匿名 struct，
+// 只能按 JSON 口径取；该 struct 无 json tag，线上键即 Go 字段名）。返回 0 表示无引用。
+func eventReplyToID(t *testing.T, ev *state.Event) uint64 {
+	t.Helper()
+	b, err := json.Marshal(ev.Data)
+	if err != nil {
+		t.Fatalf("marshal event data: %v", err)
+	}
+	var payload struct {
+		ReplyToID *uint64
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		t.Fatalf("unmarshal event data: %v", err)
+	}
+	if payload.ReplyToID == nil {
+		return 0
+	}
+	return *payload.ReplyToID
 }
 
 // TestUserRoleLifecycle 用户创建/角色分配/改密版本号递增。

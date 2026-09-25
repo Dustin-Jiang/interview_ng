@@ -250,8 +250,10 @@ func (h *HTTPServer) listCandidateMessages(c *gin.Context) {
 }
 
 // appendCandidateMessageReq 归档补充的请求体。
+// reply_to_id 为该候选人名下被引用的先行消息（可空；跨候选人 / 已撤回 → invalid_reply）。
 type appendCandidateMessageReq struct {
-	Content string `json:"content"`
+	Content   string  `json:"content"`
+	ReplyToID *uint64 `json:"reply_to_id"`
 }
 
 // appendCandidateMessage 向候选人面试记录归档补充一条消息（候选人查看页的补充入口）：
@@ -268,7 +270,7 @@ func (h *HTTPServer) appendCandidateMessage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	ev, err := h.svc.AppendCandidateMessage(c.Request.Context(), id, auth.UserID(c), req.Content)
+	ev, err := h.svc.AppendCandidateMessage(c.Request.Context(), id, auth.UserID(c), req.Content, req.ReplyToID)
 	if err != nil {
 		status, msg := stateErr(err)
 		c.JSON(status, gin.H{"error": msg})
@@ -278,6 +280,8 @@ func (h *HTTPServer) appendCandidateMessage(c *gin.Context) {
 }
 
 // editCandidateMessage 编辑自己刚发出的记录（2 分钟内，仅发送者本人；服务端复核窗口与归属）。
+// 请求体复用 appendCandidateMessageReq，但**只取 content**：编辑不改引用（要换引用目标是另一条消息的事，
+// 且被引用消息的既有悬空/校验语义不该被编辑路径绕开）；body 里的 reply_to_id 一律忽略。
 func (h *HTTPServer) editCandidateMessage(c *gin.Context) {
 	candID, err := parseIDParam(c, "id")
 	if err != nil {

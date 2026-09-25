@@ -504,7 +504,7 @@ func (s *MemStateStore) MovePhase(ctx context.Context, roomID, operatorID uint64
 	return ev, nil
 }
 
-func (s *MemStateStore) AppendMessage(ctx context.Context, roomID, senderID uint64, content string) (*Event, error) {
+func (s *MemStateStore) AppendMessage(ctx context.Context, roomID, senderID uint64, content string, replyToID *uint64) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	room, err := s.ensureRoom(ctx, roomID)
@@ -533,19 +533,19 @@ func (s *MemStateStore) AppendMessage(ctx context.Context, roomID, senderID uint
 	default:
 		return nil, ErrInterviewFinished
 	}
-	return s.appendMessageLocked(ctx, roomID, *room.CandidateID, senderID, content)
+	return s.appendMessageLocked(ctx, roomID, *room.CandidateID, senderID, content, replyToID)
 }
 
 // AppendCandidateMessage 归档补充：不要求房间与在场成员（结档后房间已解绑，记录仍可补充）。
-// 权限（rooms.chat）由 handler 校验；此处只保证候选人存在、内容非空。
-func (s *MemStateStore) AppendCandidateMessage(ctx context.Context, candidateID, senderID uint64, content string) (*Event, error) {
+// 权限（rooms.chat）由 handler 校验；此处只保证候选人存在、内容非空、引用目标属该候选人。
+func (s *MemStateStore) AppendCandidateMessage(ctx context.Context, candidateID, senderID uint64, content string, replyToID *uint64) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c, err := s.ensureCandidate(ctx, candidateID)
 	if err != nil {
 		return nil, err
 	}
-	return s.appendMessageLocked(ctx, s.messageScopeRoomLocked(ctx, candidateID), c.ID, senderID, content)
+	return s.appendMessageLocked(ctx, s.messageScopeRoomLocked(ctx, candidateID), c.ID, senderID, content, replyToID)
 }
 
 // EditMessage 编辑自己刚发出的面试记录（窗口内、本人；窗口自创建时刻起算，编辑不延长）。
@@ -696,8 +696,9 @@ func (s *MemStateStore) modifiableMessageLocked(ctx context.Context, candidateID
 
 // appendMessageLocked 落库并广播一条消息：消息按候选人归属（候选人换房后历史随人走），
 // roomID=0 表示与房间无关的归档补充，事件仍带发送者展示名与部门名。
+// replyToID 非空时先校验引用目标（同候选人才能引用，见 validateReplyLocked）。
 // 调用方须持 s.mu，并已完成权限与「候选人是否可写」的判定。
-func (s *MemStateStore) appendMessageLocked(ctx context.Context, roomID, candidateID, senderID uint64, content string) (*Event, error) {
+func (s *MemStateStore) appendMessageLocked(ctx context.Context, roomID, candidateID, senderID uint64, content string, replyToID *uint64) (*Event, error) {
 	text := strings.TrimSpace(content)
 	if text == "" {
 		return nil, ErrInvalidContent
@@ -705,7 +706,10 @@ func (s *MemStateStore) appendMessageLocked(ctx context.Context, roomID, candida
 	if len(text) > MaxMessageContentLen {
 		return nil, ErrInvalidContent
 	}
-	msg := &dsmodel.Message{CandidateID: candidateID, SenderID: &senderID, Content: text}
+	if err := s.validateReplyLocked(ctx, candidateID, replyToID); err != nil {
+		return nil, err
+	}
+	msg := &dsmodel.Message{CandidateID: candidateID, SenderID: &senderID, Content: text, ReplyToID: replyToID}
 	if err := s.db.WithContext(ctx).Create(msg).Error; err != nil {
 		return nil, err
 	}
@@ -719,9 +723,27 @@ func (s *MemStateStore) appendMessageLocked(ctx context.Context, roomID, candida
 			SenderName       string
 			SenderDepartment string
 			Content          string
-		}{roomID, candidateID, senderID, senderName, senderDepartment, text}}
+			ReplyToID        *uint64
+		}{roomID, candidateID, senderID, senderName, senderDepartment, text, replyToID}}
 	s.emit(roomID, ev)
 	return ev, nil
+}
+
+// validateReplyLocked 校验引用目标：必须存在且属于同一候选人（跨候选人引用会让气泡里的引用块指向别人的记录）。
+// 只校验「此刻存在」——被引用消息事后撤回是物理删除，引用 id 悬空是既定行为（不做级联清空）。
+// 调用方须持 s.mu。
+func (s *MemStateStore) validateReplyLocked(ctx context.Context, candidateID uint64, replyToID *uint64) error {
+	if replyToID == nil {
+		return nil
+	}
+	var m dsmodel.Message
+	if err := s.db.WithContext(ctx).First(&m, *replyToID).Error; err != nil {
+		return ErrInvalidReply
+	}
+	if m.CandidateID != candidateID {
+		return ErrInvalidReply
+	}
+	return nil
 }
 
 func (s *MemStateStore) JoinRoom(ctx context.Context, roomID, userID uint64) (*dsmodel.Room, *Event, error) {

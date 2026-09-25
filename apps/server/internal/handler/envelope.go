@@ -23,7 +23,8 @@ type reqSync struct {
 }
 
 type reqSendMsg struct {
-	Content string `json:"content"`
+	Content   string  `json:"content"`
+	ReplyToID *uint64 `json:"reply_to_id"`
 }
 
 type reqMovePhase struct {
