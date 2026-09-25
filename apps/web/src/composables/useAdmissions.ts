@@ -2,16 +2,20 @@
  * useAdmissions —— 录取决定（按部门记录）+ 系统阶段组合式函数。
  * 供「候选人查看」页使用：**面试阶段起**（面试 / 录取 / 捡漏）展示本部门决定控件（结算阶段不展示）；
  * 持 candidates.browse_all 时展示各部门决定与部门归属。
- * 阶段读取与决定列表都在本函数内自管理（阶段变化 / 权限变化即时生效）。
+ *
+ * 数据全部取自各自的唯一共享数据源（`useAdmissionList` / `useDepartments`，均为模块级单例）：
+ * 本函数只管「什么时候该读」（阶段门控）与「怎么写」（本部门决定），不再自持一份 fetch。
  */
-import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { computed, watch, type ComputedRef, type Ref } from 'vue'
 import { toast } from 'vue-sonner'
 
-import { admissionApi, departmentApi } from '@/api/http'
+import { admissionApi } from '@/api/http'
 import { isAdmissionRecordingPhase } from '@/domain/admission'
+import { useAdmissionList } from '@/composables/useAdmissionList'
 import { useAuth } from '@/composables/useAuth'
+import { useDepartments } from '@/composables/useDepartments'
 import { useSystemStatus } from '@/composables/useSystemStatus'
-import { PERMISSIONS, type AdmissionStatus, type Candidate, type CandidateAdmission, type SystemPhase } from '@/models'
+import { PERMISSIONS, type AdmissionStatus, type Candidate, type SystemPhase } from '@/models'
 import { ADMISSION_PRESENTATION } from '@/presenters/status'
 import { toastError } from '@/lib/toast'
 
@@ -49,10 +53,11 @@ export function useAdmissions(selected: () => Candidate | null): UseAdmissions {
 
   // 阶段统一取自 useSystemStatus（模块级单例）：录取控件是否展示依赖它，勿在此另拉一份。
   const { phase } = useSystemStatus()
-  const admissions = ref<CandidateAdmission[]>([])
-  const loading = ref(false)
+  // 决定列表与部门名单同样取自各自的唯一共享数据源（模块级单例）。
+  const { admissions, loading, load: loadAdmissionList } = useAdmissionList()
+  const { departments, load: loadDepartments } = useDepartments()
   /** 部门 id → 名称（跨部门浏览时展示决定归属）。 */
-  const departmentNames = ref(new Map<number, string>())
+  const departmentNames = computed(() => new Map(departments.value.map((d) => [d.id, d.name])))
 
   const canBrowseAll = computed(() => hasPermission(PERMISSIONS.CANDIDATES_BROWSE_ALL))
   const canRecord = computed(() => hasPermission(PERMISSIONS.ADMISSIONS_RECORD))
@@ -103,21 +108,16 @@ export function useAdmissions(selected: () => Candidate | null): UseAdmissions {
     return mineByCandidate.value.get(candidateId)
   }
 
+  /**
+   * 拉取决定列表（共享源）：控件不可见时不请求（结算阶段 / 无部门且无跨部门权限）。
+   * 部门名单只有跨部门浏览才用得上（决定归属要按 id 反查名字），故一并只在 canBrowseAll 时拉。
+   */
   async function loadAdmissions(): Promise<void> {
-    if (!showControls.value || loading.value) return
-    loading.value = true
-    try {
-      const res = await admissionApi.list()
-      admissions.value = res.items ?? []
-      if (canBrowseAll.value) {
-        const depts = await departmentApi.list()
-        departmentNames.value = new Map(depts.items.map((d) => [d.id, d.name]))
-      }
-    } catch {
-      admissions.value = []
-    } finally {
-      loading.value = false
-    }
+    if (!showControls.value) return
+    await Promise.all([
+      loadAdmissionList(),
+      canBrowseAll.value ? loadDepartments() : Promise.resolve(),
+    ])
   }
 
   async function switchAdmission(candidate: Candidate, status: AdmissionStatus): Promise<void> {
@@ -125,7 +125,7 @@ export function useAdmissions(selected: () => Candidate | null): UseAdmissions {
     try {
       await admissionApi.set(candidate.id, status)
       toast.success(`已将 ${candidate.name} 标记为「${ADMISSION_PRESENTATION[status].label}」`)
-      await loadAdmissions()
+      await loadAdmissionList() // 写后刷新共享源：其余读取方同一份缓存即时对齐
     } catch (e) {
       toastError(e)
     }

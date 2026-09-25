@@ -3,7 +3,7 @@ import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { DoorOpen, Pencil, Plus, Trash2 } from 'lucide-vue-next'
 
-import { useRoomList } from '@/composables/useRoomList'
+import { useRooms } from '@/composables/useRooms'
 import { useAuth } from '@/composables/useAuth'
 import { useBoardRefresh } from '@/composables/useBoardChannel'
 import { useConfirmAction } from '@/composables/useConfirmAction'
@@ -33,8 +33,10 @@ import RoomChat from './RoomChat.vue'
 const route = useRoute()
 const router = useRouter()
 const { hasPermission } = useAuth()
-// 组合式函数（函数式 ViewModel）：房间列表。
-const { rooms, loading, load } = useRoomList()
+// 房间列表（共享数据源，`GET /rooms` 全站唯一一份）：列表页要全量，按 id 反查名字的三处要映射，
+// 都读它。房间**建/删/改名**的刷新由该数据源统一订阅（见 domain/room.ts#ROOM_BOARD_EVENTS），
+// 本页只额外订阅「房间卡片上显示的内容」那些变化（下方 useBoardRefresh）。
+const { rooms, loading, load } = useRooms()
 
 const parsedRoomId = computed<number | null>(() => {
   const raw = route.params.roomId ? String(route.params.roomId) : ''
@@ -52,17 +54,11 @@ watch(parsedRoomId, (id) => {
   if (!id) load()
 })
 
-// ---- 实时刷新：房间/候选人状态变化（建删房、拉取、阶段、清房）→ 防抖重拉列表 ----
-// 仅列表态生效；进入具体房间后由 RoomChat 的房间通道负责实时。
+// ---- 实时刷新：房间卡片上「当下是谁、进行到哪一档」的变化 → 防抖重拉列表 ----
+// 仅列表态生效；房间**自身**的建/删/改名已由 useRooms 的数据源订阅覆盖，这里不重复订阅。
+// 进入具体房间后由 RoomChat 的房间通道负责实时。
 useBoardRefresh(
-  [
-    'room_created',
-    'room_deleted',
-    'room_renamed',
-    'candidate_assigned',
-    'candidate_deleted',
-    'room_phase_changed',
-  ],
+  ['candidate_assigned', 'candidate_deleted', 'room_phase_changed'],
   () => {
     if (!parsedRoomId.value) void load()
   },

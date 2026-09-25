@@ -1,19 +1,21 @@
 /**
  * useOidcSettings —— 登录认证（OIDC）设置的组合式函数（函数式 ViewModel）。
- * 资源：配置（GET /oidc/config）+ 角色名单（GET /roles）+ 部门名单（GET /departments）
- * ——后两者是两类规则的目标下拉；
+ * 资源：配置（GET /oidc/config）自持；角色名单与部门名单（两类规则的目标下拉）取自
+ * `useRoles` / `useDepartments` 这两个共享数据源——本页只是它们的又一个读取方。
  * 写入：整体保存（PUT /oidc/config）、连通性探测（POST /oidc/probes）、清除已存密钥。
  */
-import { computed, ref, type Ref } from 'vue'
-import { departmentApi, oidcApi, roleApi } from '@/api/http'
+import { computed, ref, type ComputedRef, type Ref } from 'vue'
+import { oidcApi } from '@/api/http'
 import { useAsync } from '@/composables/useAsync'
+import { useDepartments } from '@/composables/useDepartments'
+import { useRoles } from '@/composables/useRoles'
 import type { Department, OidcConfig, OidcConfigPayload, OidcProbeResult, Role } from '@/models'
 
 export interface UseOidcSettings {
   readonly config: Ref<OidcConfig | null>
-  readonly roles: Ref<readonly Role[]>
-  readonly departments: Ref<readonly Department[]>
-  readonly loading: Ref<boolean>
+  readonly roles: ComputedRef<readonly Role[]>
+  readonly departments: ComputedRef<readonly Department[]>
+  readonly loading: ComputedRef<boolean>
   readonly saving: Ref<boolean>
   readonly probing: Ref<boolean>
   readonly probeResult: Ref<OidcProbeResult | null>
@@ -27,22 +29,21 @@ export interface UseOidcSettings {
 
 export function useOidcSettings(): UseOidcSettings {
   const configAsync = useAsync(() => oidcApi.config())
-  const roleAsync = useAsync(() => roleApi.list())
-  const departmentAsync = useAsync(() => departmentApi.list())
+  // 角色 / 部门名单：共享数据源（模块级单例），不再各自拉一份。
+  const { roles, loading: rolesLoading, load: loadRoles } = useRoles()
+  const { departments, loading: departmentsLoading, load: loadDepartments } = useDepartments()
 
   const saving = ref(false)
   const probing = ref(false)
   const probeResult = ref<OidcProbeResult | null>(null)
 
   const config = computed<OidcConfig | null>(() => configAsync.data.value)
-  const roles = computed<readonly Role[]>(() => roleAsync.data.value?.items ?? [])
-  const departments = computed<readonly Department[]>(() => departmentAsync.data.value?.items ?? [])
   const loading = computed(
-    () => configAsync.loading.value || roleAsync.loading.value || departmentAsync.loading.value,
+    () => configAsync.loading.value || rolesLoading.value || departmentsLoading.value,
   )
 
   async function load(): Promise<void> {
-    await Promise.all([configAsync.run(), roleAsync.run(), departmentAsync.run()])
+    await Promise.all([configAsync.run(), loadRoles(), loadDepartments()])
   }
 
   async function save(payload: OidcConfigPayload): Promise<void> {

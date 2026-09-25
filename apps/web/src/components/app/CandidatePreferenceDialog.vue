@@ -1,8 +1,8 @@
 <!--
   CandidatePreferenceDialog —— 志愿与调剂编辑弹窗（独立小权限 candidates.preferences）。
   三处入口共用：候选人详情 / 房间左栏 / 候选人管理表。
-  志愿为**部门下拉**（取值来自 GET /api/departments，面试官只读该列表），另保留候选人现有取值
-  作为额外选项（历史自由文本/已改名部门），避免保存时被静默清空。
+  志愿为**部门下拉**（取值来自 `useDepartments` 共享数据源，即 GET /api/departments，面试官只读该列表），
+  另保留候选人现有取值作为额外选项（历史自由文本/已改名部门），避免保存时被静默清空。
   自持提交：PATCH /api/candidates/:id/preferences（只覆盖这三列，不动其他资料），
   成功后关闭并 emit saved，由父级按自身数据源刷新（列表重拉 / 房间重拉）。
 -->
@@ -10,7 +10,8 @@
 import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
-import { departmentApi, candidateApi } from '@/api/http'
+import { candidateApi } from '@/api/http'
+import { useDepartments } from '@/composables/useDepartments'
 import type { Candidate, CandidatePreferencesPayload } from '@/models'
 import { toastError } from '@/lib/toast'
 
@@ -40,12 +41,12 @@ const saving = ref(false)
 /** 「无志愿」哨兵值：SelectItem 不接受空串值，提交时再转回空串。 */
 const NO_CHOICE = '__none__'
 
-/** 部门名单（志愿的取值来源，管理员维护）。 */
-const departments = ref<string[]>([])
+/** 部门名单（志愿的取值来源，管理员维护）：取自 useDepartments 共享数据源。 */
+const { departments: departmentList, load: loadDepartments } = useDepartments()
 
 /** 可选志愿 = 部门名单 + 候选人现有取值（历史自由文本或已改名部门，避免保存时被静默清空）。 */
 const choiceOptions = computed(() => {
-  const names = departments.value
+  const names = departmentList.value.map((d) => d.name)
   const extra = [form.value.first_choice, form.value.second_choice].filter(
     (v) => v && !names.includes(v),
   )
@@ -66,19 +67,12 @@ const secondChoice = computed({
   },
 })
 
-/** 打开弹窗时刷新部门名单（拿不到就只保留现有取值可选项）。 */
+/** 打开弹窗时刷新部门名单（拉不到就沿用共享缓存 / 只保留现有取值可选项）。 */
 watch(
   () => props.open,
   (open) => {
     if (!open) return
-    void departmentApi
-      .list()
-      .then(({ items }) => {
-        departments.value = items.map((d) => d.name)
-      })
-      .catch(() => {
-        departments.value = []
-      })
+    void loadDepartments()
   },
   { immediate: true },
 )

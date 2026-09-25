@@ -19,7 +19,7 @@ import { candidateApi } from '@/api/http'
 import { useCandidates } from '@/composables/useCandidates'
 import { useAuth } from '@/composables/useAuth'
 import { useBoardChannel, useBoardRefresh } from '@/composables/useBoardChannel'
-import { useRoomNames } from '@/composables/useRoomNames'
+import { useRooms } from '@/composables/useRooms'
 import { ROSTER_BOARD_EVENTS, sortWaitingBoard } from '@/domain/status'
 import { UNNAMED_ROOM_LABEL } from '@/domain/room'
 import { STATUS_PRESENTATION } from '@/presenters/status'
@@ -85,8 +85,8 @@ interface CallNotice {
 
 const calls = ref<CallNotice[]>([])
 const currentCall = computed(() => calls.value[0] ?? null)
-/** 房间 id → 展示名（未命名显示「未命名」，不显示编号）。 */
-const { roomLabelOf } = useRoomNames()
+/** 房间 id → 展示名（未命名显示「未命名」，不显示编号）。名单取自 useRooms（共享数据源）。 */
+const { roomLabelOf, load: loadRooms } = useRooms()
 let callSeq = 0
 
 /**
@@ -223,7 +223,7 @@ const columns = computed<ColumnDef<DataTableFeatures, Candidate>[]>(() =>
 // ---- 实时刷新：看板通道事件（签到/拉取/阶段变化/CRUD）→ 防抖重拉名单 ----
 useBoardRefresh(ROSTER_BOARD_EVENTS, () => void load())
 
-// 叫号：拉取事件载荷为 {CandidateID, RoomID}，直接入队（房间名由 useRoomNames 自持刷新）。
+// 叫号：拉取事件载荷为 {CandidateID, RoomID}，直接入队（房间名由 useRooms 自持刷新）。
 const { subscribe } = useBoardChannel()
 subscribe((ev) => {
   if (ev.type !== 'candidate_assigned') return
@@ -233,6 +233,8 @@ subscribe((ev) => {
 
 onMounted(() => {
   void load()
+  // 房间名映射与候场名单分开拉：两条数据源各自刷新（房间 CRUD 事件由 useRooms 自己订阅）。
+  void loadRooms()
 })
 </script>
 

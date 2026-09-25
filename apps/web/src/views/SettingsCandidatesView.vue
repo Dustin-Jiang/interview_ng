@@ -7,7 +7,7 @@ import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
 import { useCandidates } from '@/composables/useCandidates'
 import { useEntityDialog } from '@/composables/useEntityDialog'
-import { useRoomNames } from '@/composables/useRoomNames'
+import { useRooms } from '@/composables/useRooms'
 import { useAuth } from '@/composables/useAuth'
 import { useConfirmAction } from '@/composables/useConfirmAction'
 import { PERMISSIONS, type Candidate, type CandidateInfoPayload, type CandidateStatus } from '@/models'
@@ -39,8 +39,8 @@ const router = useRouter()
 const { hasPermission } = useAuth()
 // 组合式函数（函数式 ViewModel）：顶层解构，模板直接引用（ref 自动解包）。
 const { candidates, statusFilter, keyword, loading, load, create, checkin, update, remove, resetStatus, setStatusFilter, setKeyword } = useCandidates()
-// 房间列显示名字（候选人只带 room_id）；未命名显示「未命名」。
-const { roomLabelOf } = useRoomNames()
+// 房间列显示名字（候选人只带 room_id）；未命名显示「未命名」。名单取自 useRooms（共享数据源）。
+const { roomLabelOf, load: loadRooms } = useRooms()
 
 const emptyText = computed(() => (keyword.value ? '没有匹配的候选人' : '暂无候选人'))
 
@@ -252,6 +252,8 @@ function renderActions(c: Candidate) {
 
 onMounted(() => {
   void load()
+  // 房间名映射与名单分开拉：两条数据源各自刷新（房间 CRUD 事件由 useRooms 自己订阅）。
+  void loadRooms()
 })
 </script>
 

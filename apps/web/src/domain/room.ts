@@ -17,3 +17,16 @@ export function roomLabel(room?: RoomLabelSource | null): string {
   const name = room?.name
   return (typeof name === 'string' ? name.trim() : '') || UNNAMED_ROOM_LABEL
 }
+
+/**
+ * 房间列表（`composables/useRooms.ts`）关心的事件：**房间自身的建 / 删 / 改名**——
+ * 它们改变列表内容与「id → 展示名」映射，是所有读取方（列表页 + 按 id 反查名字三处）都要的。
+ * 房间卡片上「当下是谁、进行到哪一档」那些变化（`candidate_assigned` / `candidate_deleted` /
+ * `room_phase_changed`）**只有房间列表页**渲染，故留在该页自己的订阅里，不摊给只反查名字的页面。
+ */
+export const ROOM_BOARD_EVENTS: readonly string[] = [
+  'room_created',
+  'room_deleted',
+  'room_renamed',
+] as const
+

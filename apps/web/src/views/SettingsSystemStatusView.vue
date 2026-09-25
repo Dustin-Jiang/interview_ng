@@ -12,8 +12,10 @@ import { toast } from 'vue-sonner'
 import { Check, UsersRound } from 'lucide-vue-next'
 import { createColumnHelper } from '@tanstack/vue-table'
 
-import { admissionApi, candidateApi, departmentApi, leftoverApi, systemStatusApi } from '@/api/http'
+import { candidateApi, leftoverApi, systemStatusApi } from '@/api/http'
+import { useAdmissionList } from '@/composables/useAdmissionList'
 import { useBoardRefresh } from '@/composables/useBoardChannel'
+import { useDepartments } from '@/composables/useDepartments'
 import { useSystemStatus } from '@/composables/useSystemStatus'
 import { buildAdmissionPreview, type AdmissionPreviewRow } from '@/domain/admission'
 import { groupBidsByCandidate } from '@/domain/leftover'
@@ -22,8 +24,6 @@ import type {
   SystemPhase,
   Bid,
   Candidate,
-  CandidateAdmission,
-  Department,
   LeftoverFinalResult,
 } from '@/models'
 import { PERMISSIONS, SYSTEM_PHASES } from '@/models'
@@ -135,13 +135,15 @@ async function saveBidStep() {
   }
 }
 const previewCandidates = ref<Candidate[]>([])
-const previewDepartments = ref<Department[]>([])
-const previewAdmissions = ref<CandidateAdmission[]>([])
 /** 竞拍数据（捡漏/结算阶段展示）：各部门出价 + 结算预览。 */
 const previewBids = ref<Bid[]>([])
 const previewFinals = ref<LeftoverFinalResult[]>([])
 const previewLoading = ref(false)
 const previewError = ref('')
+
+// 部门名单与录取决定：取自各自的唯一共享数据源（模块级单例），本页只是读取方，不再各自拉一份。
+const { departments, error: departmentsError, load: loadDepartments } = useDepartments()
+const { admissions, error: admissionError, load: loadAdmissions } = useAdmissionList()
 
 const showPreview = computed(
   () =>
@@ -152,7 +154,7 @@ const showPreview = computed(
 )
 
 const previewRows = computed<AdmissionPreviewRow[]>(() =>
-  buildAdmissionPreview(previewCandidates.value, previewDepartments.value, previewAdmissions.value),
+  buildAdmissionPreview(previewCandidates.value, departments.value, admissions.value),
 )
 
 // ---- 竞拍阶段派生：出价索引 / 结算预览索引 / 部门名 ----
@@ -171,7 +173,7 @@ const finalsByCandidate = computed(
 
 /** 部门 id → 名称（出价与预览列展示用）。 */
 function deptLabelOf(departmentId: number): string {
-  return previewDepartments.value.find((d) => d.id === departmentId)?.name ?? `部门#${departmentId}`
+  return departments.value.find((d) => d.id === departmentId)?.name ?? `部门#${departmentId}`
 }
 
 // ---- DataTable 列定义：候选人 + 各部门决定（动态列）+ 竞拍情况 + 汇总结论 ----
@@ -184,7 +186,7 @@ const previewColumns = computed(() =>
       header: '候选人',
       cell: ({ getValue }) => h('div', { class: 'font-medium' }, getValue()),
     }),
-    ...previewDepartments.value.map((d, i) =>
+    ...departments.value.map((d, i) =>
       previewColumnHelper.display({
         id: `dept-${d.id}`,
         header: d.name,
@@ -247,16 +249,20 @@ async function loadPreview() {
   previewLoading.value = true
   previewError.value = ''
   try {
-    const [cand, dept, adm, bids, finals] = await Promise.all([
+    // 第二、三项是共享数据源的 load（部门名单 / 录取决定），返回值用不上——数据从共享 computed 读。
+    const [cand, , , bids, finals] = await Promise.all([
       candidateApi.listAll(),
-      departmentApi.list(),
-      admissionApi.list(),
+      loadDepartments(),
+      loadAdmissions(),
       leftoverApi.bids(),
       leftoverApi.projections(),
     ])
+    // 共享源的失败收在各自的 error 里（useAsync 不抛）：在此冒泡成预览错误，
+    // 与直连时「任一失败即整块报错」的行为一致。
+    if (departmentsError.value || admissionError.value) {
+      throw new Error(departmentsError.value ?? admissionError.value ?? '')
+    }
     previewCandidates.value = cand.items
-    previewDepartments.value = dept.items
-    previewAdmissions.value = adm.items
     previewBids.value = bids.items
     previewFinals.value = finals.items
   } catch (e) {

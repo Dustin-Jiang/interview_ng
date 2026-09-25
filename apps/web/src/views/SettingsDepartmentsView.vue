@@ -3,11 +3,12 @@ import { computed, h, onMounted, ref } from 'vue'
 import { Building2, Plus } from 'lucide-vue-next'
 import { createColumnHelper, type ColumnDef } from '@tanstack/vue-table'
 
+import { useAdmissionList } from '@/composables/useAdmissionList'
 import { useUsers } from '@/composables/useUsers'
 import { useEntityDialog } from '@/composables/useEntityDialog'
 import { useConfirmAction } from '@/composables/useConfirmAction'
 import { useAuth } from '@/composables/useAuth'
-import { admissionApi, candidateApi } from '@/api/http'
+import { candidateApi } from '@/api/http'
 import { PERMISSIONS, type AdmissionStatus, type Department } from '@/models'
 
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,8 @@ const { departments, loading, load, createDepartment, updateDepartment, deleteDe
 const { hasPermission } = useAuth()
 /** 录取三档统计仅跨部门权限（candidates.browse_all）下能拉齐全量；无权限则不出录取列。 */
 const canBrowseAll = computed(() => hasPermission(PERMISSIONS.CANDIDATES_BROWSE_ALL))
+// 录取决定：共享数据源（模块级单例），与候选人页、系统状态预览读的是同一份。
+const { admissions, load: loadAdmissions } = useAdmissionList()
 
 type AdmissionTally = Record<AdmissionStatus, number>
 /** department_id → 录取三档计数（仅 browse_all 拉取）。 */
@@ -38,13 +41,14 @@ const statsReady = ref(false)
 /** 拉取录取三档与志愿人数（录取决定无看板事件，随挂载与手动刷新更新）。 */
 async function loadStats(): Promise<void> {
   try {
-    const [adm, cands] = await Promise.all([
-      canBrowseAll.value ? admissionApi.list() : Promise.resolve(null),
+    const [, cands] = await Promise.all([
+      // 录取决定取自共享数据源（同一份缓存，录取决定只有这一处实现）。
+      canBrowseAll.value ? loadAdmissions() : Promise.resolve(),
       candidateApi.listAll(),
     ])
-    if (adm) {
+    if (canBrowseAll.value) {
       const tally = new Map<number, AdmissionTally>()
-      for (const a of adm.items) {
+      for (const a of admissions.value) {
         const e = tally.get(a.department_id) ?? { admitted: 0, pending: 0, withdrawn: 0 }
         e[a.status] += 1
         tally.set(a.department_id, e)

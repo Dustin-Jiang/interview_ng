@@ -22,7 +22,7 @@ import { useCandidatePool } from '@/composables/useCandidatePool'
 import { useRosterHotkeys } from '@/composables/useRosterHotkeys'
 import { useRosterRouteSync } from '@/composables/useRosterRouteSync'
 import { useRosterSelection } from '@/composables/useRosterSelection'
-import { useRoomNames } from '@/composables/useRoomNames'
+import { useRooms } from '@/composables/useRooms'
 import { ADMISSION_PRESENTATION, STATUS_PRESENTATION } from '@/presenters/status'
 import {
   ADMISSION_STATUSES,
@@ -80,8 +80,8 @@ const hasFilter = computed(
   () => Boolean(keyword.value.trim() || statusFilter.value || roomFilter.value),
 )
 
-// 房间展示名：候选人身上只有 room_id / 面试房间的名字快照，按 id 反查补名。
-const { roomLabelOf } = useRoomNames()
+// 房间展示名：候选人身上只有 room_id / 面试房间的名字快照，按 id 反查补名（useRooms 共享数据源）。
+const { roomLabelOf, load: loadRooms } = useRooms()
 
 /**
  * 面试房间筛选项：取自名册自身的 `interview_room_id`（面试结束那一刻留档的「这场面试在哪间做的」）。
@@ -168,6 +168,8 @@ useRosterRouteSync<Candidate>({
     }
     if (typeof room === 'string' && /^\d+$/.test(room)) roomFilter.value = room
     void load()
+    // 房间名映射与候选人池分开拉：两条数据源各自刷新（房间 CRUD 事件由 useRooms 自己订阅）。
+    void loadRooms()
   },
 })
 
