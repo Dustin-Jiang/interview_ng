@@ -132,9 +132,17 @@ export function useAdmissions(selected: () => Candidate | null): UseAdmissions {
   }
 
   // 控件可见（面试阶段起）后拉取决定列表；不可见时不请求（结算阶段/无部门且无跨部门权限）。
-  watch(showControls, (on) => {
-    if (on) void loadAdmissions()
-  })
+  // `immediate` 是必需的，不是保险：`phase` 来自模块级单例 `useSystemStatus`，
+  // 从别的页面切进来时它**早已加载完** → showControls 在 setup 时就已经是 true，
+  // 非要等一次 false→true 才拉的话，本页永远不会请求（他人部门徽章、本部门激活态全空）；
+  // 只有整页刷新（单例为空 → 阶段到达时才有一次 false→true）才碰巧正常。
+  watch(
+    showControls,
+    (on) => {
+      if (on) void loadAdmissions()
+    },
+    { immediate: true },
+  )
 
 
   return {

@@ -268,9 +268,16 @@ async function loadPreview() {
 
 // 进入录取/捡漏阶段即拉取预览；录取决定无看板事件，仅候选人增删触发重拉（其余靠手动刷新）。
 // 竞拍数据有看板事件（leftover_bid / leftover_resolved），出价与结算即时反映。
-watch(showPreview, (show) => {
-  if (show) void loadPreview()
-})
+// `immediate` 同 useAdmissions：`showPreview` 的两个输入（权限、阶段）都来自模块级单例，
+// 从别的页面切进来时它们**早已就绪** → setup 时 showPreview 就已经是 true，等不到 false→true 的跳变，
+// 少了 immediate 就只有整页刷新（单例为空）才碰巧拉到预览。
+watch(
+  showPreview,
+  (show) => {
+    if (show) void loadPreview()
+  },
+  { immediate: true },
+)
 
 const PREVIEW_RELOAD_EVENTS = [
   'candidate_created',
