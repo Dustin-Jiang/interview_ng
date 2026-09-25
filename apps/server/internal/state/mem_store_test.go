@@ -215,6 +215,58 @@ func TestSubscribeDeliversEvents(t *testing.T) {
 	}
 }
 
+// TestJoinRoomAllowsMultipleRooms 一位面试官可同时是多间房的成员：「一次只在一个活跃房间」的限制已移除，
+// 席位只表达「是不是这间房的成员」；同一间房重复加入仍是幂等的。
+func TestJoinRoomAllowsMultipleRooms(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	roomA := mustCreateRoom(ctx, st)
+	roomB := mustCreateRoom(ctx, st)
+	const uid = 42
+
+	if _, _, err := st.JoinRoom(ctx, roomA, uid); err != nil {
+		t.Fatalf("join A: %v", err)
+	}
+	if _, _, err := st.JoinRoom(ctx, roomB, uid); err != nil {
+		t.Fatalf("join B（同一人的第二间房）: %v", err)
+	}
+	for _, id := range []uint64{roomA, roomB} {
+		room, err := st.GetRoom(ctx, id)
+		if err != nil {
+			t.Fatalf("get room %d: %v", id, err)
+		}
+		if !roomHasMember(room, uid) {
+			t.Fatalf("房间 %d 名册应含 %d: %+v", id, uid, room.Members)
+		}
+	}
+
+	// 重复加入同一间房：幂等（不重复建席位、不发事件）。
+	room, ev, err := st.JoinRoom(ctx, roomA, uid)
+	if err != nil || ev != nil {
+		t.Fatalf("重复加入应幂等: ev=%v err=%v", ev, err)
+	}
+	if len(room.Members) != 1 {
+		t.Fatalf("重复加入不该重复占位: %+v", room.Members)
+	}
+
+	// 离开一间房不影响另一间。
+	if _, err := st.LeaveRoom(ctx, roomA, uid); err != nil {
+		t.Fatalf("leave A: %v", err)
+	}
+	if r, _ := st.GetRoom(ctx, roomB); !roomHasMember(r, uid) {
+		t.Fatalf("离开 A 不该影响 B: %+v", r.Members)
+	}
+}
+
+func roomHasMember(room *dsmodel.Room, uid uint64) bool {
+	for _, m := range room.Members {
+		if m.UserID == uid {
+			return true
+		}
+	}
+	return false
+}
+
 func TestLeftoverBudgetFormula(t *testing.T) {
 	cases := []struct{ expected, admitted, want int }{
 		{20, 10, 1000}, // (20-10)*100
@@ -901,7 +953,7 @@ func TestInterviewCompletedAt(t *testing.T) {
 		t.Fatalf("回退到待分配不该清结束时刻: %v", got)
 	}
 	second := mustCreateRoom(ctx, st)
-	if _, _, err := st.JoinRoom(ctx, second, 2); err != nil { // 一用户至多一个活跃房间，故换一位成员
+	if _, _, err := st.JoinRoom(ctx, second, 2); err != nil { // 同一人可同时在多间房
 		t.Fatalf("join 2: %v", err)
 	}
 	if _, err := st.PullCandidate(ctx, second, id); err != nil {

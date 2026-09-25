@@ -726,15 +726,8 @@ func (s *MemStateStore) JoinRoom(ctx context.Context, roomID, userID uint64) (*d
 	if err != nil {
 		return nil, nil, err
 	}
-	// 一次一个房间：该用户不得已在其他活跃房间。
-	var existing int64
-	if err := s.db.WithContext(ctx).Model(&dsmodel.RoomMember{}).
-		Where("user_id = ? AND room_id <> ?", userID, roomID).Count(&existing).Error; err != nil {
-		return nil, nil, err
-	}
-	if existing > 0 {
-		return nil, nil, ErrUserInRoom
-	}
+	// 不限制面试官同时所在的房间数：一人可同时是多间房的成员（多屏值守 / 在自己房间里主持的同时
+	// 进别人房间看记录），席位只表达「是不是这间房的成员」。
 	// 幂等重连：若已是本房间成员，直接返回现有快照，不重复创建（避免唯一约束冲突）。
 	already := s.isMemberLocked(ctx, roomID, userID)
 	if already {

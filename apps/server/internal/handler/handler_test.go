@@ -156,6 +156,52 @@ func TestPermissionEnforcement(t *testing.T) {
 	_ = uid
 }
 
+// TestRoomMembersSupportMultipleRooms 一位面试官可同时是多间房的成员（「一次一活跃房间」的限制已移除）：
+// 依次加入两间房都成功，两间房的名册里都有他，重复加入同一间房是幂等的。
+func TestRoomMembersSupportMultipleRooms(t *testing.T) {
+	r := newTestApp(t)
+
+	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
+	token := out["token"].(string)
+	adminID := int(out["user"].(map[string]any)["id"].(float64))
+
+	rooms := []int{}
+	for i := 0; i < 2; i++ {
+		_, out = doJSON(t, r, "POST", "/api/rooms", "", token)
+		rooms = append(rooms, int(out["id"].(float64)))
+	}
+	for _, id := range rooms {
+		if code, out := doJSON(t, r, "POST", "/api/rooms/"+itoa(id)+"/members", `{"user_id":`+itoa(adminID)+`}`, token); code != http.StatusOK {
+			t.Fatalf("加入房间 %d: code=%d out=%v", id, code, out)
+		}
+	}
+	for _, id := range rooms {
+		code, out := doJSON(t, r, "GET", "/api/rooms/"+itoa(id), "", token)
+		if code != http.StatusOK {
+			t.Fatalf("get room %d: %d", id, code)
+		}
+		members, _ := out["members"].([]any)
+		found := false
+		for _, m := range members {
+			if mm, ok := m.(map[string]any); ok && int(mm["user_id"].(float64)) == adminID {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("房间 %d 名册应含 admin: %v", id, out["members"])
+		}
+	}
+
+	// 重复加入同一间房：幂等，不重复占位。
+	if code, _ := doJSON(t, r, "POST", "/api/rooms/"+itoa(rooms[0])+"/members", `{"user_id":`+itoa(adminID)+`}`, token); code != http.StatusOK {
+		t.Fatalf("重复加入应幂等: %d", code)
+	}
+	_, out = doJSON(t, r, "GET", "/api/rooms/"+itoa(rooms[0]), "", token)
+	if members, _ := out["members"].([]any); len(members) != 1 {
+		t.Fatalf("重复加入不该重复占位: %v", members)
+	}
+}
+
 // TestWSMessageAuthAndSync 验证 WS：RESTful 路径 + auth 消息 + 候选人维度同步。
 func TestWSMessageAuthAndSync(t *testing.T) {
 	r := newTestApp(t)
@@ -360,8 +406,8 @@ func TestSignedInBroadcastsToAllRooms(t *testing.T) {
 	_, out := doJSON(t, r, "POST", "/api/sessions", `{"username":"admin","password":"admin"}`, "")
 	token := out["token"].(string)
 
-	// 建两个面试官用户（各持 interviewer 权限，含 rooms.chat），分别进不同房间，
-	// 以满足"一用户至多一活跃房间"约束。
+	// 建两个面试官用户（各持 interviewer 权限，含 rooms.chat），分别进不同房间。
+	// 一人可同时在多间房；这里用两位是为了让两条连接各自独立。
 	_, out = doJSON(t, r, "POST", "/api/roles", `{"name":"itv","description":"面试官","permissions":["rooms.view","rooms.chat","candidates.create","candidates.checkin","candidates.assign"]}`, token)
 	roleID := int(out["id"].(float64))
 	userIDs := []int{}

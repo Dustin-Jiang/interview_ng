@@ -232,7 +232,6 @@ var (
 	ErrRoomFull        = &Error{Code: "room_full", Msg: "room is full"}
 	ErrNotMember       = &Error{Code: "not_member", Msg: "operator is not a room member"}
 	ErrAlreadyAssigned = &Error{Code: "already_assigned", Msg: "candidate already assigned"}
-	ErrUserInRoom      = &Error{Code: "user_in_room", Msg: "user already in an active room"}
 	// ErrInterviewFinished 这段面试已结档（候选人已完成及其后的录取档），房间消息通道关闭，
 	// 面试记录只读归档（归档补充走 AppendCandidateMessage，不受此限）。
 	ErrInterviewFinished = &Error{Code: "interview_finished", Msg: "面试已结束，不能再发送消息"}

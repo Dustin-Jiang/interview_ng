@@ -59,6 +59,7 @@ interview_ng/
 - **恢复**：消息 `id` 为主续传游标（**按候选人维度**）；事件带 `Seq` 幂等；「先落库成功 → 后广播」。增量 sync 只能补「新消息」——**已存在消息上的改动（编辑后的正文、别人的表情回复）补不回来**，故房间页重连后还会按 REST 归档快照再对齐一次（同 id 以权威为准，本地新到的保留），否则断线期间别人回的表情/改的字永远看不到。
 - **消息/日志**：全部落库且**按候选人归属**（候选人换房历史随人走）；候选人删除级联删消息；面试官删除后其消息保留（sender 置空）。
 - **房间**：独立于候选人的物理会议室记录（`candidate_id` 可空，可先建房后绑人、重置解绑后房保留）；**无房间状态机**，房间状态 = 候选人状态的查询投影；仅空房可删；不归档。**面试结束即留档房间**：推进到「面试已结束」时把当时绑定的房间写到候选人身上（`interview_room_id` + 名字快照 `interview_room_name`），随后才解绑——房间之后改名或删除也仍能回答「这场面试在哪间做的」，候选人详情页的「**面试房间**」行即此（没面完的候选人不显示该行）。
+- **房间成员（席位 = 此刻在场）**：`room_members` 的一条行意味着「这个人现在在这间房里」——进房写入（WS `auth` 自动 JoinRoom，或管理端 `POST /api/rooms/:id/members`），WS 断开即退房；故后端**启动时清空整张表**（进程刚起来时没有任何连接，残留行都是旧进程被强杀留下的陈旧席位）。**不限制一个人同时在几间房**（可多标签页各守一间），同一间房重复进房（断线重连/刷新）幂等。
 - **分配**：候选人被房间内面试官**拉取**（`PUT /api/rooms/:id/candidate`），取代"页面推分配"；并发拉取由状态机原子拒绝。房间侧栏的「拉取候选人」列表 = 当前处于「已签到待分配」的候选人，按**候场队列顺序**排列并标出 1..N 名次（数据源是 `useWaitingQueue`——候场队列的唯一共享组合式，按看板通道事件防抖重拉，与候场大屏档内同源同序）。**候场大屏 `/board` 同理**：按状态分档（正在面试 > 等待开始 > 等待分配 > 其他），档内用同一条候场队列顺序（`domain/status.ts#compareWaiting`）；它只拉「未定局」的档位（`GET /api/board/candidates`），已定局的录取档不参与这次拉取（已定局者本来也不上屏）。
 - **候场队列顺序**（前后端唯一口径，`mem_store.go#compareWaiting` ≡ `domain/status.ts#compareWaiting`，改一处必须改另一处）：`waiting_priority` 升序（NULL 排在所有显式序之后）→ `checked_in_at` 升序 → `created_at` 升序 → `id` 升序。没有做过任何手动调序时，就是纯「先签到先叫号」（未签到者没有签到时刻，退到创建顺序）。
 - **手动调序**（候场大屏操作列 ↑/↓，`PUT /api/candidates/:id/priority` `{direction:"up"|"down"}`，权限同签到 `candidates.checkin`）：**只对「已签到待分配」档开放**——它是候场队列的唯一消费方（房间拉取池）；正在面试的顺序由面试进程决定、未签到者还没到队，调了没有读取方。与同档相邻一位交换；任一侧没有显式序号时，把整档按当时显示顺序固化成 1..n（**单事务**，失败整体回滚），此后调序只在显式序之间互换，后续新签到（NULL）接在已固化成员之后。**手动序号属于「排队会话」**：重新签到或重置回「未签到」都会清空（重新排队 = 回队尾），因此离开档位后不会留下会无声插队的陈旧序号。已在档首/档尾是**幂等 no-op**（`200 {ok:true, moved:false}`，不是错误）。顺序变更发 `candidate_priority_changed`，大屏与房间侧栏据此防抖重拉。
@@ -97,7 +98,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 | `user_roles` | user_id, role_id（联合唯一） | 用户↔角色 M2M |
 | `candidates` | id, **student_no(唯一, NOT NULL)**, name, profile, first_choice, second_choice, accept_adjust, phone, qq, email, status, **interview_started_at(可空)**, **interview_completed_at(可空)**, **checked_in_at(可空)**, **waiting_priority(可空)**, **interview_room_id(可空)**, **interview_room_name** | 候选人（非登录用户）；**学号 = 身份键**（纯数字、唯一、前导零有意义），志愿/联系方式为可选资料字段，当前房间归属为查询投影（`rooms.candidate_id` 主导，`room_id` 不落库）；`interview_started_at` = 进入「面试中」时打点、离开该档即清空（NULL = 不在面试中），前端面试计时以此为准（`updated_at` 会被任意资料编辑刷新，不能当计时起点）；`interview_completed_at` = 进入「面试已结束」时打点、**开始下一次面试才作废**（与 `interview_room_*` 快照同族：结档后仍是事实，名册「先按面试时间排序」以它为准）；`checked_in_at` = **签到那一刻打点，只有重置回「未签到」才清空**（被拉进房间 / 开始面试 / 完成都不清空——大屏要让已签到的各档按到达先后排列）；房间「拉取候选人」列表与候场大屏据此先来后到（同理不能用 `updated_at`：导入/编辑资料会刷新它，排队顺序会被打乱）；`interview_room_id` / `interview_room_name` = **这场面试在哪间房间做的**，在推进到「面试已结束」的那一刻记录（房间随即解绑，不留档就查不到），名字存快照 —— 房间之后改名或删除仍能回答「当时在哪间」，房间删除时 id 置空、快照保留 |
 | `rooms` | id, **name**, candidate_id(可空) | 房间 = 独立物理会议室记录，`name` 为可选别名（空串=未命名，UI 回退「房间 #id」，不要求唯一），`candidate_id` 可空；无状态机、无主持人，"状态"= 候选人状态的查询投影 |
-| `room_members` | room_id, user_id（`idx_room_user` 唯一） | 房间成员，一次一活跃房间 |
+| `room_members` | room_id, user_id（`idx_room_user` 唯一） | 房间成员（**席位 = 此刻在场**：进程启动时清空，WS 断开即退房；一人可同时在多间房） |
 | `messages` | id, candidate_id, sender_id(可空), content | 群聊记录（长存），**按候选人归属**，`id` 即候选人维度续传游标 |
 | `message_reactions` | message_id, user_id, emoji（三者联合唯一）, created_at | 记录上的表情回复：**一人对一条记录的同一表情只能一份**（重复提交幂等）；表情限 `model.ReactionEmojis` 允许集（24 枚，按「态度/评价/关注/其他」分组，前端同序镜像）；撤回消息 / 删除候选人 / 删除用户时显式连带清理 |
 | `system_status` | id=1(单行), phase(interview/admission/leftover/settlement) | 系统状态：当前面试 / 录取 / 捡漏 / 结算阶段，管理端可切换 |
@@ -125,7 +126,7 @@ handler  →  service  →  state(StateStore)  →  model(Gorm/Postgres)
 
 两条 WS 通道，连接建立后首条消息必须为 `auth`（携带 JWT），鉴权成功后才可收发；10 秒内未鉴权将断开。
 
-**房间通道** `GET /ws/rooms/:roomId`（RESTful 路径，**不带任何 query 参数**）：要求 `rooms.chat` 权限，成功后自动 JoinRoom（一用户至多一活跃房间），收发房间业务命令。
+**房间通道** `GET /ws/rooms/:roomId`（RESTful 路径，**不带任何 query 参数**）：要求 `rooms.chat` 权限，成功后自动 JoinRoom（同一间房幂等重入；**不限制一人在几间房**，多标签页可各守一间），收发房间业务命令。
 
 **看板通道** `GET /ws/board`：要求 `rooms.view` 权限，不 JoinRoom、无成员语义、仅接受 `auth` 一条命令。扇出所有业务事件（房间级 + 全局级，各一份不重复），供候场大屏 / 房间列表 / 候选人记录等列表页感知变化后防抖重拉。
 

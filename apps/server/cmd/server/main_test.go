@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -71,6 +72,47 @@ func TestIncompatibleSchemaHint(t *testing.T) {
 			t.Fatalf("提示应说明缺列与重建办法，得到 %q", hint)
 		}
 	})
+}
+
+// TestClearRoomMembers 启动时清空房间席位：进程刚起来时没有任何 WS 连接，库里的行全是陈旧席位；
+// 清理只动 room_members（房间/候选人/消息都不受影响）。
+func TestClearRoomMembers(t *testing.T) {
+	db := newMigrateTestDB(t)
+	if err := db.AutoMigrate(appModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	room := &dsmodel.Room{}
+	if err := db.Create(room).Error; err != nil {
+		t.Fatalf("create room: %v", err)
+	}
+	cand := &dsmodel.Candidate{StudentNo: "001", Name: "甲"}
+	if err := db.Create(cand).Error; err != nil {
+		t.Fatalf("create candidate: %v", err)
+	}
+	for _, uid := range []uint64{1, 2} {
+		if err := db.Create(&dsmodel.RoomMember{RoomID: room.ID, UserID: uid}).Error; err != nil {
+			t.Fatalf("create member: %v", err)
+		}
+	}
+
+	n, err := clearRoomMembers(context.Background(), db)
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("应清掉 2 条陈旧席位，实际 %d", n)
+	}
+	var members, rooms, candidates int64
+	db.Model(&dsmodel.RoomMember{}).Count(&members)
+	db.Model(&dsmodel.Room{}).Count(&rooms)
+	db.Model(&dsmodel.Candidate{}).Count(&candidates)
+	if members != 0 || rooms != 1 || candidates != 1 {
+		t.Fatalf("只应清席位: members=%d rooms=%d candidates=%d", members, rooms, candidates)
+	}
+	// 清空后房间可删（DeleteRoom 以「仍有成员」拒绝）。
+	if err := db.Delete(&dsmodel.Room{}, room.ID).Error; err != nil {
+		t.Fatalf("delete room: %v", err)
+	}
 }
 
 // TestDropAppTablesThenMigrate 是 DB_RESET=1 的落库口径：删表必须能一次删掉带外键的全套表，

@@ -119,8 +119,8 @@ func (w *WSServer) serveWS(c *gin.Context) {
 	go w.readPump(c.Request.Context(), client, quit)
 
 	<-quit
-	// 连接断开即离开房间（释放"一次一个活跃房间"席位）；
-	// 断线重连/刷新由客户端重新 auth → JoinRoom 幂等重入。
+	// 连接断开即离开这间房（席位 = 在场，不是终身名册）。
+	// 断线重连/刷新由客户端重新 auth → JoinRoom 幂等重入；一人可同时在多间房，故只清理本房。
 	if client.userID != 0 {
 		w.svc.RemoveRoomMember(c.Request.Context(), roomID, client.userID)
 	}

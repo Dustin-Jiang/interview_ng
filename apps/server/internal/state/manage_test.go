@@ -396,8 +396,8 @@ func TestInterviewFinishedClosesRoomChat(t *testing.T) {
 
 	// ---- 2) 已绑定房间却被重置到录取档：同样解绑并留档（不能停在「录取档却仍占着房间」）----
 	var admittedCand, admittedRoom, admittedUID uint64
-	for i, to := range []dsmodel.CandidateStatus{dsmodel.StatusAdmissionPending, dsmodel.StatusAdmitted} {
-		uid := uint64(i + 2) // 一用户至多一个活跃房间，故每个房间换一位成员
+	for _, to := range []dsmodel.CandidateStatus{dsmodel.StatusAdmissionPending, dsmodel.StatusAdmitted} {
+		uid := uint64(2) // 同一人可同时在多间房，这里刻意复用同一位面试官
 		cand := mustCreateCandidate(ctx, st, string(to), "")
 		if _, err := st.CheckIn(ctx, cand); err != nil {
 			t.Fatalf("checkin: %v", err)

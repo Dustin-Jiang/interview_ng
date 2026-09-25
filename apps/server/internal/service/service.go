@@ -335,7 +335,7 @@ func (s *InterviewService) PullCandidate(ctx context.Context, roomID, candidateI
 	return nil
 }
 
-// AddRoomMember 把面试官加入房间（复用 JoinRoom 语义：一用户至多一个活跃房间）。先落库后广播。
+// AddRoomMember 把面试官加入房间（先落库后广播）。同一人可同时是多间房的成员。
 func (s *InterviewService) AddRoomMember(ctx context.Context, roomID, userID uint64) error {
 	_, ev, err := s.store.JoinRoom(ctx, roomID, userID)
 	if err != nil {

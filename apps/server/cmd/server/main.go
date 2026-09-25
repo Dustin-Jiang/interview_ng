@@ -66,6 +66,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 房间席位（room_members）表达的是「此刻在不在房里」：进程刚起来时没有任何 WS 连接，
+	// 库里剩下的全是陈旧席位，清掉它们。
+	if n, err := clearRoomMembers(context.Background(), db); err != nil {
+		slog.Error("clear room members", slog.String("error", err.Error()))
+		os.Exit(1)
+	} else if n > 0 {
+		slog.Info("清空陈旧房间席位", slog.Int64("rows", n))
+	}
+
 	// RBAC 内存缓存 + 种子（无角色则建 admin/interviewer，无用户则建默认 admin）。
 	cache := rbac.New()
 	if err := seed.Init(context.Background(), db, cache); err != nil {
@@ -173,6 +182,14 @@ func dbReset() bool {
 		return true
 	}
 	return false
+}
+
+// clearRoomMembers 启动时清空房间席位表：席位只表达「此刻在不在房里」，而进程刚起来时
+// 没有任何 WS 连接。旧进程被强杀（重启 / 容器重建 / 崩溃）时 serveWS 的离房收尾不会执行，
+// 这些残留行会一直挂在房间成员名册里，也让那间房因「仍有成员」删不掉。
+func clearRoomMembers(ctx context.Context, db *gorm.DB) (int64, error) {
+	res := db.WithContext(ctx).Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&dsmodel.RoomMember{})
+	return res.RowsAffected, res.Error
 }
 
 // incompatibleSchemaHint 识别 AutoMigrate 修不了的旧库形状，返回可执行的处置提示（空串 = 没识别出）。
